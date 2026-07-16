@@ -8,6 +8,18 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased
 
+### Changed
+
+- Qualitative research now gives every gap a stable ID and records implemented or rejected decisions in an append-only `quality-gap-decisions.jsonl`. Checked Markdown boxes are provisional until `gap-decide` supplies evidence and validation, while research-readiness checks remain separate from the `quality_gap` metric.
+- `research-start` preserves an existing executable outcome metric as the primary metric and treats `quality_gap` as secondary acceptance evidence. Fresh zero-run sessions consistently route to a runnable baseline, and Codex Goal completion can be fail-closed with `codex-goal-brief --enforce-completion`.
+- Default onboarding and research-start responses now return bounded operator snapshots; `--json-full` retains the complete diagnostic payload. The portable product gate adds an end-to-end session-friction journey and measures the mutation and finalization response budgets.
+
+### Fixed
+
+- Git-private last-run, progress, and pending-log state now shares one resolver and preflight. Conflicting stores fail closed, worktree fallback is limited to real Git-private write failures, and setup no longer creates a tracked `.gitattributes` file to hide its own artifacts.
+- Finalization now treats filenames literally, including spaces, brackets, wildcard characters, and Unicode, and validates every generated or supplied branch ref before mutation.
+- State, doctor, recommendation, and dashboard projections now agree that an unmeasured session needs a baseline without implying saturation or completion. Nonzero `quality_gap` values no longer appear perfect, and closed rounds require current accepted evidence before finalization.
+
 ## 2.7.1 - 2026-07-11
 
 ### Fixed

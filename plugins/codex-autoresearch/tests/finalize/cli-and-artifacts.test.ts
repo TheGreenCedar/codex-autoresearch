@@ -95,7 +95,7 @@ test("session artifact modes preserve finalization, dirty tree, and source check
     ["autoresearch.research/study/quality-gaps.md", true, true, true],
     [".git/autoresearch-runtime/state.json", true, true, true],
     ["autoresearch-finalize/scratch.groups.json", true, true, true],
-    [".gitattributes", false, true, false],
+    [".gitattributes", false, false, false],
     ["src/autoresearch-dashboard.html", false, false, false],
     ["src/value.txt", false, false, false],
   ];

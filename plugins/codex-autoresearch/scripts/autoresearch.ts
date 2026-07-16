@@ -76,7 +76,6 @@ import {
   createActiveProgressWriter,
   deleteActiveProgressSnapshotIfSafe,
   readActiveProgressSnapshot,
-  resolveProgressPath,
 } from "../lib/active-progress-store.js";
 import { rekeyProcessLifecycleRecords } from "../lib/process-governor.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../lib/command-execution-boundary.js";
@@ -120,13 +119,19 @@ import {
   lastRunPacketFingerprint,
   lastRunPacketFreshness,
   lastRunTrustConfigSnapshot,
+  lastRunStateSpec,
   readLastRunPacket,
   replacementNextCommandForLastRun,
   resolveLastRunPath,
 } from "../lib/last-run-store.js";
-import { privateStateWriteRoot } from "../lib/git-private-state.js";
+import {
+  autoresearchPrivateStateCandidatePaths,
+  preflightAutoresearchPrivateState,
+  writePrivateStateFile,
+} from "../lib/git-private-state.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
+import { buildOperatorSnapshot } from "../lib/operator-snapshot.js";
 import { classifyPacketDiagnostics } from "../lib/packet-diagnostics.js";
 import {
   buildParallelLanes,
@@ -139,7 +144,10 @@ import {
 import {
   currentQualityGapSummary,
   gapCandidates as buildGapCandidates,
+  QUALITY_GAP_DECISIONS_FILE,
+  recordQualityGapDecision,
   resolveResearchSlugForQualityGapSync,
+  summarizeQualityGaps,
 } from "../lib/research-gaps.js";
 import { recommendPortfolioDirection } from "../lib/portfolio-advisor.js";
 import {
@@ -165,8 +173,6 @@ import {
   loadSessionState,
   listOption,
   pathExists,
-  parseQualityGapItems,
-  parseQualityGaps,
   stateFromSessionRecords,
   safeSlug,
   iterationLimitInfo,
@@ -205,12 +211,6 @@ type WorkDirResolution = {
   workDir: string;
 };
 
-const AUTORESEARCH_GITATTRIBUTES_BLOCK = [
-  "# Codex Autoresearch ledger files",
-  "autoresearch.jsonl text eol=lf",
-  "autoresearch.md text eol=lf",
-  "autoresearch.ideas.md text eol=lf",
-].join("\n");
 const RESEARCH_DIR = AUTORESEARCH_RESEARCH_DIR;
 
 const AUTONOMY_MODES = new Set(["guarded", "owner-autonomous", "manual"]);
@@ -730,7 +730,6 @@ async function setupPlan(args: any) {
             "autoresearch.ideas.md",
             shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1",
             "autoresearch.config.json",
-            ".gitattributes",
           ],
           commands: [
             commandLine(
@@ -742,7 +741,6 @@ async function setupPlan(args: any) {
                 "autoresearch.ideas.md",
                 shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1",
                 "autoresearch.config.json",
-                ".gitattributes",
               ],
               shellKind,
             ),
@@ -2027,7 +2025,17 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
     nextPacket.resolvedDecision ||
     state.resolvedDecision ||
     resolveSessionDecision({ state: nextPacket, commands: nextPacket.commands });
-  return {
+  const stateStorage = await preflightAutoresearchPrivateState(workDir).catch((error: unknown) => ({
+    storageMode: "unavailable",
+    targets: [],
+    warnings: [error instanceof Error ? error.message : String(error)],
+  }));
+  const operatorSnapshot = buildOperatorSnapshot({
+    state: { ...state, stateStorage },
+    recommendation: nextPacket,
+    doctor,
+  });
+  const full = {
     ok: true,
     workDir,
     kind: "codex-autoresearch-onboarding-packet",
@@ -2086,6 +2094,25 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
       newSegmentDryRun: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} new-segment --cwd ${shellQuote(workDir)} --dry-run`,
     },
     templates: agentReportTemplates(config),
+  };
+  if (boolOption(args.jsonFull ?? args.json_full, false)) return full;
+  return {
+    ok: true,
+    workDir,
+    kind: full.kind,
+    generatedAt: full.generatedAt,
+    operatorSnapshot,
+    resolvedDecision,
+    nextAction: operatorSnapshot.nextAction,
+    nextStep: {
+      stage: operatorSnapshot.stage,
+      command: operatorSnapshot.primaryCommand,
+      reason: operatorSnapshot.strongestBlocker || operatorSnapshot.nextAction,
+    },
+    hazards: full.hazards.slice(0, 5),
+    missingEssentials: full.missingEssentials.slice(0, 10),
+    templates: full.templates,
+    diagnosticCommand: `node ${shellQuote(path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"))} onboarding-packet --cwd ${shellQuote(workDir)} --json-full`,
   };
 }
 
@@ -2288,10 +2315,17 @@ async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
     importedGoal,
     state,
   });
-  return {
+  const completionBlocker = completionAudit.canMarkCodexGoalComplete
+    ? null
+    : completionAudit.localEvidence?.blockers?.[0] ||
+      completionAudit.recommendedCodexAction ||
+      "Autoresearch completion evidence is not sufficient.";
+  const result = {
     ok: true,
     kind: "codex-autoresearch-goal-bridge",
     workDir,
+    canMarkCodexGoalComplete: completionAudit.canMarkCodexGoalComplete === true,
+    completionBlocker,
     boundary: {
       codexOwns:
         "Thread-level Goal lifecycle, pause/resume/clear controls, token accounting, and update_goal completion.",
@@ -2333,6 +2367,17 @@ async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
       maxIterations: state.limit?.maxIterations ?? null,
     },
   };
+  if (
+    boolOption(args.enforceCompletion ?? args.enforce_completion, false) &&
+    result.canMarkCodexGoalComplete !== true
+  ) {
+    const error = new Error(`Codex Goal completion is blocked: ${completionBlocker}`) as Error & {
+      code?: string;
+    };
+    error.code = "codex_goal_completion_blocked";
+    throw error;
+  }
+  return result;
 }
 
 function importedCodexGoal(args: LooseObject): LooseObject | null {
@@ -3173,26 +3218,6 @@ async function setupCommandResponseFields({
   };
 }
 
-async function ensureAutoresearchGitattributes(workDir: string) {
-  const filePath = path.join(workDir, ".gitattributes");
-  const exists = await pathExists(filePath);
-  const current = exists ? await fsp.readFile(filePath, "utf8") : "";
-  const hasJsonlRule = /^autoresearch\.jsonl\s+.*\beol=lf\b/im.test(current);
-  const hasMdRule = /^autoresearch\.md\s+.*\beol=lf\b/im.test(current);
-  const hasIdeasRule = /^autoresearch\.ideas\.md\s+.*\beol=lf\b/im.test(current);
-  if (hasJsonlRule && hasMdRule && hasIdeasRule) {
-    return { path: filePath, action: "kept" };
-  }
-  const separator = current.trimEnd() ? "\n\n" : "";
-  await checkedAtomicWriteFile(
-    workDir,
-    filePath,
-    `${current.trimEnd()}${separator}${AUTORESEARCH_GITATTRIBUTES_BLOCK}\n`,
-    { mode: 0o600 },
-  );
-  return { path: filePath, action: exists ? "updated" : "created" };
-}
-
 async function writeRuntimeConfig(sessionCwd: any, updates: any) {
   if (Object.keys(updates).length === 0) return readConfig(sessionCwd);
   const { configPath, nextConfig, content } = mergeRuntimeConfig(sessionCwd, updates);
@@ -3341,12 +3366,22 @@ function secondaryConstraintModeWasExplicit(rawInput: unknown, index: number): b
 
 async function writeSetupBootstrapFiles(args: LooseObject, options: LooseObject) {
   const { sessionCwd, workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const stateStorage = await preflightAutoresearchPrivateState(workDir);
   const overwrite = boolOption(args.overwrite, false);
   const shellKind = shellKindFromArgs(args);
   const benchmarkFile = shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1";
   const checksFile = shellKind === "bash" ? "autoresearch.checks.sh" : "autoresearch.checks.ps1";
   const files: LooseObject[] = [];
-  const context = { sessionCwd, workDir, overwrite, shellKind, benchmarkFile, checksFile, files };
+  const context = {
+    sessionCwd,
+    workDir,
+    overwrite,
+    shellKind,
+    benchmarkFile,
+    checksFile,
+    files,
+    stateStorage,
+  };
 
   if (options.beforeCommonFiles) await options.beforeCommonFiles(context);
 
@@ -3371,10 +3406,6 @@ async function writeSetupBootstrapFiles(args: LooseObject, options: LooseObject)
       { overwrite, root: workDir },
     ),
   );
-  if (!boolOption(args.skip_gitattributes ?? args.skipGitattributes, false)) {
-    files.push(await ensureAutoresearchGitattributes(workDir));
-  }
-
   if (
     args.checks_command ||
     args.checksCommand ||
@@ -3397,12 +3428,15 @@ async function setupSession(args: LooseObject) {
   if (!args.name) throw new Error("name is required");
   if (!args.metric_name && !args.metricName) throw new Error("metric_name is required");
   validateMetricName(args.metric_name || args.metricName);
-  const { sessionCwd, workDir, shellKind, files } = await writeSetupBootstrapFiles(args, {
-    sessionDocumentArgs: () => args,
-    benchmarkContent: ({ shellKind: setupShellKind }: LooseObject) =>
-      renderBenchmarkScript(args, setupShellKind),
-    ideasContent: () => renderIdeasDocument(args),
-  });
+  const { sessionCwd, workDir, shellKind, files, stateStorage } = await writeSetupBootstrapFiles(
+    args,
+    {
+      sessionDocumentArgs: () => args,
+      benchmarkContent: ({ shellKind: setupShellKind }: LooseObject) =>
+        renderBenchmarkScript(args, setupShellKind),
+      ideasContent: () => renderIdeasDocument(args),
+    },
+  );
 
   await appendSetupRuntimeConfig(files, sessionCwd, args, {
     includeRecipe: true,
@@ -3439,6 +3473,7 @@ async function setupSession(args: LooseObject) {
     shell: shellKind,
     files,
     checkpoint,
+    stateStorage,
     ...responseFields,
     init,
   };
@@ -3447,63 +3482,66 @@ async function setupSession(args: LooseObject) {
 async function setupResearchSession(args: any) {
   const slug = researchSlugFromArgs(args);
   const goal = args.goal || args.name || slug;
-  const { sessionCwd, workDir, shellKind, files } = await writeSetupBootstrapFiles(args, {
-    beforeCommonFiles: async ({
-      workDir: setupWorkDir,
-      overwrite,
-      files: setupFiles,
-    }: LooseObject) => {
-      await resolveSafeResearchPath(setupWorkDir, slug);
-      const researchDir = researchDirPath(setupWorkDir, slug);
-      await checkedEnsureDirectory(setupWorkDir, path.join(researchDir, "notes"));
-      await checkedEnsureDirectory(setupWorkDir, path.join(researchDir, "deliverables"));
-      for (const fileName of [
-        "brief.md",
-        "plan.md",
-        "tasks.md",
-        "sources.md",
-        "synthesis.md",
-        "quality-gaps.md",
-      ]) {
-        setupFiles.push(
-          await writeSessionFile(
-            path.join(researchDir, fileName),
-            renderResearchFile(fileName, args, slug),
-            { overwrite, root: setupWorkDir },
-          ),
-        );
-      }
+  const { sessionCwd, workDir, shellKind, files, stateStorage } = await writeSetupBootstrapFiles(
+    args,
+    {
+      beforeCommonFiles: async ({
+        workDir: setupWorkDir,
+        overwrite,
+        files: setupFiles,
+      }: LooseObject) => {
+        await resolveSafeResearchPath(setupWorkDir, slug);
+        const researchDir = researchDirPath(setupWorkDir, slug);
+        await checkedEnsureDirectory(setupWorkDir, path.join(researchDir, "notes"));
+        await checkedEnsureDirectory(setupWorkDir, path.join(researchDir, "deliverables"));
+        for (const fileName of [
+          "brief.md",
+          "plan.md",
+          "tasks.md",
+          "sources.md",
+          "synthesis.md",
+          "quality-gaps.md",
+        ]) {
+          setupFiles.push(
+            await writeSessionFile(
+              path.join(researchDir, fileName),
+              renderResearchFile(fileName, args, slug),
+              { overwrite, root: setupWorkDir },
+            ),
+          );
+        }
+      },
+      sessionDocumentArgs: ({ shellKind: setupShellKind }: LooseObject) => {
+        const benchmarkCommand =
+          setupShellKind === "bash"
+            ? "./autoresearch.sh"
+            : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
+        const scopedFiles = [
+          researchRelativeDir(slug),
+          ...listOption(args.files_in_scope ?? args.filesInScope ?? args.scope),
+        ];
+        return {
+          ...args,
+          name: args.name || `Deep research: ${goal}`,
+          goal,
+          metricName: "quality_gap",
+          metricUnit: "gaps",
+          direction: "lower",
+          benchmarkCommand,
+          filesInScope: scopedFiles,
+          constraints: [
+            ...listOption(args.constraints),
+            `Keep research notes under ${researchRelativeDir(slug)}.`,
+            "Use source-backed evidence before implementing recommendations.",
+          ],
+        };
+      },
+      benchmarkContent: ({ shellKind: setupShellKind }: LooseObject) =>
+        renderResearchBenchmarkScript(slug, setupShellKind),
+      ideasContent: () =>
+        `# Autoresearch Ideas: ${goal}\n\n- Add promising research-backed ideas here when they are not tried immediately.\n`,
     },
-    sessionDocumentArgs: ({ shellKind: setupShellKind }: LooseObject) => {
-      const benchmarkCommand =
-        setupShellKind === "bash"
-          ? "./autoresearch.sh"
-          : "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1";
-      const scopedFiles = [
-        researchRelativeDir(slug),
-        ...listOption(args.files_in_scope ?? args.filesInScope ?? args.scope),
-      ];
-      return {
-        ...args,
-        name: args.name || `Deep research: ${goal}`,
-        goal,
-        metricName: "quality_gap",
-        metricUnit: "gaps",
-        direction: "lower",
-        benchmarkCommand,
-        filesInScope: scopedFiles,
-        constraints: [
-          ...listOption(args.constraints),
-          `Keep research notes under ${researchRelativeDir(slug)}.`,
-          "Use source-backed evidence before implementing recommendations.",
-        ],
-      };
-    },
-    benchmarkContent: ({ shellKind: setupShellKind }: LooseObject) =>
-      renderResearchBenchmarkScript(slug, setupShellKind),
-    ideasContent: () =>
-      `# Autoresearch Ideas: ${goal}\n\n- Add promising research-backed ideas here when they are not tried immediately.\n`,
-  });
+  );
   const researchDir = researchDirPath(workDir, slug);
 
   await appendSetupRuntimeConfig(files, sessionCwd, args, { grouped: true });
@@ -3544,13 +3582,10 @@ async function setupResearchSession(args: any) {
     shell: shellKind,
     files,
     checkpoint,
+    stateStorage,
     ...responseFields,
     init,
-    qualityGap: {
-      open: gap.open,
-      closed: gap.closed,
-      total: gap.total,
-    },
+    qualityGap: gap,
   };
 }
 
@@ -3561,7 +3596,23 @@ async function researchStart(args: LooseObject) {
   if (!goal) throw new Error("research-start requires --goal.");
 
   const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
-  const skipInit = boolOption(args.skipInit ?? args.skip_init, false);
+  const configuredBeforeStart = {
+    ...currentState(workDir).config,
+    ...readConfig(workDir),
+  };
+  const configuredMetricName = String(configuredBeforeStart.metricName || "").trim();
+  const configuredBenchmarkCommand = String(
+    configuredBeforeStart.benchmarkCommand ||
+      ((await defaultBenchmarkCommandExists(workDir))
+        ? await defaultBenchmarkCommand(workDir)
+        : ""),
+  ).trim();
+  const preserveExecutableMetric =
+    Boolean(configuredMetricName && configuredBenchmarkCommand) &&
+    configuredMetricName !== "quality_gap";
+  const primaryMetricName = preserveExecutableMetric ? configuredMetricName : "quality_gap";
+  const requestedSkipInit = boolOption(args.skipInit ?? args.skip_init, false);
+  const skipInit = requestedSkipInit || preserveExecutableMetric;
   const shouldLogBaseline = skipInit
     ? false
     : boolOption(args.no_baseline_log ?? args.noBaselineLog, false)
@@ -3644,12 +3695,24 @@ async function researchStart(args: LooseObject) {
     workDir,
     slug,
     goal,
-    metricName: "quality_gap",
+    metricName: primaryMetricName,
+    qualityGapRole: preserveExecutableMetric ? "secondary" : "primary",
+    warnings: preserveExecutableMetric
+      ? [
+          `Preserved configured executable primary metric '${configuredMetricName}'. quality_gap remains secondary research acceptance evidence.`,
+        ]
+      : [],
     baselineLogged: false,
-    baselineSkippedReason: skipInit ? "skip-init disables the default baseline/log step." : "",
+    baselineSkippedReason: requestedSkipInit
+      ? "skip-init disables the default baseline/log step."
+      : preserveExecutableMetric
+        ? "Configured executable metric was preserved; run the explicit next command when ready to measure it."
+        : "",
     commands: {
       setup: setupParts.join(" "),
-      benchmarkLint: commands.benchmarkLint,
+      benchmarkLint: preserveExecutableMetric
+        ? `node ${shellQuote(scriptPath)} benchmark-lint --cwd ${shellQuote(workDir)} --metric-name ${shellQuote(primaryMetricName)}`
+        : commands.benchmarkLint,
       doctor: `node ${shellQuote(scriptPath)} doctor --cwd ${shellQuote(workDir)} --check-benchmark --explain`,
       baseline: commands.next,
       logBaseline: commands.measureLast,
@@ -3659,22 +3722,38 @@ async function researchStart(args: LooseObject) {
   };
   if (dryRun) return output;
 
-  const setup = await setupResearchSession({ ...args, cwd: workDir, slug, goal });
-  const benchmarkCommand = await defaultBenchmarkCommand(workDir);
-  const runtimeConfig = await writeRuntimeConfig(setup.sessionCwd, {
-    name: args.name || `Deep research: ${goal}`,
+  const setup = await setupResearchSession({
+    ...args,
+    cwd: workDir,
+    slug,
     goal,
-    metricName: "quality_gap",
-    metricUnit: "gaps",
-    bestDirection: "lower",
-    benchmarkCommand,
+    skipInit,
+    skip_init: skipInit,
   });
-  const lint = await benchmarkLint({ cwd: workDir, metricName: "quality_gap" });
+  const benchmarkCommand = await defaultBenchmarkCommand(workDir);
+  const runtimeConfig = preserveExecutableMetric
+    ? await writeRuntimeConfig(setup.sessionCwd, {
+        name: configuredBeforeStart.name || args.name || `Deep research: ${goal}`,
+        goal: configuredBeforeStart.goal || goal,
+        metricName: configuredMetricName,
+        metricUnit: configuredBeforeStart.metricUnit || "",
+        bestDirection: configuredBeforeStart.bestDirection === "higher" ? "higher" : "lower",
+        benchmarkCommand: configuredBenchmarkCommand,
+      })
+    : await writeRuntimeConfig(setup.sessionCwd, {
+        name: args.name || `Deep research: ${goal}`,
+        goal,
+        metricName: "quality_gap",
+        metricUnit: "gaps",
+        bestDirection: "lower",
+        benchmarkCommand,
+      });
+  const lint = await benchmarkLint({ cwd: workDir, metricName: primaryMetricName });
   const doctor = await doctorSession({
     cwd: workDir,
     checkBenchmark: true,
     explain: true,
-    metricName: "quality_gap",
+    metricName: primaryMetricName,
   });
   let baselinePacket: LooseObject | null = null;
   let baselineLogResult: LooseObject | null = null;
@@ -3684,10 +3763,10 @@ async function researchStart(args: LooseObject) {
       cwd: workDir,
       fromLast: true,
       status: "measure",
-      description: "Baseline quality_gap measurement",
+      description: `Baseline ${primaryMetricName} measurement`,
     });
   }
-  return {
+  const full = {
     ...output,
     dryRun: false,
     setup,
@@ -3697,6 +3776,43 @@ async function researchStart(args: LooseObject) {
     baselinePacket,
     baselineLog: baselineLogResult,
     baselineLogged: Boolean(baselineLogResult),
+  };
+  if (boolOption(args.jsonFull ?? args.json_full, false)) return full;
+  return {
+    ...output,
+    dryRun: false,
+    baselineLogged: full.baselineLogged,
+    stateStorage: setup.stateStorage || null,
+    setup: {
+      slug: setup.slug,
+      qualityGap: setup.qualityGap,
+      checkpoint: setup.checkpoint,
+    },
+    benchmarkLint: {
+      ok: lint.ok,
+      metricName: lint.metricName,
+      parsedMetrics: lint.parsedMetrics || null,
+    },
+    doctor: {
+      ok: doctor.ok,
+      issues: Array.isArray(doctor.issues) ? doctor.issues.slice(0, 5) : [],
+      warnings: Array.isArray(doctor.warnings) ? doctor.warnings.slice(0, 5) : [],
+      nextAction: doctor.nextAction || "",
+    },
+    baselinePacket,
+    baselineLog: baselineLogResult
+      ? {
+          ok: baselineLogResult.ok,
+          experiment: baselineLogResult.experiment || null,
+          continuation: baselineLogResult.continuation
+            ? {
+                shouldContinue: baselineLogResult.continuation.shouldContinue,
+                nextAction: baselineLogResult.continuation.nextAction,
+                stopReason: baselineLogResult.continuation.stopReason || "",
+              }
+            : null,
+        }
+      : null,
   };
 }
 
@@ -3710,12 +3826,18 @@ async function measureQualityGap(args: any) {
     throw new Error(`No quality-gaps.md found for research slug '${slug}' at ${gapsPath}`);
   }
   const text = await fsp.readFile(gapsPath, "utf8");
-  const counts = parseQualityGaps(text);
-  const items = parseQualityGapItems(text);
+  const decisionsPath = path.join(researchDir, QUALITY_GAP_DECISIONS_FILE);
+  const decisionsText = (await pathExists(decisionsPath))
+    ? await fsp.readFile(decisionsPath, "utf8")
+    : "";
+  const summary = summarizeQualityGaps(text, decisionsText);
+  const open = summary.open ?? 0;
   const metricOutput = [
-    `METRIC quality_gap=${counts.open}`,
-    `METRIC quality_total=${counts.total}`,
-    `METRIC quality_closed=${counts.closed}`,
+    `METRIC quality_gap=${open}`,
+    `METRIC quality_total=${summary.total}`,
+    `METRIC quality_closed=${summary.closed}`,
+    `METRIC research_readiness_open=${summary.researchReadiness.open}`,
+    `METRIC research_readiness_total=${summary.researchReadiness.total}`,
   ].join("\n");
   return {
     ok: true,
@@ -3725,11 +3847,17 @@ async function measureQualityGap(args: any) {
     slugCandidates: slugResolution.candidates,
     researchDir,
     qualityGapsPath: gapsPath,
-    open: counts.open,
-    closed: counts.closed,
-    total: counts.total,
-    openItems: items.open,
-    closedItems: items.closed,
+    decisionsPath,
+    open: summary.open,
+    closed: summary.closed,
+    total: summary.total,
+    openItems: summary.openItems,
+    closedItems: summary.closedItems,
+    legacyProvisionalClosed: summary.legacyProvisionalClosed,
+    decisionIssues: summary.decisionIssues,
+    researchReadiness: summary.researchReadiness,
+    roundDecision: summary.roundDecision,
+    gaps: summary.gaps,
     metricOutput,
   };
 }
@@ -4228,8 +4356,7 @@ async function clearSession(args: any) {
   const { sessionCwd, workDir, sessionPaths } = resolveWorkDir(args.working_dir || args.cwd);
   const targets = new Set([
     ...sessionPaths.clearTargets,
-    await resolveLastRunPath(workDir),
-    await resolveProgressPath(workDir),
+    ...(await autoresearchPrivateStateCandidatePaths(workDir)),
   ]);
   const deleted = [];
   const wouldDelete = [];
@@ -4258,15 +4385,22 @@ async function clearSession(args: any) {
   };
 }
 
-async function writeLastRunPacket(workDir: string, packet: any, filePath: string | null = null) {
-  const target = filePath || (await resolveLastRunPath(workDir));
-  await checkedAtomicWriteFile(
-    await privateStateWriteRoot(workDir, target),
-    target,
-    `${JSON.stringify(redactLastRunPacketForStorage(packet), null, 2)}\n`,
+async function writeLastRunPacket(workDir: string, packet: any) {
+  const stored = await writePrivateStateFile(
+    workDir,
+    lastRunStateSpec(workDir),
+    (target) => {
+      packet.lastRunPath = target.path;
+      packet.stateStorage = {
+        storageMode: target.storageMode,
+        path: target.path,
+        warning: target.warning,
+      };
+      return `${JSON.stringify(redactLastRunPacketForStorage(packet), null, 2)}\n`;
+    },
     { mode: 0o600 },
   );
-  return target;
+  return stored.path;
 }
 
 function terminationFailureEvidence(value: LooseObject | null | undefined): LooseObject | null {
@@ -5499,7 +5633,7 @@ async function nextExperimentWithActiveProgress(args: any) {
       requiredStatus: run.logHint.status,
     }),
   };
-  await writeLastRunPacket(run.workDir, packet, lastRunFile);
+  await writeLastRunPacket(run.workDir, packet);
   return boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet;
 }
 
@@ -5722,6 +5856,7 @@ async function executeAutoresearchCli(
       promoteGate,
       promptPlan,
       publicState,
+      recordQualityGapDecision,
       recommendNext,
       sessionForensics,
       recipeCommand,

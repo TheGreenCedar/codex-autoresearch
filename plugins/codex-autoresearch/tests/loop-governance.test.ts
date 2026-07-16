@@ -98,14 +98,14 @@ test("budget exhaustion is a segment-transition blocker, not goal completion", (
 test("unbounded iteration budget does not trigger segment transition", () => {
   const state = {
     config: { bestDirection: "lower", metricName: "seconds" },
-    current: [],
+    current: [{ run: 1, status: "measure", metric: 10 }],
     results: [],
     limit: {
       maxIterations: null,
       remainingIterations: null,
       limitReached: false,
       budgetStatus: buildBudgetStatus({
-        state: { current: [] },
+        state: { current: [{ run: 1, status: "measure", metric: 10 }] },
         runtimeConfig: {},
       }),
     },

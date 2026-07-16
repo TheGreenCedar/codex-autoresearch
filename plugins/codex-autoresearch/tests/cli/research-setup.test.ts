@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { qualityGapId } from "../../lib/research-gaps.js";
 import { pathExists } from "../helpers/cli-session.js";
 import { quoteForShell } from "../helpers/process.js";
 
@@ -26,7 +27,9 @@ test("research-setup creates a quality_gap scratchpad and benchmark", async () =
     assert.equal(payload.slug, "project-study");
     assert.equal(payload.init.config.metricName, "quality_gap");
     assert.equal(payload.init.config.bestDirection, "lower");
-    assert.equal(payload.qualityGap.open, 6);
+    assert.equal(payload.qualityGap.open, null);
+    assert.equal(payload.qualityGap.researchReadiness.open, 6);
+    assert.equal(payload.qualityGap.roundDecision.accepted, false);
 
     const researchRoot = path.join(dir, "autoresearch.research", "project-study");
     assert.match(await readFile(path.join(researchRoot, "brief.md"), "utf8"), /Study the project/);
@@ -131,6 +134,7 @@ test("research-start skip-init skips default baseline logging cleanly", async ()
       "--goal",
       "Improve language support in CodeStory",
       "--skip-init",
+      "--json-full",
       "--json",
     ]);
 
@@ -154,6 +158,53 @@ test("research-start skip-init skips default baseline logging cleanly", async ()
   });
 });
 
+test("research-start preserves an existing executable outcome metric as primary", async () => {
+  await withTempDir("research-start-existing-metric", async (dir) => {
+    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC lighthouse_warnings=2')"`;
+    const setup = await runCli([
+      "setup",
+      "--cwd",
+      dir,
+      "--name",
+      "Lighthouse diagnostics",
+      "--metric-name",
+      "lighthouse_warnings",
+      "--direction",
+      "lower",
+      "--benchmark-command",
+      benchmark,
+      "--json",
+    ]);
+    assert.equal(setup.code, 0, setup.stderr);
+
+    const result = await runCli([
+      "research-start",
+      "--cwd",
+      dir,
+      "--slug",
+      "lighthouse-diagnostics",
+      "--goal",
+      "Resolve site-owned Lighthouse diagnostics",
+      "--json",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.metricName, "lighthouse_warnings");
+    assert.equal(payload.qualityGapRole, "secondary");
+    assert.equal(payload.baselineLogged, false);
+    assert.match(payload.warnings.join("\n"), /preserved configured executable primary metric/i);
+    assert.match(payload.commands.benchmarkLint, /--metric-name ["']?lighthouse_warnings/);
+
+    const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
+    assert.equal(config.metricName, "lighthouse_warnings");
+    assert.match(config.benchmarkCommand, /autoresearch\.(?:sh|ps1)/);
+    assert.match(
+      await readFile(path.join(dir, "autoresearch.sh"), "utf8"),
+      /lighthouse_warnings=2/,
+    );
+  });
+});
+
 test("research-start default baseline logging keeps benchmark command authority aligned", async () => {
   await withTempDir("research-start-default-baseline", async (dir) => {
     const result = await runCli([
@@ -164,6 +215,7 @@ test("research-start default baseline logging keeps benchmark command authority 
       "language-support",
       "--goal",
       "Improve language support in CodeStory",
+      "--json-full",
       "--json",
     ]);
 
@@ -189,7 +241,7 @@ test("research-start default baseline logging keeps benchmark command authority 
   });
 });
 
-test("quality-gap counts checked and unchecked research gaps", async () => {
+test("quality-gap treats raw checked research gaps as provisional", async () => {
   await withTempDir("quality-gap", async (dir) => {
     await runCli([
       "research-setup",
@@ -205,6 +257,8 @@ test("quality-gap counts checked and unchecked research gaps", async () => {
       [
         "# Quality Gaps",
         "",
+        "## Candidate Gaps",
+        "",
         "- [ ] Open gap",
         "- [x] Closed gap",
         "- [X] Rejected with evidence",
@@ -216,9 +270,9 @@ test("quality-gap counts checked and unchecked research gaps", async () => {
 
     const result = await runCli(["quality-gap", "--cwd", dir, "--research-slug", "study"]);
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout, /METRIC quality_gap=2/);
+    assert.match(result.stdout, /METRIC quality_gap=4/);
     assert.match(result.stdout, /METRIC quality_total=4/);
-    assert.match(result.stdout, /METRIC quality_closed=2/);
+    assert.match(result.stdout, /METRIC quality_closed=0/);
 
     const listed = await runCli([
       "quality-gap",
@@ -230,7 +284,99 @@ test("quality-gap counts checked and unchecked research gaps", async () => {
     ]);
     assert.equal(listed.code, 0, listed.stderr);
     const listedPayload = JSON.parse(listed.stdout);
-    assert.deepEqual(listedPayload.openItems, ["Open gap", "Another open gap"]);
-    assert.deepEqual(listedPayload.closedItems, ["Closed gap", "Rejected with evidence"]);
+    assert.deepEqual(listedPayload.openItems, [
+      "Open gap",
+      "Closed gap",
+      "Rejected with evidence",
+      "Another open gap",
+    ]);
+    assert.deepEqual(listedPayload.closedItems, []);
+    assert.deepEqual(listedPayload.legacyProvisionalClosed, [
+      "Closed gap",
+      "Rejected with evidence",
+    ]);
+  });
+});
+
+test("gap-decide requires evidence before a checked qualitative gap is accepted", async () => {
+  await withTempDir("quality-gap-decision", async (dir) => {
+    await runCli([
+      "research-setup",
+      "--cwd",
+      dir,
+      "--slug",
+      "study",
+      "--goal",
+      "Study product gaps",
+      "--skip-init",
+    ]);
+    const gapText = "Remove the site-owned Lighthouse warning";
+    const gapId = qualityGapId(gapText);
+    await writeFile(
+      path.join(dir, "autoresearch.research", "study", "quality-gaps.md"),
+      [
+        "# Quality Gaps",
+        "",
+        "## Candidate Gaps",
+        "",
+        `- [x] ${gapText} <!-- codex-autoresearch:gap-id=${gapId} -->`,
+        "",
+      ].join("\n"),
+    );
+
+    const provisional = await runCli([
+      "quality-gap",
+      "--cwd",
+      dir,
+      "--research-slug",
+      "study",
+      "--list",
+    ]);
+    assert.equal(provisional.code, 0, provisional.stderr);
+    const provisionalPayload = JSON.parse(provisional.stdout);
+    assert.equal(provisionalPayload.open, 1);
+    assert.deepEqual(provisionalPayload.legacyProvisionalClosed, [gapText]);
+    assert.equal(provisionalPayload.roundDecision.accepted, false);
+
+    const missingEvidence = await runCli([
+      "gap-decide",
+      "--cwd",
+      dir,
+      "--research-slug",
+      "study",
+      "--gap-id",
+      gapId,
+      "--decision",
+      "implemented",
+      "--validation",
+      "Lighthouse JSON reports no site-owned warning",
+    ]);
+    assert.notEqual(missingEvidence.code, 0);
+    assert.match(missingEvidence.stderr, /evidence/i);
+
+    const decided = await runCli([
+      "gap-decide",
+      "--cwd",
+      dir,
+      "--research-slug",
+      "study",
+      "--gap-id",
+      gapId,
+      "--decision",
+      "implemented",
+      "--evidence",
+      "artifacts/lighthouse.json",
+      "--validation",
+      "Lighthouse JSON reports no site-owned warning",
+    ]);
+    assert.equal(decided.code, 0, decided.stderr);
+    const decidedPayload = JSON.parse(decided.stdout);
+    assert.equal(decidedPayload.qualityGap.roundDecision.accepted, true);
+    assert.equal(decidedPayload.qualityGap.open, 0);
+
+    const measured = await runCli(["quality-gap", "--cwd", dir, "--research-slug", "study"]);
+    assert.equal(measured.code, 0, measured.stderr);
+    assert.match(measured.stdout, /METRIC quality_gap=0/);
+    assert.match(measured.stdout, /METRIC research_readiness_open=0/);
   });
 });

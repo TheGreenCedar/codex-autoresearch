@@ -51,6 +51,20 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     safeAction: "state",
     fallbackKeys: ["finalizePreview", "newSegmentDryRun", "state"],
   }),
+  "needs-baseline": actionMetadata({
+    label: "Run baseline",
+    commandLabel: "Next",
+    safeAction: "next",
+    packetBrake: false,
+    fallbackKeys: ["next", "nextRun", "baseline"],
+  }),
+  "needs-evidence": actionMetadata({
+    label: "Record gap evidence",
+    commandLabel: "Gap decision",
+    safeAction: "gap-decide",
+    packetBrake: true,
+    fallbackKeys: ["gapDecide", "gapCandidates", "state"],
+  }),
   "current-tree-finalization": actionMetadata({
     label: "Finalize current tree",
     commandLabel: "Preview current-tree finalization",
@@ -261,6 +275,7 @@ const operationalFallbackKinds = new Set([
   "baseline",
   "current-tree-finalization",
   "log-decision",
+  "needs-baseline",
   "next-packet",
   "plateau",
   "stale-packet",

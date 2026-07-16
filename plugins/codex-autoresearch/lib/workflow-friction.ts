@@ -1,4 +1,5 @@
 import { resolveDecisionThresholds, type DecisionThresholdConfig } from "./decision-thresholds.js";
+import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { reviewRequiredMetricSignals } from "./packet-diagnostics.js";
 import { isKeepStatus } from "./run-status.js";
 
@@ -10,6 +11,7 @@ export type WorkflowFrictionKind =
   | "dirty_tree_recovery"
   | "unknown_recipe"
   | "quality_gap_wording"
+  | "quality_round_evidence_required"
   | "metric_saturated_not_promotable"
   | "product_bar_rejection"
   | "false_done_admission"
@@ -54,6 +56,8 @@ export function analyzeWorkflowFriction({
   if (unknown) signals.push(unknown);
   const qualityGap = qualityGapWordingSignal({ state });
   if (qualityGap) signals.push(qualityGap);
+  const qualityRoundEvidence = qualityRoundEvidenceSignal({ state });
+  if (qualityRoundEvidence) signals.push(qualityRoundEvidence);
   const saturation = metricSaturationSignal({ state });
   if (saturation) signals.push(saturation);
   return dedupeSignals(signals);
@@ -293,13 +297,53 @@ function qualityGapWordingSignal({ state }: { state: LooseObject }): WorkflowFri
   });
 }
 
+function qualityRoundEvidenceSignal({
+  state,
+}: {
+  state: LooseObject;
+}): WorkflowFrictionSignal | null {
+  if (state.config?.metricName !== "quality_gap" || !state.qualityGap) return null;
+  if (state.qualityGap.roundDecision?.accepted === true) return null;
+  const total = Number(state.qualityGap.total ?? 0);
+  const open = Number(state.qualityGap.open);
+  const provisional = Array.isArray(state.qualityGap.legacyProvisionalClosed)
+    ? state.qualityGap.legacyProvisionalClosed.length
+    : 0;
+  const issues = Array.isArray(state.qualityGap.decisionIssues)
+    ? state.qualityGap.decisionIssues.map(String).filter(Boolean)
+    : [];
+  if (total > 0 && Number.isFinite(open) && open > 0 && provisional === 0 && issues.length === 0) {
+    return null;
+  }
+  const reason =
+    issues[0] ||
+    state.qualityGap.roundDecision?.reason ||
+    (provisional > 0
+      ? `${provisional} checked quality-gap item${provisional === 1 ? " is" : "s are"} legacy-provisional until an evidence-bearing decision is recorded.`
+      : "The qualitative round has no accepted evidence-bearing decision record.");
+  return workflowSignal({
+    kind: "quality_round_evidence_required",
+    severity: "blocker",
+    reason,
+    actionReason:
+      "Record stable gap ids, implemented/rejected decisions, evidence references, and validation before treating the round as complete.",
+  });
+}
+
 function metricSaturationSignal({ state }: { state: LooseObject }): WorkflowFrictionSignal | null {
   const metricName = String(state.config?.metricName || "");
   const direction = String(state.config?.bestDirection || "lower");
   const best = Number(state.best ?? state.development?.best);
-  const qualityRoundClosed =
-    Number(state.qualityGap?.open) === 0 && Number(state.qualityGap?.total) > 0;
+  const current = Array.isArray(state.current) ? state.current : [];
+  const hasAcceptedRun = current.some((run) => isAcceptedCurrentRun(run));
+  if (!hasAcceptedRun) return null;
+  const qualityRoundClosed = state.qualityGap?.roundDecision?.accepted === true;
+  const qualitativeRoundNeedsEvidence =
+    state.config?.metricName === "quality_gap" &&
+    state.qualityGap != null &&
+    state.qualityGap.roundDecision?.accepted !== true;
   const gapMetricSaturated =
+    !qualitativeRoundNeedsEvidence &&
     direction !== "higher" &&
     Number.isFinite(best) &&
     best === 0 &&

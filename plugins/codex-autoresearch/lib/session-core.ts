@@ -446,6 +446,7 @@ function qualityRoundState(qualityGap: LooseObject | null | undefined): LooseObj
 export function buildDecisionEnvelope({
   state,
   nextAction,
+  nextCommand = "",
   lastRunFreshness = null,
   warningDetails = [],
   scaffoldHealth = null,
@@ -643,6 +644,7 @@ export function buildDecisionEnvelope({
     preflight: state?.preflight || null,
     portfolioRecommendation: state?.portfolioRecommendation || null,
     nextAction: nextAction || "Run doctor, then next.",
+    nextCommand,
   };
   const loopContract = buildLoopContractStatus(envelope);
   const supplementalAction = supplementalNextActionForEnvelope(envelope);

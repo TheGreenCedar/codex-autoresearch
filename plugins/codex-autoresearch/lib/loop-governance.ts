@@ -9,6 +9,7 @@ export interface LoopAction {
   command: string;
   triggeredBy: string[];
   label?: string;
+  allowsNextPacket?: boolean;
 }
 
 export interface LoopContractStatus {
@@ -29,6 +30,7 @@ const LOOP_PRIORITY = {
   pendingPacket: 2.5,
   validationGate: 3,
   setupOrDecision: 4,
+  evidencePrerequisite: 4.5,
   boundedDecisionCapsule: 6,
   segmentTransition: 7,
   currentTreeFinalization: 8,
@@ -436,6 +438,11 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
     );
   }
 
+  const evidencePrerequisite = evidencePrerequisiteAction(envelope);
+  if (evidencePrerequisite && evidencePrerequisite.allowsNextPacket !== true) {
+    blockers.push(evidencePrerequisite);
+  }
+
   const segmentTransition = objectValue(envelope.segmentTransition);
   if (segmentTransition?.required === true) {
     const action = loopAction(
@@ -455,7 +462,7 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
     arrayValue(envelope.workflowFriction),
     "metric_saturated_not_promotable",
   );
-  if (metricSaturation) {
+  if (metricSaturation && !evidencePrerequisite) {
     const suggestedAction = objectValue(metricSaturation.suggestedAction);
     blockers.push(
       loopAction(
@@ -495,11 +502,15 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
   }
 
   const finalizationReadiness = objectValue(envelope.finalizationReadiness);
-  const currentTreeFinalization = currentTreeFinalizationAction(finalizationReadiness);
+  const currentTreeFinalization = evidencePrerequisite
+    ? null
+    : currentTreeFinalizationAction(finalizationReadiness);
   if (currentTreeFinalization) {
     blockers.push(currentTreeFinalization);
   }
-  const runwayAction = finalizationRunwayAction(objectValue(envelope.finalizationRunway));
+  const runwayAction = evidencePrerequisite
+    ? { blocker: null, warning: null }
+    : finalizationRunwayAction(objectValue(envelope.finalizationRunway));
   if (runwayAction.blocker) {
     blockers.push(runwayAction.blocker);
   } else if (runwayAction.warning) {
@@ -519,7 +530,7 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
       ),
     );
   }
-  if (finalizationPressure(finalizationReadiness)) {
+  if (!evidencePrerequisite && finalizationPressure(finalizationReadiness)) {
     warnings.push(
       loopAction(
         "finalization",
@@ -541,8 +552,55 @@ export function buildLoopContractStatus(envelope: LooseObject = {}): LoopContrac
     canRunNextPacket: blockers.length === 0 && warnings.length === 0,
     blockers: orderedBlockers,
     warnings: orderedWarnings,
-    strongestAction: orderedBlockers[0] || orderedWarnings[0] || null,
+    strongestAction:
+      orderedBlockers[0] ||
+      orderedWarnings[0] ||
+      (evidencePrerequisite?.allowsNextPacket === true ? evidencePrerequisite : null),
   };
+}
+
+function evidencePrerequisiteAction(envelope: LooseObject): LoopAction | null {
+  if (
+    objectValue(envelope.latestPacketFreshness)?.fresh === true ||
+    arrayValue(envelope.salvageCandidates).some(isDiagnosticSalvage)
+  ) {
+    return null;
+  }
+  const activeSegment = objectValue(envelope.activeSegment);
+  const loggedRuns = numberValue(activeSegment?.runs);
+  if (loggedRuns === 0) {
+    return {
+      ...loopAction(
+        "needs-baseline",
+        LOOP_PRIORITY.evidencePrerequisite,
+        "No runs are logged. Run and log a baseline before saturation, finalization, or completion claims.",
+        envelope.nextCommand,
+        ["activeSegment", "runs"],
+      ),
+      allowsNextPacket: true,
+    };
+  }
+
+  const roundEvidenceSignal = firstWorkflowFrictionByKind(
+    arrayValue(envelope.workflowFriction),
+    "quality_round_evidence_required",
+  );
+  const qualityRound = objectValue(envelope.qualityRound);
+  const unacceptedClosedRound =
+    qualityRound?.active === true &&
+    qualityRound?.done === true &&
+    qualityRound?.accepted === false;
+  if (!roundEvidenceSignal && !unacceptedClosedRound) return null;
+  const suggestedAction = objectValue(roundEvidenceSignal?.suggestedAction);
+  return loopAction(
+    "needs-evidence",
+    LOOP_PRIORITY.evidencePrerequisite,
+    suggestedAction?.reason ||
+      roundEvidenceSignal?.reason ||
+      "The qualitative round needs an evidence-bearing accepted decision before completion.",
+    suggestedAction?.command,
+    suggestedAction?.triggeredBy || ["qualityRound", "roundDecision"],
+  );
 }
 
 export function canonicalNextActionForLoop(envelope: LooseObject = {}): LoopAction {

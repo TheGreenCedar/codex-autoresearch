@@ -86,6 +86,7 @@ export function buildCheapFinalizationPressure({
     ? warningDetails.some((warning) => warning?.severity === "blocker")
     : false;
   const hasAcceptedEvidence = current.some((run: ReadModelRecord) => isAcceptedCurrentRun(run));
+  const hasLoggedRuns = current.length > 0;
   const qualityGapOpen =
     qualityGap?.done === false &&
     (Number(qualityGap.open ?? qualityGap.openItems ?? qualityGap.remaining ?? 0) > 0 ||
@@ -110,7 +111,9 @@ export function buildCheapFinalizationPressure({
       ? "Run finalize-preview for Git-backed review readiness before making merge or completion claims."
       : hasAcceptedEvidence
         ? "Resolve blockers or missing proof, then run finalize-preview for review readiness."
-        : "Run finalization preview from a Git-backed autoresearch branch.",
+        : hasLoggedRuns
+          ? "Collect accepted evidence before running finalization preview from a Git-backed autoresearch branch."
+          : "Run and log a baseline before finalization preview.",
     warnings: [
       ...(readyForPreview
         ? [
@@ -390,13 +393,17 @@ export function resolveSessionDecision({
   const structuredBlocker = Array.isArray(loopContract?.blockers)
     ? recordOrNull(loopContract.blockers[0])
     : null;
+  const evidencePrerequisite = decisionEvidencePrerequisite(state, envelope, canonical);
+  const blockingEvidencePrerequisite =
+    evidencePrerequisite?.allowsNextPacket === true ? null : evidencePrerequisite;
   const blockers = uniqueMessages([
     stringValue(existing?.strongestBlocker),
     ...messageList(loopContract?.blockers),
+    stringValue(blockingEvidencePrerequisite?.reason),
     ...messageList(state.blockers),
   ]);
   const strongestBlocker = blockers[0] || stringValue(existing?.strongestBlocker) || null;
-  const blockerAction = strongestAction || structuredBlocker;
+  const blockerAction = strongestAction || blockingEvidencePrerequisite || structuredBlocker;
   const mergedBlockerAction = blockerAction
     ? canonical && blockerAction.kind === canonical.kind
       ? {
@@ -408,36 +415,53 @@ export function resolveSessionDecision({
         }
       : blockerAction
     : null;
+  const guidanceAction =
+    strongestAction?.allowsNextPacket === true
+      ? strongestAction
+      : evidencePrerequisite?.allowsNextPacket === true
+        ? evidencePrerequisite
+        : null;
   const authoritativeAction = strongestBlocker
     ? selectDecisionAuthority(
         canonical && canonical.kind !== "next-packet" ? canonical : null,
         mergedBlockerAction || { kind: "blocked", reason: strongestBlocker, command: "" },
         true,
       )
-    : canonical;
+    : guidanceAction || canonical;
   const commands = unknownRecordOrEmpty(commandsInput ?? state.commands);
   const resolvedCommand = resolveActionCommand(authoritativeAction?.kind, commands, {
     explicitCommand: authoritativeAction?.command ?? existing?.command,
   });
   const command = safeDecisionCommand(resolvedCommand) ? resolvedCommand : "";
-  const finalizationPressure =
+  const rawFinalizationPressure =
     recordOrNull(existing?.finalizationPressure) ||
     recordOrNull(finalizationInput) ||
     recordOrNull(envelope?.finalizationReadiness) ||
     recordOrNull(state.finalizationPressure) ||
     recordOrNull(state.finalizationRunway);
+  const finalizationPressure = evidencePrerequisite
+    ? rawFinalizationPressure
+      ? {
+          ...rawFinalizationPressure,
+          ready: false,
+          blockedBy: evidencePrerequisite.kind,
+        }
+      : null
+    : rawFinalizationPressure;
   const terminal = loopContract?.complete === true || loopContract?.terminal === true;
   const canRunNextPacket = loopContract?.canRunNextPacket;
   const existingStatus = decisionStatus(existing?.status);
   const status: ResolvedDecision["status"] = strongestBlocker
     ? "blocked"
-    : existingStatus
-      ? existingStatus
-      : terminal
-        ? "complete"
-        : canRunNextPacket === true || finalizationPressure?.ready === true
-          ? "ready"
-          : "unknown";
+    : evidencePrerequisite?.allowsNextPacket === true
+      ? "ready"
+      : existingStatus
+        ? existingStatus
+        : terminal
+          ? "complete"
+          : canRunNextPacket === true || finalizationPressure?.ready === true
+            ? "ready"
+            : "unknown";
   const nextAction =
     stringValue(authoritativeAction?.reason) ||
     strongestBlocker ||
@@ -464,6 +488,64 @@ export function resolveSessionDecision({
       recordOrNull(state.runtimeAuthority),
     finalizationPressure,
   };
+}
+
+function decisionEvidencePrerequisite(
+  state: ReadModelRecord,
+  envelope: ReadModelRecord | null,
+  canonical: ReadModelRecord | null,
+): ReadModelRecord | null {
+  const activeSegment = recordOrNull(envelope?.activeSegment) || recordOrNull(state.activeSegment);
+  const current = Array.isArray(state.current) ? state.current : null;
+  const explicitRunCount =
+    finiteNumber(activeSegment?.runs) ?? finiteNumber(state.runs) ?? current?.length;
+  const packetFreshness = recordOrNull(envelope?.latestPacketFreshness);
+  if (explicitRunCount === 0 && packetFreshness?.fresh !== true) {
+    const activeKind = stringValue(canonical?.kind);
+    if (
+      [
+        "log-decision",
+        "stale-packet",
+        "partial-salvage",
+        "packet-diagnostic",
+        "current-tree-finalization",
+      ].includes(activeKind)
+    ) {
+      return null;
+    }
+    return {
+      kind: "needs-baseline",
+      reason:
+        "No runs are logged. Run and log a baseline before saturation, finalization, or completion claims.",
+      command: "",
+      triggeredBy: ["activeSegment", "runs"],
+      allowsNextPacket: true,
+    };
+  }
+
+  const config = unknownRecordOrEmpty(state.config);
+  const qualityGap = recordOrNull(state.qualityGap);
+  const roundDecision = recordOrNull(qualityGap?.roundDecision);
+  if (
+    config.metricName === "quality_gap" &&
+    qualityGap &&
+    roundDecision?.accepted !== true &&
+    (qualityGap.open == null ||
+      Number(qualityGap.open) === 0 ||
+      (Array.isArray(qualityGap.legacyProvisionalClosed) &&
+        qualityGap.legacyProvisionalClosed.length > 0) ||
+      (Array.isArray(qualityGap.decisionIssues) && qualityGap.decisionIssues.length > 0))
+  ) {
+    return {
+      kind: "needs-evidence",
+      reason:
+        stringValue(roundDecision?.reason) ||
+        "The qualitative round needs an evidence-bearing accepted decision before completion.",
+      command: "",
+      triggeredBy: ["qualityGap", "roundDecision"],
+    };
+  }
+  return null;
 }
 
 export function attachResolvedDecision<T extends UnknownRecord>(

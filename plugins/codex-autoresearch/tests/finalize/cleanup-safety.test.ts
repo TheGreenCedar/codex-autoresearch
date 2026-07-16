@@ -5,7 +5,7 @@ import test from "node:test";
 import { finalizer, git, run, testWithTempRoot, withTempRoot, writeFile } from "./helpers.js";
 
 testWithTempRoot(
-  "finalizer rejects wildcard Git pathspecs in plan files",
+  "finalizer treats wildcard characters in filenames as literal paths",
   "autoresearch-finalize-pathspec-",
   async (root) => {
     const repo = path.join(root, "repo");
@@ -21,8 +21,9 @@ testWithTempRoot(
     const base = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
 
     await git(["switch", "-c", "codex/pathspec-plan"], repo);
-    await writeFile(path.join(repo, "a.txt"), "kept\n");
-    await git(["commit", "-am", "keep a"], repo);
+    await writeFile(path.join(repo, "*.txt"), "literal wildcard filename\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "keep literal wildcard filename"], repo);
     const finalTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
 
     const groupsPath = path.join(root, "groups.json");
@@ -37,7 +38,7 @@ testWithTempRoot(
           groups: [
             {
               title: "Pathspec plan",
-              body: "Should reject wildcard expansion.",
+              body: "Should never expand wildcard characters as a pathspec.",
               last_commit: finalTree,
               slug: "pathspec-plan",
               files: ["*.txt"],
@@ -50,11 +51,18 @@ testWithTempRoot(
       "utf8",
     );
 
-    const result = await run(process.execPath, [finalizer, groupsPath], repo, true);
-    assert.notEqual(result.code, 0);
-    assert.match(result.stderr + result.stdout, /literal.*wildcard|wildcard.*pathspec/i);
-    const branches = (await git(["branch", "--list", "autoresearch-review/*"], repo)).stdout.trim();
-    assert.equal(branches, "");
+    const result = await run(process.execPath, [finalizer, groupsPath], repo);
+    assert.match(result.stdout, /autoresearch-review\/pathspec-plan\/01-pathspec-plan/);
+    const branch = "autoresearch-review/pathspec-plan/01-pathspec-plan";
+    const files = (await git(["diff", "--name-only", "-z", base, branch], repo)).stdout
+      .split("\0")
+      .filter(Boolean);
+    assert.deepEqual(files, ["*.txt"]);
+    assert.equal((await git(["show", `${branch}:b.txt`], repo)).stdout, "base\n");
+    assert.equal(
+      (await git(["branch", "--show-current"], repo)).stdout.trim(),
+      "codex/pathspec-plan",
+    );
   },
 );
 
@@ -120,6 +128,10 @@ test("finalizer refuses cleanup through linked directory parents", async (t) => 
     assert.equal(await fsp.readFile(outsideVictim, "utf8"), "outside data\n");
     const branches = (await git(["branch", "--list", "autoresearch-review/*"], repo)).stdout.trim();
     assert.equal(branches, "");
+    assert.equal(
+      (await git(["branch", "--show-current"], repo)).stdout.trim(),
+      "codex/linked-parent-plan",
+    );
   });
 });
 
@@ -178,6 +190,8 @@ testWithTempRoot(
     const result = await run(process.execPath, [finalizer, groupsPath], repo, true);
     const output = result.stderr + result.stdout;
     assert.notEqual(result.code, 0);
+    assert.match(output, /Error code: FINALIZE_RECOVERY_FAILED/);
+    assert.match(output, /Next step: Restore the source branch/);
     assert.match(output, /Source branch restoration failed|Verification state restoration failed/);
     assert.match(output, /git switch codex\/restore-test failed/);
     assert.match(output, /Temporary branch cleanup failed/);
@@ -233,7 +247,10 @@ testWithTempRoot(
 
     const result = await run(process.execPath, [finalizer, groupsPath], repo, true);
     assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Error code: FINALIZE_INVALID_LITERAL_PATH/);
+    assert.match(result.stderr, /Next step: Fix the unsafe file path in groups\.json/);
     assert.match(result.stderr, /Unsafe finalizer file path/);
+    assert.doesNotMatch(result.stderr, /overlapping groups|commit order/i);
     assert.equal(await fsp.readFile(sentinel, "utf8"), "outside repo\n");
 
     await fsp.writeFile(
@@ -261,10 +278,15 @@ testWithTempRoot(
 
     const metadataResult = await run(process.execPath, [finalizer, groupsPath], repo, true);
     assert.notEqual(metadataResult.code, 0);
+    assert.match(metadataResult.stderr, /Error code: FINALIZE_INVALID_LITERAL_PATH/);
     assert.match(metadataResult.stderr, /Git metadata/);
     assert.equal(
       (await git(["config", "user.email"], repo)).stdout.trim(),
       "codex@example.invalid",
+    );
+    assert.equal(
+      (await git(["branch", "--show-current"], repo)).stdout.trim(),
+      "codex/autoresearch-path",
     );
   },
 );
