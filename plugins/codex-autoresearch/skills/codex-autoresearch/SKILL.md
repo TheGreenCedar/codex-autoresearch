@@ -110,7 +110,9 @@ node scripts/autoresearch.mjs research-start --cwd <project> --slug <slug> --goa
 
 Keep dated claims in `sources.md`, judgment in `synthesis.md`, and accepted work in `quality-gaps.md`. Preview additions with `gap-candidates`, then log implementation or rejection with ASI.
 
-Treat `quality_gap=0` as closure of the accepted checklist for this round. Read `researchIntegrity` and its missing-proof warnings before deciding whether the wider question is finished or needs another discovery round.
+Each gap has a stable ID. A checked Markdown box is only a provisional candidate; record the evidence-bearing outcome with `gap-decide --gap-id <id> --decision implemented|rejected --evidence <ref> --validation <result>`. The append-only decision ledger is the acceptance authority.
+
+If the project already has an executable outcome metric, `research-start` preserves it as primary and uses `quality_gap` as secondary acceptance evidence. Treat `quality_gap=0` as closure of the accepted checklist for this round only after its decisions are accepted. Read `researchIntegrity` and its missing-proof warnings before deciding whether the wider question is finished or needs another discovery round.
 
 Read [research, lanes, and finalization](references/research-finalize.md) before fanout, parallel implementation, or review-branch work.
 
@@ -137,7 +139,7 @@ Report the real runway: preview, approved, branches created, locally verified, p
 
 ## Keep parent ownership clear
 
-Run `codex-goal-brief` and inspect its `completionAudit` field before the parent calls `update_goal(status="complete")`. Keep Goal state in Codex; use Autoresearch only for the evidence.
+Run `codex-goal-brief` and inspect top-level `canMarkCodexGoalComplete` and `completionBlocker` before the parent calls `update_goal(status="complete")`. Use `--enforce-completion` when an invalid completion claim must fail the command. Keep Goal state in Codex; use Autoresearch only for the evidence.
 
 When subagents are explicitly used, give every lane a scope, evidence source, decision, artifact, and test. Scout commands must match `lane-runner`'s strict Git read-only argv allowlist; do not use shell or interpreter escapes. Treat Git porcelain and write-scope checks as best-effort detection, not process/filesystem containment, and use disposable worktrees for implementation lanes. Do not nest subagents or overlap write scopes. Keep the benchmark, packet decision, integration, and final verification in the parent.
 

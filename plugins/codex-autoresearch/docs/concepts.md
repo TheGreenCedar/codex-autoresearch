@@ -12,7 +12,7 @@ You do not need this glossary to start. Use it when a command or dashboard label
 | **Structured experiment note (`asi`)** | The note saved with a decision: hypothesis, evidence, rollback reason, next action, and optional lane/risk metadata. |
 | **Continuation** | The answer returned after logging: continue, stop, repair, change segment, or finalize. |
 | **Segment** | A comparable chapter of the session. Start a new one when the benchmark, metric, direction, or phase changes. |
-| **Quality gap** | An accepted checklist item for qualitative work. `quality_gap=0` closes the current round's checklist. |
+| **Quality gap** | A stable qualitative-work item. A checked box is provisional until an implemented or rejected `gap-decide` record supplies evidence and validation. `quality_gap=0` closes only that accepted round. |
 | **Finalization** | The process that turns accepted, current keeps into reviewable branches. Its exceptional current-tree recovery mode instead packages an explicitly reviewed clean branch diff. Both start with review before mutation. |
 
 ## Packet decisions
@@ -42,11 +42,12 @@ Evidence status is separate from the packet decision. A run can be `accepted`, `
 | `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness command |
 | `autoresearch.ideas.md` | Deferred ideas, failed paths, and next actions |
 | `autoresearch.research/<slug>/` | Sources, synthesis, quality gaps, and deliverables for qualitative work |
+| `autoresearch.research/<slug>/quality-gap-decisions.jsonl` | Append-only acceptance decisions for stable gap IDs |
 | `.git/autoresearch/last-run.json` | Reusable packet written by `next` in a Git repo |
 | `.git/autoresearch/progress.json` | Progress snapshot for a slow packet in a Git repo |
 | `.git/autoresearch/pending-log-*.json` | Interrupted log receipts that block unsafe continuation |
 
-Outside Git, the three transient records fall back to `autoresearch.last-run.json`, `autoresearch.progress.json`, and `autoresearch.pending-transaction.json` in the worktree.
+Outside Git, the three transient records fall back to `autoresearch.last-run.json`, `autoresearch.progress.json`, and `autoresearch.pending-transaction.json` in the worktree. In a Git repository they use one preflighted `.git/autoresearch/` store; conflicting Git-private and fallback copies block instead of choosing whichever file is newest.
 
 ## Trust terms
 
@@ -88,6 +89,7 @@ Most sessions need only the blocker and next command printed by `state --report`
 | `scaffoldHealth` | Are wrappers, commit paths, or Git locks broken? |
 | `metricSemanticsWarning` | Are current and historical numbers no longer directly comparable? |
 | `qualityRound` | Is the current checklist closed, and should discovery start another round? |
+| `stateStorage` | Which private-state store passed preflight, and did any conflicting candidate block mutation? |
 
 Cross-surface ownership is documented in [Control plane](control-plane.md).
 

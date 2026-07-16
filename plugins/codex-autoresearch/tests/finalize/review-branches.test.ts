@@ -84,7 +84,10 @@ testWithTempRoot(
     assert.match(summary, /\| 1 \| `autoresearch-review\/ux-test\/01-value-change` \| created \|/);
     assert.match(summary, /autoresearch-review\/ux-test\/01-value-change/);
     assert.match(summary, /git show --stat 'autoresearch-review\/ux-test\/01-value-change'/);
-    assert.match(summary, /git diff [^\n]+ -- 'scripts\/autoresearch\.ts' 'src\/space path\.txt'/);
+    assert.match(
+      summary,
+      /git --literal-pathspecs diff [^\n]+ -- 'scripts\/autoresearch\.ts' 'src\/space path\.txt'/,
+    );
     assert.match(summary, /src\/space path\.txt/);
     assert.match(summary, /scripts\/autoresearch\.ts/);
     assert.match(summary, /Suggested PR/);
@@ -143,6 +146,74 @@ testWithTempRoot(
 
     const status = (await run("git", ["status", "--porcelain"], repo)).stdout.trim();
     assert.equal(status, "");
+  },
+);
+
+testWithTempRoot(
+  "finalizer preserves literal App Router, space, and Unicode filenames",
+  "autoresearch-finalize-literal-paths-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(repo, { recursive: true });
+
+    await git(["init", "-b", "main"], repo);
+    await writeFile(path.join(repo, "README.md"), "base\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+    const base = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    const sourceBranch = "codex/literal-finalization";
+    await git(["switch", "-c", sourceBranch], repo);
+    const expectedFiles = [
+      "src/app/(frontend)/[...slug]/page.tsx",
+      "src/app/(frontend)/[[...segments]]/page.tsx",
+      "src/content/résumé notes.txt",
+    ];
+    for (const file of expectedFiles) {
+      await writeFile(path.join(repo, file), `${file}\n`);
+    }
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "add literal route paths"], repo);
+    const finalTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    const groupsPath = path.join(root, "groups.json");
+    await fsp.writeFile(
+      groupsPath,
+      JSON.stringify(
+        {
+          base,
+          trunk: "main",
+          final_tree: finalTree,
+          goal: "Diagnostic cleanup.",
+          groups: [
+            {
+              title: "Finalize literal paths",
+              body: "Exercise valid repository filenames without pathspec expansion.",
+              last_commit: finalTree,
+              slug: "Final review.lock",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await run(process.execPath, [finalizer, groupsPath], repo);
+    const branch = "autoresearch-review/diagnostic-cleanup/01-final-review-lock";
+    assert.match(result.stdout, new RegExp(branch.replaceAll("/", "\\/")));
+    const refCheck = await run("git", ["check-ref-format", "--branch", branch], repo, true);
+    assert.equal(refCheck.code, 0, refCheck.stderr);
+    const branchFiles = (await git(["diff", "--name-only", "-z", base, branch], repo)).stdout
+      .split("\0")
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right));
+    assert.deepEqual(
+      branchFiles,
+      [...expectedFiles].sort((left, right) => left.localeCompare(right)),
+    );
+    assert.equal((await git(["branch", "--show-current"], repo)).stdout.trim(), sourceBranch);
   },
 );
 

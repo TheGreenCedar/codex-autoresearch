@@ -26,7 +26,9 @@ test("setup does not append elapsed metrics to explicit metric-emitting benchmar
     const payload = JSON.parse(result.stdout);
     assert.ok(payload.checkpoint.paths.includes("autoresearch.md"));
     assert.ok(payload.checkpoint.paths.includes("autoresearch.config.json"));
-    assert.ok(payload.checkpoint.paths.includes(".gitattributes"));
+    assert.equal(payload.checkpoint.paths.includes(".gitattributes"), false);
+    assert.equal(payload.stateStorage.storageMode, "worktree");
+    assert.equal(payload.stateStorage.targets.length, 3);
     assert.match(payload.checkpoint.commands.join("\n"), /git add --/);
     assert.equal(payload.benchmarkMode.printsMetric, true);
     assert.match(payload.benchmarkLintCommand, /benchmark-lint/);
@@ -46,10 +48,85 @@ test("setup does not append elapsed metrics to explicit metric-emitting benchmar
     assert.match(sessionDoc, /`tests`: in configured commit scope/);
     assert.doesNotMatch(sessionDoc, /TBD: add files after initial inspection/);
 
-    const attributes = await readFile(path.join(dir, ".gitattributes"), "utf8");
-    assert.match(attributes, /autoresearch\.jsonl text eol=lf/);
-    assert.match(attributes, /autoresearch\.md text eol=lf/);
-    assert.match(attributes, /autoresearch\.ideas\.md text eol=lf/);
+    await assert.rejects(access(path.join(dir, ".gitattributes")));
+  });
+});
+
+test("setup preserves a preexisting .gitattributes file byte-for-byte", async () => {
+  await withTempDir("setup-preserves-gitattributes", async (dir) => {
+    const attributesPath = path.join(dir, ".gitattributes");
+    const original = "*.generated linguist-generated=true\n";
+    await writeFile(attributesPath, original, "utf8");
+
+    const result = await runCli([
+      "setup",
+      "--cwd",
+      dir,
+      "--name",
+      "preserve attributes",
+      "--metric-name",
+      "seconds",
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(await readFile(attributesPath, "utf8"), original);
+    assert.equal(JSON.parse(result.stdout).checkpoint.paths.includes(".gitattributes"), false);
+  });
+});
+
+test("setup rejects conflicting private state before creating scaffold files", async () => {
+  await withTempDir("setup-private-state-conflict", async (dir) => {
+    await git(dir, ["init", "-b", "main"]);
+    const gitStateDir = path.join(dir, ".git", "autoresearch");
+    await mkdir(gitStateDir, { recursive: true });
+    await writeFile(path.join(gitStateDir, "last-run.json"), '{"copy":"git"}\n', "utf8");
+    await writeFile(path.join(dir, "autoresearch.last-run.json"), '{"copy":"fallback"}\n', "utf8");
+
+    const result = await runCli([
+      "setup",
+      "--cwd",
+      dir,
+      "--name",
+      "blocked setup",
+      "--metric-name",
+      "seconds",
+    ]);
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Conflicting last-run packet state exists/);
+    await assert.rejects(access(path.join(dir, "autoresearch.md")));
+  });
+});
+
+test("setup reports Git-private storage after probing every packet-state path", async () => {
+  await withTempDir("setup-private-state-preflight", async (dir) => {
+    await git(dir, ["init", "-b", "main"]);
+
+    const result = await runCli([
+      "setup",
+      "--cwd",
+      dir,
+      "--name",
+      "Git-private setup",
+      "--metric-name",
+      "seconds",
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const storage = JSON.parse(result.stdout).stateStorage;
+    assert.equal(storage.storageMode, "git-private");
+    assert.equal(storage.targets.length, 3);
+    assert.ok(
+      storage.targets.every(
+        (target: { storageMode?: unknown }) => target.storageMode === "git-private",
+      ),
+    );
+    assert.deepEqual(storage.warnings, []);
+    await assert.rejects(access(path.join(dir, ".git", "autoresearch", "last-run.json")));
+    await assert.rejects(access(path.join(dir, ".git", "autoresearch", "progress.json")));
+    await assert.rejects(
+      access(path.join(dir, ".git", "autoresearch", "pending-log-transaction.json")),
+    );
   });
 });
 

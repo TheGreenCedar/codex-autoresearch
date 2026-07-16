@@ -54,18 +54,33 @@ const validObservations: Record<OperatorTaskCase, Record<string, unknown>> = {
     candidateCount: 2,
   },
   "hostile-finalization": {
-    expectedPaths: ["src/new space 雪.txt", "src/old space 雪.txt"],
-    plannedPaths: ["src/new space 雪.txt", "src/old space 雪.txt"],
+    expectedPaths: ["src/app/(frontend)/[...slug]/page.tsx", "src/app/(frontend)/old space 雪.txt"],
+    plannedPaths: ["src/app/(frontend)/[...slug]/page.tsx", "src/app/(frontend)/old space 雪.txt"],
+    generatedBranches: ["autoresearch-review/finalize/01-literal-paths"],
+    invalidBranches: [],
     staleExitCode: 1,
     staleDiagnostic: "Stale finalization plan: plan fingerprint does not match contents.",
     before: repoSnapshot,
     after: repoSnapshot,
+  },
+  "session-friction-journey": {
+    runs: 0,
+    zeroRunActionKinds: ["next-packet", "next-packet", "next-packet"],
+    zeroRunActionCommands: [action.command, action.command, action.command],
+    canMarkCodexGoalComplete: false,
+    rawChecklistAccepted: false,
+    generatedGitAttributes: false,
   },
   "output-budgets": {
     outputs: {
       compact: { bytes: 8000, lines: 120 },
       state: { bytes: 16000, lines: 220 },
       doctor: { bytes: 7000, lines: 80 },
+      onboarding: { bytes: 9000, lines: 120 },
+      researchStart: { bytes: 12000, lines: 160 },
+      log: { bytes: 10000, lines: 140 },
+      finalizePreview: { bytes: 11000, lines: 150 },
+      finalizeCurrentTree: { bytes: 11000, lines: 150 },
     },
   },
   "long-history": {
@@ -105,11 +120,26 @@ test("every portable case rejects realistic faulty public-output facts with a st
       ...validObservations["hostile-finalization"],
       after: { ...repoSnapshot, head: "mutated\n" },
     },
+    "session-friction-journey": {
+      ...validObservations["session-friction-journey"],
+      zeroRunActionKinds: ["metric-saturation", "finalization", "finalization"],
+      zeroRunActionCommands: [
+        "node scripts/autoresearch.mjs finalize-preview --cwd <project>",
+        "node scripts/autoresearch.mjs finalize-preview --cwd <project>",
+        "node scripts/autoresearch.mjs finalize-preview --cwd <project>",
+      ],
+      rawChecklistAccepted: true,
+    },
     "output-budgets": {
       outputs: {
         compact: { bytes: 10_241, lines: 120 },
         state: { bytes: 16000, lines: 220 },
         doctor: { bytes: 7000, lines: 80 },
+        onboarding: { bytes: 9000, lines: 120 },
+        researchStart: { bytes: 12000, lines: 160 },
+        log: { bytes: 10000, lines: 140 },
+        finalizePreview: { bytes: 11000, lines: 150 },
+        finalizeCurrentTree: { bytes: 11000, lines: 150 },
       },
     },
     "long-history": {
@@ -133,7 +163,7 @@ test("every portable case rejects realistic faulty public-output facts with a st
   }
 });
 
-test("the deterministic six-case output fixture parses with exact case and summary reconciliation", () => {
+test("the deterministic seven-case output fixture parses with exact case and summary reconciliation", () => {
   const records = OPERATOR_TASK_CASES.map((caseName) =>
     evidence(caseName, validObservations[caseName]),
   );
@@ -143,8 +173,8 @@ test("the deterministic six-case output fixture parses with exact case and summa
       schemaVersion: 1,
       suite: OPERATOR_TASK_SUITE,
       status: "pass",
-      tasks: 6,
-      passed: 6,
+      tasks: 7,
+      passed: 7,
       failed: 0,
     })}`,
   ].join("\n");
@@ -155,16 +185,16 @@ test("the deterministic six-case output fixture parses with exact case and summa
   );
   assert.equal(parsed.summary.status, "pass");
 
-  const liveOutput = `${output}\nMETRIC operator_task_failures=0\nMETRIC operator_tasks=6\nMETRIC operator_tasks_passed=6`;
+  const liveOutput = `${output}\nMETRIC operator_task_failures=0\nMETRIC operator_tasks=7\nMETRIC operator_tasks_passed=7`;
   assert.equal(validateOperatorTaskRunOutput(liveOutput).summary.status, "pass");
   assert.throws(() => validateOperatorTaskRunOutput(""), /exactly one EVIDENCE_SUMMARY/);
   assert.throws(
-    () => validateOperatorTaskRunOutput(liveOutput.replace("operator_tasks=6", "operator_tasks=5")),
+    () => validateOperatorTaskRunOutput(liveOutput.replace("operator_tasks=7", "operator_tasks=6")),
     /metrics do not reconcile/,
   );
 
   assert.throws(
-    () => parseOperatorTaskEvidence(output.replace('"tasks":6', '"tasks":5')),
+    () => parseOperatorTaskEvidence(output.replace('"tasks":7', '"tasks":6')),
     /summary is inconsistent/,
   );
   assert.throws(

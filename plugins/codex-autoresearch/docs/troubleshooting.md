@@ -54,7 +54,9 @@ Find the broken layer before repeating the command. A retry with the same precon
 | Source is clean but session artifacts are dirty | Autoresearch files changed | Read/run work is safe; stash or commit those files before branch-changing finalization. |
 | Finalization blocks on current tree | Commit evidence no longer describes the final diff | Review the whole clean non-session diff, then follow `finalize-current-tree --cwd <project> --exclude-session-artifacts` only when canonical state routes there. |
 | Finalization or export is quiet for a long time | Slow history or JSON output | Rerun with `--progress` for stderr heartbeats. |
+| Checked qualitative gaps still report `needs-evidence` | Markdown boxes are provisional | Run `quality-gap --list`, then record each stable gap ID with `gap-decide` plus evidence and validation. |
 | `quality_gap=0` appears to finish everything | Checklist scope is being overread | Read `researchIntegrity`, open proof gaps, and promotion status; start another discovery round when the question is still open. |
+| Packet state reports conflicting private stores | Both `.git/autoresearch/` and worktree fallback files exist | Inspect both copies and preserve the authoritative one; do not delete or merge them blindly. Rerun setup or the blocked mutation after the conflict is resolved. |
 | An older Codex task contains a bounded decision | Session evidence has not been imported | Run `session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --dry-run`. |
 | Loop keeps running without learning | Repeated idea family or stale phase | Stop packets; inspect the saved experiment notes, run `research-fanout --dry-run`, rescope, or start a new segment. |
 | Watchdog fires | No meaningful progress in the quiet window | Inspect active work, finalize useful keeps, or rescope. |

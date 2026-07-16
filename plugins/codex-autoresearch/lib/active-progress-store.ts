@@ -2,18 +2,31 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 
 import { createCoalescingProgressWriter } from "./active-progress-writer.js";
-import { checkedAtomicWriteFile } from "./checked-write.js";
 import { numberOption } from "./cli/args.js";
-import { gitPrivatePath, insideGitRepo, privateStateWriteRoot } from "./git-private-state.js";
+import {
+  privateStateCandidatePaths,
+  resolvePrivateStateTarget,
+  writePrivateStateFile,
+  type PrivateStateSpec,
+} from "./git-private-state.js";
 import { staleProgressReason, type RunnerProgressSnapshot } from "./runner-progress.js";
 import { resolveSessionPaths } from "./session-paths.js";
 import type { UnknownRecord } from "./types/json.js";
 
 export async function resolveProgressPath(workDir: string): Promise<string> {
-  if (await insideGitRepo(workDir)) {
-    return await gitPrivatePath(workDir, "autoresearch/progress.json");
-  }
-  return resolveSessionPaths({ workDir }).progressFallbackPath;
+  return (await resolvePrivateStateTarget(workDir, progressStateSpec(workDir))).path;
+}
+
+export function progressStateSpec(workDir: string): PrivateStateSpec {
+  return {
+    fallbackPath: resolveSessionPaths({ workDir }).progressFallbackPath,
+    gitRelativePath: "autoresearch/progress.json",
+    label: "active progress",
+  };
+}
+
+export async function progressCandidatePaths(workDir: string): Promise<string[]> {
+  return await privateStateCandidatePaths(workDir, progressStateSpec(workDir));
 }
 
 function readProgressSnapshot(target: string): UnknownRecord | null {
@@ -40,13 +53,25 @@ async function writeActiveProgressSnapshot(
   const target = await resolveProgressPath(workDir);
   const generation = activeProgressGeneration(snapshot);
   if (generation <= activeProgressGeneration(readProgressSnapshot(target))) return target;
-  await checkedAtomicWriteFile(
-    await privateStateWriteRoot(workDir, target),
-    target,
-    `${JSON.stringify(snapshot, null, 2)}\n`,
+  const stored = await writePrivateStateFile(
+    workDir,
+    progressStateSpec(workDir),
+    (stateTarget) =>
+      `${JSON.stringify(
+        {
+          ...snapshot,
+          stateStorage: {
+            storageMode: stateTarget.storageMode,
+            path: stateTarget.path,
+            warning: stateTarget.warning,
+          },
+        },
+        null,
+        2,
+      )}\n`,
     { mode: 0o600 },
   );
-  return target;
+  return stored.path;
 }
 
 export async function readActiveProgressSnapshot(
@@ -78,10 +103,12 @@ export async function createActiveProgressWriter(workDir: string) {
 }
 
 export async function deleteActiveProgressSnapshot(workDir: string): Promise<void> {
-  try {
-    await fsp.rm(await resolveProgressPath(workDir));
-  } catch (error) {
-    if (!isMissingPathError(error)) throw error;
+  for (const target of await progressCandidatePaths(workDir)) {
+    try {
+      await fsp.rm(target);
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error;
+    }
   }
 }
 

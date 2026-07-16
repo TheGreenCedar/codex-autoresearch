@@ -40,6 +40,8 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.match(goalPayload.objectiveDraft, /METRIC score=value/);
     assert.equal(goalPayload.importedCodexGoal.status, "active");
     assert.equal(goalPayload.completionAudit.canMarkCodexGoalComplete, false);
+    assert.equal(goalPayload.canMarkCodexGoalComplete, false);
+    assert.ok(goalPayload.completionBlocker);
     assert.match(goalPayload.commands.explicitGoalToolPrompt, /using the goal tool/);
 
     const devOnlyPayload = await readGoalBrief(dir, [
@@ -72,6 +74,19 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(prematurePayload.completionAudit.canMarkCodexGoalComplete, false);
     assert.notEqual(prematurePayload.completionAudit.status, "complete");
+    const enforcedPremature = await runCli([
+      "codex-goal-brief",
+      "--cwd",
+      noEvidenceDir,
+      "--codex-goal-status",
+      "active",
+      "--completion-confirmed",
+      "--completion-evidence",
+      "Looks done",
+      "--enforce-completion",
+    ]);
+    assert.notEqual(enforcedPremature.code, 0);
+    assert.match(enforcedPremature.stderr, /codex_goal_completion_blocked/i);
 
     const promotionDir = path.join(dir, "promotion-evidence");
     await mkdir(promotionDir, { recursive: true });
@@ -116,6 +131,8 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(importedPayload.completionAudit.status, "complete");
     assert.equal(importedPayload.completionAudit.canMarkCodexGoalComplete, true);
+    assert.equal(importedPayload.canMarkCodexGoalComplete, true);
+    assert.equal(importedPayload.completionBlocker, null);
 
     const lint = await runCli([
       "benchmark-lint",
@@ -482,8 +499,9 @@ test("quality-gap auto-detects the active research slug for JSON output", async 
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.slug, "delight-study");
-    assert.equal(payload.open, 1);
-    assert.deepEqual(payload.openItems, ["Open delight gap"]);
+    assert.equal(payload.open, 2);
+    assert.deepEqual(payload.openItems, ["Open delight gap", "Closed delight gap"]);
+    assert.deepEqual(payload.legacyProvisionalClosed, ["Closed delight gap"]);
   });
 });
 
@@ -509,10 +527,7 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
     assert.equal(previewPayload.candidates.length, 1);
     assert.equal(previewPayload.applied, false);
     assert.equal(previewPayload.roundGuidance.unit, "research-round");
-    assert.match(
-      previewPayload.roundGuidance.metricScope,
-      /does not discover fresh recommendations/,
-    );
+    assert.match(previewPayload.roundGuidance.metricScope, /raw checked boxes remain provisional/);
     assert.match(previewPayload.roundGuidance.requiredRefresh, /rerun the project-study prompt/);
     assert.ok(
       previewPayload.roundGuidance.hallucinationFilter.some((item) => /validation path/.test(item)),
@@ -530,7 +545,8 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
     assert.equal(applied.code, 0, applied.stderr);
     const appliedPayload = JSON.parse(applied.stdout);
     assert.equal(appliedPayload.applied, true);
-    assert.equal(appliedPayload.qualityGap.total, 7);
+    assert.equal(appliedPayload.qualityGap.total, 1);
+    assert.equal(appliedPayload.qualityGap.researchReadiness.total, 6);
 
     await writeFile(
       synthesisPath,
@@ -553,7 +569,7 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
     ]);
     assert.equal(reapplied.code, 0, reapplied.stderr);
     const reappliedPayload = JSON.parse(reapplied.stdout);
-    assert.equal(reappliedPayload.qualityGap.total, 8);
+    assert.equal(reappliedPayload.qualityGap.total, 2);
     const gaps = await readFile(
       path.join(dir, "autoresearch.research", "study", "quality-gaps.md"),
       "utf8",
@@ -583,7 +599,7 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
     ]);
     assert.equal(refreshed.code, 0, refreshed.stderr);
     const refreshedPayload = JSON.parse(refreshed.stdout);
-    assert.equal(refreshedPayload.qualityGap.total, 7);
+    assert.equal(refreshedPayload.qualityGap.total, 1);
     const refreshedGaps = await readFile(
       path.join(dir, "autoresearch.research", "study", "quality-gaps.md"),
       "utf8",
@@ -603,7 +619,8 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
     ]);
     assert.equal(cleared.code, 0, cleared.stderr);
     const clearedPayload = JSON.parse(cleared.stdout);
-    assert.equal(clearedPayload.qualityGap.total, 6);
+    assert.equal(clearedPayload.qualityGap.total, 0);
+    assert.equal(clearedPayload.qualityGap.researchReadiness.total, 6);
     const clearedGaps = await readFile(
       path.join(dir, "autoresearch.research", "study", "quality-gaps.md"),
       "utf8",
@@ -630,6 +647,32 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
         "",
       ].join("\n"),
     );
+    const decisionTarget = await runCli([
+      "quality-gap",
+      "--cwd",
+      dir,
+      "--research-slug",
+      "study",
+      "--list",
+    ]);
+    assert.equal(decisionTarget.code, 0, decisionTarget.stderr);
+    const [closedGap] = JSON.parse(decisionTarget.stdout).gaps;
+    const decision = await runCli([
+      "gap-decide",
+      "--cwd",
+      dir,
+      "--research-slug",
+      "study",
+      "--gap-id",
+      closedGap.id,
+      "--decision",
+      "implemented",
+      "--evidence",
+      "round-1 implementation commit",
+      "--validation",
+      "guided setup acceptance passed",
+    ]);
+    assert.equal(decision.code, 0, decision.stderr);
     const closedDuplicate = await runCli([
       "gap-candidates",
       "--cwd",

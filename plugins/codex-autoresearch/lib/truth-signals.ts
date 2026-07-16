@@ -435,8 +435,11 @@ function suspiciousPerfectMetrics(metrics: LooseObject = {}, primaryMetricName =
     const value = finiteMetric(rawValue);
     if (value == null) continue;
     const metricName = String(name || primaryMetricName);
-    if (/quality_gap|gap/i.test(metricName) && value === 0) names.push(`${metricName}=0`);
-    else if (/score|quality|hit|mrr|precision|recall|accuracy/i.test(metricName) && value >= 1) {
+    if (/quality_gap|gap/i.test(metricName)) {
+      if (value === 0) names.push(`${metricName}=0`);
+      continue;
+    }
+    if (/score|quality|hit|mrr|precision|recall|accuracy/i.test(metricName) && value >= 1) {
       names.push(`${metricName}=${value}`);
     }
   }

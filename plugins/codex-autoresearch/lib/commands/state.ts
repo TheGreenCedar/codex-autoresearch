@@ -292,6 +292,7 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
     experimentMemory: memory,
     setupState: decisionSetupState(state),
     watchdog: watchdogSummary,
+    nextCommand: stateCommands.next,
   };
   const preliminaryDecisionEnvelope = buildDecisionEnvelope(decisionInput);
   const portfolioRecommendation =
@@ -636,6 +637,7 @@ async function publicCompactState({
     experimentMemory: memory,
     setupState: decisionSetupState(state),
     watchdog: watchdogSummary,
+    nextCommand: compactCommands.next,
   };
   const preliminaryDecisionEnvelope = buildDecisionEnvelope(decisionInput);
   const portfolioRecommendation =

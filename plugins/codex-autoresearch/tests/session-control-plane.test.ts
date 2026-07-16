@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -13,6 +13,7 @@ import { classifyEvidenceMaturity } from "../lib/evidence-maturity.js";
 import { registryPathForWorkDir } from "../lib/dashboard-server-registry.js";
 import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
 import { buildContinuationCommands } from "../lib/commands/continuation.js";
+import { checkedAtomicWriteFile } from "../lib/checked-write.js";
 import {
   fixedControlStateSummary,
   fixedControlViolationForCommand,
@@ -20,9 +21,17 @@ import {
 } from "../lib/fixed-control.js";
 import { classifyFinalizationRunwayFromFacts } from "../lib/finalization-runway.js";
 import { buildGoalContract } from "../lib/goal-frame.js";
+import {
+  autoresearchPrivateStateSpecs,
+  preflightAutoresearchPrivateState,
+  privateStateFallbackAllowed,
+  resolvePrivateStateTarget,
+  writePrivateStateFile,
+} from "../lib/git-private-state.js";
 import { planFailureRecoveryLanes } from "../lib/lane-orchestration-controller.js";
 import { buildLoopContractStatus } from "../lib/loop-governance.js";
 import { buildOperatorReadout } from "../lib/operator-readout.js";
+import { buildOperatorSnapshot } from "../lib/operator-snapshot.js";
 import { buildProcessLifecycleRecord, buildResourcePreflight } from "../lib/process-governor.js";
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
 import {
@@ -53,7 +62,7 @@ import {
   fixtureJsonl,
   session019eb85aControlPlaneFixtureEntries,
 } from "./helpers/session-forensics-fixtures.js";
-import { withTempDir as withNamedTempDir } from "./helpers/process.js";
+import { runGit, withTempDir as withNamedTempDir } from "./helpers/process.js";
 
 const withTempDir = (name: string, fn: (dir: string) => Promise<void>) =>
   withNamedTempDir("autoresearch-control-plane", name, fn);
@@ -83,6 +92,81 @@ test("session path resolver preserves repo-local defaults", async () => {
     assert.ok(paths.clearTargets.includes(path.join(workDir, "autoresearch.config.json")));
     assert.ok(paths.clearTargets.includes(path.join(workDir, "autoresearch.progress.json")));
     assert.ok(paths.clearTargets.includes(path.join(sessionCwd, "autoresearch.config.json")));
+  });
+});
+
+test("Git-private state fallback is limited to permission and read-only failures", () => {
+  for (const code of ["EACCES", "EPERM", "EROFS"]) {
+    assert.equal(privateStateFallbackAllowed(Object.assign(new Error(code), { code })), true);
+  }
+  for (const code of ["EIO", "ENOSPC", "EINVAL", "ENOENT"]) {
+    assert.equal(privateStateFallbackAllowed(Object.assign(new Error(code), { code })), false);
+  }
+});
+
+test("private state preflight selects an explicit worktree fallback before setup writes", async () => {
+  await withTempDir("private-state-permission-fallback", async (dir) => {
+    await runGit(dir, ["init", "-b", "main"]);
+    const injectedWrite: typeof checkedAtomicWriteFile = async (root, target, data, options) => {
+      if (target.includes(`${path.sep}.git${path.sep}`)) {
+        throw Object.assign(new Error("Git-private state denied"), { code: "EPERM" });
+      }
+      await checkedAtomicWriteFile(root, target, data, options);
+    };
+
+    const preflight = await preflightAutoresearchPrivateState(dir, { write: injectedWrite });
+    assert.equal(preflight.storageMode, "worktree-fallback");
+    assert.equal(preflight.targets.length, 3);
+    assert.ok(preflight.targets.every((target) => target.storageMode === "worktree-fallback"));
+    assert.ok(preflight.warnings.every((warning) => /EPERM/.test(warning)));
+
+    const spec = autoresearchPrivateStateSpecs(dir)[0];
+    const stored = await writePrivateStateFile(
+      dir,
+      spec,
+      (target) => `${JSON.stringify({ packet: true, storageMode: target.storageMode })}\n`,
+      {},
+      {
+        write: injectedWrite,
+      },
+    );
+    assert.equal(stored.storageMode, "worktree-fallback");
+    assert.equal(stored.path, path.join(dir, "autoresearch.last-run.json"));
+    assert.deepEqual(JSON.parse(await readFile(stored.path, "utf8")), {
+      packet: true,
+      storageMode: "worktree-fallback",
+    });
+  });
+});
+
+test("private state preflight refuses non-permission failures without a fallback", async () => {
+  await withTempDir("private-state-no-arbitrary-fallback", async (dir) => {
+    await runGit(dir, ["init", "-b", "main"]);
+    const injectedWrite: typeof checkedAtomicWriteFile = async () => {
+      throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    };
+
+    await assert.rejects(
+      () => preflightAutoresearchPrivateState(dir, { write: injectedWrite }),
+      /disk full/,
+    );
+    await assert.rejects(access(path.join(dir, "autoresearch.last-run.json")));
+  });
+});
+
+test("private state reads reject simultaneous Git-private and fallback copies", async () => {
+  await withTempDir("private-state-conflict", async (dir) => {
+    await runGit(dir, ["init", "-b", "main"]);
+    const spec = autoresearchPrivateStateSpecs(dir)[0];
+    const gitTarget = path.join(dir, ".git", "autoresearch", "last-run.json");
+    await mkdir(path.dirname(gitTarget), { recursive: true });
+    await writeFile(gitTarget, '{"copy":"git"}\n', "utf8");
+    await writeFile(spec.fallbackPath, '{"copy":"fallback"}\n', "utf8");
+
+    await assert.rejects(
+      () => resolvePrivateStateTarget(dir, spec),
+      /Conflicting last-run packet state exists/,
+    );
   });
 });
 
@@ -804,6 +888,48 @@ test("loop contract and operator readout expose the same canonical blocker", () 
   assert.equal(loop.strongestAction?.kind, "goal-contract");
   assert.equal(readout.nextAction, loop.strongestAction?.reason);
   assert.equal(readout.dashboardMutationAllowed, false);
+});
+
+test("operator snapshot keeps one bounded action and exposes readout discrepancies", () => {
+  const stateAction = {
+    kind: "next-packet",
+    reason: "Run the first baseline packet.",
+    command: "node scripts/autoresearch.mjs next --cwd /repo --compact",
+  };
+  const snapshot = buildOperatorSnapshot({
+    state: {
+      runs: 0,
+      metric: "quality_gap",
+      direction: "lower",
+      best: null,
+      qualityGap: { open: null, total: 0, roundDecision: { accepted: false } },
+      commands: {
+        state: "node scripts/autoresearch.mjs state --cwd /repo --compact",
+      },
+      resolvedDecision: {
+        canonicalNextAction: stateAction,
+        loopContract: { blockers: [] },
+      },
+      runtimeProvenance: { scope: "source-checkout", status: "source-only" },
+      stateStorage: { storageMode: "worktree-fallback" },
+      sourceCleanliness: { status: "session-only" },
+    },
+    recommendation: { resolvedDecision: { canonicalNextAction: stateAction } },
+    doctor: {
+      resolvedDecision: {
+        canonicalNextAction: { ...stateAction, reason: "Run a baseline." },
+      },
+    },
+  });
+
+  assert.equal(snapshot.stage, "needs-baseline");
+  assert.equal(snapshot.primaryCommand, stateAction.command);
+  assert.equal(snapshot.metricEvidence.runs, 0);
+  assert.deepEqual(snapshot.stateStorage, { storageMode: "worktree-fallback" });
+  assert.deepEqual(snapshot.dirtyClassification, { status: "session-only" });
+  assert.deepEqual(snapshot.discrepancies, [
+    "canonicalNextAction.reason differs across public readouts",
+  ]);
 });
 
 test("session 019eb85a derived fixture detects control-plane friction", async () => {

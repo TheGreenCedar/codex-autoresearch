@@ -382,6 +382,8 @@ test("active progress store preserves legacy partial generation safety", async (
     const persisted = JSON.parse(await readFile(progressPath, "utf8"));
     assert.equal(persisted.generation, 8);
     assert.equal(persisted.packetId, "current-packet");
+    assert.equal(persisted.stateStorage.storageMode, "worktree");
+    assert.equal(persisted.stateStorage.path, progressPath);
   });
 });
 

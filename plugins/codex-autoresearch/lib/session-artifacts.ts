@@ -41,11 +41,7 @@ function isCommonSessionArtifact(normalized: string): boolean {
 }
 
 function isDirtyTreeSessionArtifact(normalized: string): boolean {
-  return (
-    normalized.startsWith("autoresearch.") ||
-    normalized.startsWith("autoresearch-") ||
-    normalized === ".gitattributes"
-  );
+  return normalized.startsWith("autoresearch.") || normalized.startsWith("autoresearch-");
 }
 
 function isSourceCheckoutSessionArtifact(normalized: string): boolean {

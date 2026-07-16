@@ -121,9 +121,10 @@ A qualitative session keeps evidence in `sources.md`, judgment in `synthesis.md`
 node scripts/autoresearch.mjs research-start --cwd <project> --slug <slug> --goal "<goal>"
 node scripts/autoresearch.mjs quality-gap --cwd <project> --research-slug <slug> --list
 node scripts/autoresearch.mjs gap-candidates --cwd <project> --research-slug <slug>
+node scripts/autoresearch.mjs gap-decide --cwd <project> --research-slug <slug> --gap-id <id> --decision implemented --evidence <ref> --validation <result>
 ```
 
-Closing the checklist ends that round. Read `researchIntegrity` and its missing-proof warnings before deciding whether the larger question is finished or needs another discovery round.
+Raw checkbox edits stay provisional. `gap-decide` appends the evidence-bearing acceptance decision for a stable gap ID. Closing the accepted checklist ends that round. Read `researchIntegrity` and its missing-proof warnings before deciding whether the larger question is finished or needs another discovery round.
 
 When one line of experiments keeps circling the same idea, `research-fanout --dry-run` can propose independent scouts. Scout commands run only when their parsed argv matches the strict Git read-only allowlist; Git porcelain is post-run detection, not containment. An implementation lane needs a separate worktree or an explicit write scope, neither of which contains arbitrary process or outside-root effects. A large architectural idea remains advice until a person approves a bounded implementation attempt. The parent session still owns the benchmark and the keep/discard decision.
 

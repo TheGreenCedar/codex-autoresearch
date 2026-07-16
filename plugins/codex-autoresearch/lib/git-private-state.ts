@@ -1,10 +1,55 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
-import { isPathInside } from "./path-containment.js";
+import { checkedAtomicWriteFile } from "./checked-write.js";
 import { runProcess, type ProcessRunResult } from "./runner.js";
 import { displayGitPath, parsePorcelainV1Z } from "./git-paths.js";
 import { pathExists } from "./session-core.js";
+import { resolveSessionPaths } from "./session-paths.js";
+
+const PRIVATE_STATE_FALLBACK_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
+
+export type PrivateStateStorageMode = "git-private" | "worktree" | "worktree-fallback";
+
+export interface PrivateStateSpec {
+  fallbackPath: string;
+  gitRelativePath: string;
+  label: string;
+}
+
+export interface PrivateStateTarget {
+  fallbackPath: string;
+  gitPrivatePath: string | null;
+  label: string;
+  path: string;
+  root: string;
+  storageMode: PrivateStateStorageMode;
+  warning: string;
+}
+
+export interface PrivateStateIo {
+  remove?: (filePath: string) => Promise<void>;
+  write?: typeof checkedAtomicWriteFile;
+}
+
+export type PrivateStateData =
+  | string
+  | Uint8Array
+  | ((target: PrivateStateTarget) => string | Uint8Array);
+
+export class PrivateStateConflictError extends Error {
+  readonly code = "private_state_conflict";
+
+  constructor(label: string, gitPath: string, fallbackPath: string) {
+    super(
+      `Conflicting ${label} state exists in both Git-private and worktree storage. ` +
+        `Inspect and reconcile ${gitPath} and ${fallbackPath} before continuing.`,
+    );
+    this.name = "PrivateStateConflictError";
+  }
+}
 
 function hasGitMarker(cwd: string): boolean {
   let current = path.resolve(cwd);
@@ -48,13 +93,230 @@ export async function gitPrivateRoot(cwd: string): Promise<string> {
   return path.isAbsolute(gitDir) ? path.resolve(gitDir) : path.resolve(cwd, gitDir);
 }
 
-export async function privateStateWriteRoot(workDir: string, target: string): Promise<string> {
-  if (!(await insideGitRepo(workDir).catch(() => false))) return workDir;
-  const gitRoot = await gitPrivateRoot(workDir);
-  if (!isPathInside(gitRoot, target)) {
-    throw new Error(`Git-private state path escapes the Git directory: ${target}`);
+export function privateStateFallbackAllowed(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    PRIVATE_STATE_FALLBACK_CODES.has(String((error as { code?: unknown }).code || "")),
+  );
+}
+
+export async function resolvePrivateStateTarget(
+  workDir: string,
+  spec: PrivateStateSpec,
+): Promise<PrivateStateTarget> {
+  const gitRepo = await verifiedPrivateStateGitRepo(workDir);
+  if (!gitRepo) {
+    return {
+      fallbackPath: spec.fallbackPath,
+      gitPrivatePath: null,
+      label: spec.label,
+      path: spec.fallbackPath,
+      root: workDir,
+      storageMode: "worktree",
+      warning: "",
+    };
   }
-  return gitRoot;
+
+  const resolvedGitPath = await gitPrivatePath(workDir, spec.gitRelativePath);
+  const gitExists = await privateStatePathExists(resolvedGitPath);
+  const fallbackExists = await privateStatePathExists(spec.fallbackPath);
+  if (resolvedGitPath !== spec.fallbackPath && gitExists && fallbackExists) {
+    throw new PrivateStateConflictError(spec.label, resolvedGitPath, spec.fallbackPath);
+  }
+  if (fallbackExists) return fallbackTarget(workDir, spec, resolvedGitPath);
+  return {
+    fallbackPath: spec.fallbackPath,
+    gitPrivatePath: resolvedGitPath,
+    label: spec.label,
+    path: resolvedGitPath,
+    root: await gitPrivateRoot(workDir),
+    storageMode: "git-private",
+    warning: "",
+  };
+}
+
+export async function privateStateCandidatePaths(
+  workDir: string,
+  spec: PrivateStateSpec,
+): Promise<string[]> {
+  const candidates = [spec.fallbackPath];
+  if (await verifiedPrivateStateGitRepo(workDir)) {
+    candidates.unshift(await gitPrivatePath(workDir, spec.gitRelativePath));
+  }
+  return [...new Set(candidates)];
+}
+
+export async function writePrivateStateFile(
+  workDir: string,
+  spec: PrivateStateSpec,
+  data: PrivateStateData,
+  options: { mode?: number } = {},
+  io: PrivateStateIo = {},
+): Promise<PrivateStateTarget> {
+  const write = io.write || checkedAtomicWriteFile;
+  const target = await resolvePrivateStateTarget(workDir, spec);
+  try {
+    await write(target.root, target.path, privateStateDataForTarget(data, target), options);
+    return target;
+  } catch (error) {
+    if (target.storageMode !== "git-private" || !privateStateFallbackAllowed(error)) throw error;
+    if (await privateStatePathExists(spec.fallbackPath)) {
+      throw new PrivateStateConflictError(spec.label, target.path, spec.fallbackPath);
+    }
+    const fallback = fallbackTarget(workDir, spec, target.path, error);
+    await write(fallback.root, fallback.path, privateStateDataForTarget(data, fallback), options);
+    return fallback;
+  }
+}
+
+function privateStateDataForTarget(
+  data: PrivateStateData,
+  target: PrivateStateTarget,
+): string | Uint8Array {
+  return typeof data === "function" ? data(target) : data;
+}
+
+export async function preflightPrivateStateTarget(
+  workDir: string,
+  spec: PrivateStateSpec,
+  io: PrivateStateIo = {},
+): Promise<PrivateStateTarget> {
+  const write = io.write || checkedAtomicWriteFile;
+  const remove = io.remove || ((filePath: string) => fsp.rm(filePath, { force: true }));
+  const target = await resolvePrivateStateTarget(workDir, spec);
+  try {
+    await probePrivateStateTarget(target, write, remove);
+    return target;
+  } catch (error) {
+    if (target.storageMode !== "git-private" || !privateStateFallbackAllowed(error)) throw error;
+    if (await privateStatePathExists(spec.fallbackPath)) {
+      throw new PrivateStateConflictError(spec.label, target.path, spec.fallbackPath);
+    }
+    const fallback = fallbackTarget(workDir, spec, target.path, error);
+    await probePrivateStateTarget(fallback, write, remove);
+    return fallback;
+  }
+}
+
+export async function preflightAutoresearchPrivateState(
+  workDir: string,
+  io: PrivateStateIo = {},
+): Promise<{
+  storageMode: PrivateStateStorageMode;
+  targets: PrivateStateTarget[];
+  warnings: string[];
+}> {
+  const specs = autoresearchPrivateStateSpecs(workDir);
+  const targets: PrivateStateTarget[] = [];
+  for (const spec of specs) targets.push(await preflightPrivateStateTarget(workDir, spec, io));
+  const warnings = [...new Set(targets.map((target) => target.warning).filter(Boolean))];
+  const modes = new Set(targets.map((target) => target.storageMode));
+  return {
+    storageMode:
+      modes.size === 1
+        ? targets[0]?.storageMode || "worktree"
+        : modes.has("worktree-fallback")
+          ? "worktree-fallback"
+          : "worktree",
+    targets,
+    warnings,
+  };
+}
+
+export function autoresearchPrivateStateSpecs(workDir: string): PrivateStateSpec[] {
+  const paths = resolveSessionPaths({ workDir });
+  return [
+    {
+      fallbackPath: paths.lastRunFallbackPath,
+      gitRelativePath: "autoresearch/last-run.json",
+      label: "last-run packet",
+    },
+    {
+      fallbackPath: paths.progressFallbackPath,
+      gitRelativePath: "autoresearch/progress.json",
+      label: "active progress",
+    },
+    {
+      fallbackPath: paths.pendingLogTransactionFallbackPath,
+      gitRelativePath: "autoresearch/pending-log-transaction.json",
+      label: "pending log receipt",
+    },
+  ];
+}
+
+export async function autoresearchPrivateStateCandidatePaths(workDir: string): Promise<string[]> {
+  const candidates = await Promise.all(
+    autoresearchPrivateStateSpecs(workDir).map((spec) => privateStateCandidatePaths(workDir, spec)),
+  );
+  return [...new Set(candidates.flat())];
+}
+
+async function probePrivateStateTarget(
+  target: PrivateStateTarget,
+  write: typeof checkedAtomicWriteFile,
+  remove: (filePath: string) => Promise<void>,
+): Promise<void> {
+  const probePath = path.join(
+    path.dirname(target.path),
+    `.${path.basename(target.path)}.${randomUUID()}.preflight`,
+  );
+  await write(target.root, probePath, "", { mode: 0o600 });
+  try {
+    await remove(probePath);
+  } catch (error) {
+    throw new Error(
+      `Private state preflight could not remove its probe ${probePath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+async function verifiedPrivateStateGitRepo(workDir: string): Promise<boolean> {
+  if (!hasGitMarker(workDir)) return false;
+  const result = await runGit(["rev-parse", "--is-inside-work-tree"], workDir);
+  if (result.code !== 0 || result.stdout.trim() !== "true") {
+    throw new Error(
+      `Git-private state storage could not verify the repository: ${gitOutput(
+        result,
+        "not a Git worktree",
+      )}`,
+    );
+  }
+  return true;
+}
+
+async function privateStatePathExists(filePath: string): Promise<boolean> {
+  try {
+    await fsp.lstat(filePath);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function fallbackTarget(
+  workDir: string,
+  spec: PrivateStateSpec,
+  gitPath: string,
+  cause?: unknown,
+): PrivateStateTarget {
+  const code =
+    cause && typeof cause === "object" ? String((cause as { code?: unknown }).code || "") : "";
+  const reason = code ? ` after ${code}` : " because fallback state is already active";
+  return {
+    fallbackPath: spec.fallbackPath,
+    gitPrivatePath: gitPath,
+    label: spec.label,
+    path: spec.fallbackPath,
+    root: workDir,
+    storageMode: "worktree-fallback",
+    warning: `Git-private ${spec.label} storage is unavailable${reason}; using explicit worktree fallback ${spec.fallbackPath}.`,
+  };
 }
 
 export async function gitDirtyPathDetails(cwd: string) {

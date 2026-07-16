@@ -1583,7 +1583,7 @@ test("runner progress and experiment economics expose timeout and stale-progress
   });
   assert.equal(
     buildDecisionEnvelope({
-      state: { current: [] },
+      state: { current: [{ run: 1, status: "discard", metric: 10 }] },
       experimentEconomics: smallProbeEconomics,
     }).canonicalNextAction.kind,
     "workflow-friction",
@@ -1714,7 +1714,7 @@ test("loop contract blockers drive canonical next action ahead of legacy actions
 test("loop contract warnings prevent next-packet canonical drift", () => {
   const envelope = buildDecisionEnvelope({
     state: {
-      current: [],
+      current: [{ run: 1, status: "keep", metric: 5 }],
     },
     nextAction: "Run the next measured packet.",
     finalization: { ready: true, nextAction: "Finalize reviewable kept work." },
