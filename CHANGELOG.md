@@ -8,6 +8,8 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased
 
+## 2.7.2 - 2026-07-16
+
 ### Changed
 
 - Qualitative research now gives every gap a stable ID and records implemented or rejected decisions in an append-only `quality-gap-decisions.jsonl`. Checked Markdown boxes are provisional until `gap-decide` supplies evidence and validation, while research-readiness checks remain separate from the `quality_gap` metric.
