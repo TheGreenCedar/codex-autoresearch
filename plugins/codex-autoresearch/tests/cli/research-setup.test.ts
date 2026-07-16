@@ -198,10 +198,8 @@ test("research-start preserves an existing executable outcome metric as primary"
     const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
     assert.equal(config.metricName, "lighthouse_warnings");
     assert.match(config.benchmarkCommand, /autoresearch\.(?:sh|ps1)/);
-    assert.match(
-      await readFile(path.join(dir, "autoresearch.sh"), "utf8"),
-      /lighthouse_warnings=2/,
-    );
+    const scriptName = process.platform === "win32" ? "autoresearch.ps1" : "autoresearch.sh";
+    assert.match(await readFile(path.join(dir, scriptName), "utf8"), /lighthouse_warnings=2/);
   });
 });
 
