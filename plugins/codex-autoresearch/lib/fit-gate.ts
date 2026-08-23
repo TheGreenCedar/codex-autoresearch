@@ -291,12 +291,15 @@ function hasReplacementIntent(prompt: string, session: LegacySessionMetadata | n
 }
 
 function hasExplicitRepeatedMeasuredLoop(prompt: string): boolean {
-  const repeated = /\b(?:repeat(?:ed)?|iterations?|runs|packets?)\b/i.test(prompt);
+  const loopRequest =
+    /\b(?:run(?:ning)?|continue|start|perform|execute|repeat(?:ed)?)\b[^.\n]{0,96}\b(?:loop|iterations?)\b/i.test(
+      prompt,
+    );
   const measured =
     /\b(?:measured|measure|benchmark|metric|optimi[sz](?:e|ation)?|improv(?:e|ement))\b/i.test(
       prompt,
     );
-  return repeated && measured;
+  return loopRequest && measured;
 }
 
 interface PromptContract {

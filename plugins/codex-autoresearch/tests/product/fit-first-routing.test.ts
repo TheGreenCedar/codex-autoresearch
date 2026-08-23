@@ -122,6 +122,14 @@ test("prompt-plan keeps one-off bugs and research outside a loop without inventi
   });
 });
 
+test("prompt-plan keeps benchmark-label bugs direct", async () => {
+  await withTempDir("fit-first-benchmark-label-bug", async (dir) => {
+    const payload = await promptPlan(dir, "Fix the bug where benchmark runs omit the label.");
+
+    assertAssistOnly(payload);
+  });
+});
+
 test("prompt-plan asks for the exact missing fields of an explicit incomplete repeated loop", async () => {
   await withTempDir("fit-first-incomplete", async (dir) => {
     const payload = await promptPlan(
