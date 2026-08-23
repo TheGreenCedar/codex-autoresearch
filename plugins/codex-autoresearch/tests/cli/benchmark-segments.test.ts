@@ -337,7 +337,7 @@ test("benchmark contract changes block the next packet until a new segment", asy
       dir,
       "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Baseline contract",
     ]);
@@ -381,7 +381,7 @@ test("new segment rebaselines benchmark contract drift for changed benchmark sur
       dir,
       "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Baseline contract",
     ]);

@@ -5,11 +5,41 @@ import test from "node:test";
 import { redactCommandDisplay } from "../../lib/evidence-redaction.js";
 import { quoteForShell } from "../helpers/process.js";
 
-import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
+import {
+  runCli,
+  withTempDir,
+  git,
+  setupFixture as setupSessionFixture,
+} from "../helpers/cli-test-context.js";
+
+async function setupFixture(dir: string, options: Parameters<typeof setupSessionFixture>[1] = {}) {
+  const result = await setupSessionFixture(dir, options);
+  await mkdir(path.join(dir, "src"), { recursive: true });
+  const checksFile =
+    process.platform === "win32" ? "autoresearch.checks.ps1" : "autoresearch.checks.sh";
+  await writeFile(
+    path.join(dir, checksFile),
+    process.platform === "win32" ? "exit 0\n" : "#!/usr/bin/env bash\nexit 0\n",
+  );
+  await writeFile(
+    path.join(dir, "autoresearch.config.json"),
+    `${JSON.stringify(
+      {
+        checksAuthoritative: true,
+        commitPaths: ["src"],
+        maxIterations: 100,
+        noiseModel: { kind: "deterministic" },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  return result;
+}
 
 test("config persists operator settings and extends iteration limits", async () => {
   await withTempDir("operator-config", async (dir) => {
-    await setupFixture(dir, { name: "operator config" });
+    await setupSessionFixture(dir, { name: "operator config" });
     await runCli([
       "log",
       "--cwd",
@@ -148,7 +178,19 @@ test("next writes a reusable last-run packet and log can consume it", async () =
 test("next refuses to overwrite an unlogged fresh last-run packet", async () => {
   await withTempDir("fresh-last-run-next-refusal", async (dir) => {
     await setupFixture(dir, { name: "fresh last run" });
-    const firstCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const sideEffectFile = path.join(dir, "packet-runs.txt");
+    const sideEffectScript = path.join(dir, "packet.mjs");
+    await writeFile(
+      sideEffectScript,
+      [
+        `import { appendFileSync } from "node:fs";`,
+        `appendFileSync(${JSON.stringify(sideEffectFile)}, "ran\\n");`,
+        `console.log("METRIC seconds=3");`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const firstCommand = `${quoteForShell(process.execPath)} ${quoteForShell(sideEffectScript)}`;
     const first = await runCli([
       "next",
       "--cwd",
@@ -163,26 +205,13 @@ test("next refuses to overwrite an unlogged fresh last-run packet", async () => 
     const packetPath = firstPayload.lastRunPath;
     const before = JSON.parse(await readFile(packetPath, "utf8"));
     assert.equal(before.decision.metric, 3);
-
-    const sideEffectFile = path.join(dir, "second-packet-ran.txt");
-    const sideEffectScript = path.join(dir, "second-packet.mjs");
-    await writeFile(
-      sideEffectScript,
-      [
-        `import { writeFileSync } from "node:fs";`,
-        `writeFileSync(${JSON.stringify(sideEffectFile)}, "ran");`,
-        `console.log("METRIC seconds=99");`,
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    const secondCommand = `${quoteForShell(process.execPath)} ${quoteForShell(sideEffectScript)}`;
+    assert.equal(await readFile(sideEffectFile, "utf8"), "ran\n");
     const second = await runCli([
       "next",
       "--cwd",
       dir,
       "--command",
-      secondCommand,
+      firstCommand,
       "--checks-policy",
       "manual",
     ]);
@@ -200,7 +229,7 @@ test("next refuses to overwrite an unlogged fresh last-run packet", async () => 
     const after = JSON.parse(await readFile(packetPath, "utf8"));
     assert.equal(after.decision.metric, 3);
     assert.equal(after.packetEvidence.metrics.seconds, 3);
-    await assert.rejects(access(sideEffectFile));
+    assert.equal(await readFile(sideEffectFile, "utf8"), "ran\n");
   });
 });
 
@@ -263,7 +292,7 @@ test("successful last-run packets require explicit status and suggest discard fo
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
     assert.equal(packet.decision.suggestedStatus, "discard");
-    assert.deepEqual(packet.decision.allowedStatuses, ["keep", "discard", "measure"]);
+    assert.deepEqual(packet.decision.allowedStatuses, ["discard", "measure"]);
 
     const missingStatus = await runCli([
       "log",
@@ -313,9 +342,9 @@ test("stale last-run packets are rejected when history advances", async () => {
       "--metric",
       "2",
       "--status",
-      "keep",
+      "measure",
       "--description",
-      "Manual run",
+      "Manual measurement",
     ]);
     assert.equal(directLog.code, 0, directLog.stderr);
 
@@ -569,7 +598,12 @@ test("next allows clean repos with broad scoped commit paths", async () => {
     await setupFixture(dir, { name: "large clean scope" });
     const configured = await runCli(["config", "--cwd", dir, "--commit-paths", "src"]);
     assert.equal(configured.code, 0, configured.stderr);
-    await git(dir, ["add", "autoresearch.config.json", "autoresearch.jsonl"]);
+    await git(dir, [
+      "add",
+      "autoresearch.config.json",
+      "autoresearch.jsonl",
+      process.platform === "win32" ? "autoresearch.checks.ps1" : "autoresearch.checks.sh",
+    ]);
     await git(dir, ["commit", "-m", "session config"]);
     const status = await git(dir, ["status", "--short"]);
     assert.equal(status, "");
@@ -836,9 +870,9 @@ test("owner-autonomous runs return continuation instead of handing control back"
       dir,
       "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
-      "Keep baseline",
+      "Measure baseline",
     ]);
     assert.equal(log.code, 0, log.stderr);
     const payload = JSON.parse(log.stdout);
@@ -874,9 +908,9 @@ test("guarded sessions with active budgets keep continuation non-final", async (
       dir,
       "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
-      "Keep baseline",
+      "Measure baseline",
     ]);
     assert.equal(log.code, 0, log.stderr);
     const payload = JSON.parse(log.stdout);
@@ -927,9 +961,9 @@ test("continuation stops cleanly at the configured iteration limit", async () =>
       dir,
       "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
-      "Limit baseline",
+      "Measure limit baseline",
     ]);
     assert.equal(log.code, 0, log.stderr);
     const payload = JSON.parse(log.stdout);
@@ -944,17 +978,14 @@ test("log from last packet rejects keep after failed checks", async () => {
   await withTempDir("last-run-check-failure", async (dir) => {
     await setupFixture(dir, { name: "last run checks" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
+    const checksFile =
+      process.platform === "win32" ? "autoresearch.checks.ps1" : "autoresearch.checks.sh";
+    await writeFile(
+      path.join(dir, checksFile),
+      process.platform === "win32" ? "exit 1\n" : "#!/usr/bin/env bash\nexit 1\n",
+    );
 
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-command",
-      checks,
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--command", command]);
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
     assert.deepEqual(packet.decision.allowedStatuses, ["checks_failed"]);

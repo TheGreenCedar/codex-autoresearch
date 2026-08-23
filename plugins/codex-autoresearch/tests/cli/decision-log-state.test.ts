@@ -5,9 +5,38 @@ import test from "node:test";
 import { renderExportedDashboard } from "../helpers/dashboard-export.js";
 import { quoteForShell } from "../helpers/process.js";
 
-import { runCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
+import {
+  runCli,
+  withTempDir,
+  setupFixture as setupSessionFixture,
+} from "../helpers/cli-test-context.js";
 
-test("next returns explicit keep/discard decision options instead of a fake status", async () => {
+async function setupFixture(dir: string, options: Parameters<typeof setupSessionFixture>[1] = {}) {
+  const result = await setupSessionFixture(dir, options);
+  await mkdir(path.join(dir, "src"), { recursive: true });
+  const checksFile =
+    process.platform === "win32" ? "autoresearch.checks.ps1" : "autoresearch.checks.sh";
+  await writeFile(
+    path.join(dir, checksFile),
+    process.platform === "win32" ? "exit 0\n" : "#!/usr/bin/env bash\nexit 0\n",
+  );
+  await writeFile(
+    path.join(dir, "autoresearch.config.json"),
+    `${JSON.stringify(
+      {
+        checksAuthoritative: true,
+        commitPaths: ["src"],
+        maxIterations: 100,
+        noiseModel: { kind: "deterministic" },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  return result;
+}
+
+test("next returns only mechanically eligible decision options instead of a fake status", async () => {
   await withTempDir("decision-hint", async (dir) => {
     await setupFixture(dir, { name: "decision hint" });
 
@@ -19,7 +48,7 @@ test("next returns explicit keep/discard decision options instead of a fake stat
     assert.equal(payload.ok, true);
     assert.equal(payload.logHint.status, null);
     assert.equal(payload.logHint.needsDecision, true);
-    assert.deepEqual(payload.logHint.allowedStatuses, ["keep", "discard", "measure"]);
+    assert.deepEqual(payload.logHint.allowedStatuses, ["discard", "measure"]);
   });
 });
 

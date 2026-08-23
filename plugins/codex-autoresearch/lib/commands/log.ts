@@ -24,6 +24,14 @@ import {
 } from "../benchmark/contract-guards.js";
 import { benchmarkContractSnapshot } from "../benchmark/contract-snapshot.js";
 import { evaluateSecondaryMetricConstraints } from "../benchmark/multi-metric-constraints.js";
+import {
+  completedContractNoiseRepeats,
+  contractCandidateFingerprintForWorkDir,
+  contractDerivationError,
+  deriveExperimentContract,
+  evaluateContractKeepEligibility,
+  type ContractEvaluationEvidence,
+} from "../experiment-contract.js";
 import { loopContinuation } from "./continuation.js";
 import { redactEvidenceText } from "../evidence-redaction.js";
 import {
@@ -69,6 +77,7 @@ import {
   iterationLimitInfo,
   pathExists,
   promotionGradeValue,
+  readJsonl,
 } from "../session-core.js";
 import { isMetricEligibleStatus } from "../run-status.js";
 import { buildProcessLifecycleRecord, rekeyProcessLifecycleRecords } from "../process-governor.js";
@@ -170,6 +179,87 @@ export async function logExperiment(args: UnknownRecord): Promise<UnknownRecord>
     ) || defaultEvidenceStatusForRun({ status });
 
   const stateBefore = currentState(workDir);
+  let contractEvaluationEvidence: ContractEvaluationEvidence | null = null;
+  const acceptedContractExists = readJsonl(workDir).some(
+    (entry) =>
+      entry.type === "experiment-contract-accepted" &&
+      Number(entry.segment) === stateBefore.segment,
+  );
+  if (lastPacket || (status === "keep" && acceptedContractExists)) {
+    const authority = await deriveExperimentContract({
+      workDir,
+      config,
+      packet: lastPacket,
+    });
+    if (authority.status === "invalid") throw contractDerivationError(authority);
+    if (authority.status !== "accepted") {
+      throw new Error("The last-run packet has no accepted experiment contract authority.");
+    }
+    if (!lastPacket) {
+      throw new Error(
+        "Cannot keep without accepted-contract evaluation evidence from the last-run packet. Run next, then log --from-last.",
+      );
+    }
+    const accepted = authority.contract;
+    const candidateFingerprint = await contractCandidateFingerprintForWorkDir(workDir, accepted);
+    const packetCandidateFingerprint = packetRun.contractCandidateFingerprint;
+    const evaluatedMetric = finiteMetric(packetRun.parsedPrimary);
+    const checkRuns = Array.isArray(packetChecks.runs) ? packetChecks.runs : [];
+    const checkOutcomes = checkRuns.map((value) => {
+      const checkRun = record(value);
+      return {
+        id: typeof checkRun.id === "string" ? checkRun.id : "",
+        executionDigest:
+          typeof checkRun.executionDigest === "string" ? checkRun.executionDigest : "",
+        passed: checkRun.passed === true,
+      };
+    });
+    const acceptedEvaluation =
+      packetRun.executionAuthority === "accepted-contract" &&
+      packetRun.experimentContractDigest === accepted.contractDigest &&
+      packetCandidateFingerprint === candidateFingerprint &&
+      evaluatedMetric != null &&
+      metric === evaluatedMetric;
+    const completedRepeats =
+      evaluatedMetric == null
+        ? 0
+        : completedContractNoiseRepeats(accepted, stateBefore.current, {
+            candidateFingerprint,
+            metric: evaluatedMetric,
+          });
+    const keepEligibility = evaluateContractKeepEligibility(accepted, {
+      acceptedEvaluation,
+      checkOutcomes,
+      completedRepeats,
+      metric: evaluatedMetric,
+      referenceMetric: finiteMetric(stateBefore.best ?? stateBefore.baseline),
+    });
+    if (status === "keep" && !keepEligibility.eligible) {
+      throw new Error(
+        `Cannot keep the last run under the accepted experiment contract. ${keepEligibility.reasons.join(" ")}`,
+      );
+    }
+    const allAcceptedChecksPassed =
+      checkOutcomes.length === accepted.checks.length &&
+      new Set(checkOutcomes.map((outcome) => outcome.id)).size === accepted.checks.length &&
+      accepted.checks.every((check) =>
+        checkOutcomes.some(
+          (outcome) =>
+            outcome.id === check.id &&
+            outcome.executionDigest === check.execution.executionDigest &&
+            outcome.passed,
+        ),
+      );
+    if (acceptedEvaluation && evaluatedMetric != null && allAcceptedChecksPassed) {
+      contractEvaluationEvidence = {
+        contractDigest: accepted.contractDigest,
+        candidateFingerprint,
+        acceptedEvaluation: true,
+        metric: evaluatedMetric,
+        checksPassed: true,
+      };
+    }
+  }
   const constraintRunMetrics = {
     ...metrics,
     [stateBefore.config.metricName || "metric"]: metric,
@@ -229,6 +319,9 @@ export async function logExperiment(args: UnknownRecord): Promise<UnknownRecord>
     segment: stateBefore.segment,
     confidence: null,
   };
+  if (contractEvaluationEvidence) {
+    experiment.contractEvaluationEvidence = contractEvaluationEvidence;
+  }
   copyIfPresent(packetEvidence, experiment, "freshnessFingerprint", "packetFingerprint");
   copyIfPresent(packetEvidence, experiment, "commandExecutionBoundary");
   const protectedPaths = protectedBenchmarkPathsFromConfig(config);

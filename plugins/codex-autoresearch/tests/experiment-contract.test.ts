@@ -14,6 +14,7 @@ import {
 } from "../lib/experiment-contract.js";
 import { withTempDir as withNamedTempDir } from "./helpers/process.js";
 import { buildResearchIntegrity } from "../lib/truth-signals.js";
+import { buildProtectedBenchmarkSnapshot } from "../lib/benchmark/contract-guards.js";
 import { runExecutableCommand } from "../lib/runner.js";
 
 const execution = (command: ExecutableCommand) =>
@@ -497,6 +498,395 @@ test("accepted contract parsing rejects contract-digest drift and malformed chec
     assert.equal(missingChecks.status, "invalid");
     if (missingChecks.status === "invalid") {
       assert.ok(missingChecks.conflicts.some((conflict) => conflict.field === "checks"));
+    }
+  });
+});
+
+test("accepted contract parsing recomputes check authority instead of trusting persisted labels", async () => {
+  await withNamedTempDir("experiment-contract", "forged-check-authority", async (dir) => {
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    const configEntry = {
+      type: "config",
+      name: "forged check authority",
+      goal: "Reject forged keep authority",
+      metricName: "score",
+      bestDirection: "higher",
+    };
+    const config = {
+      benchmarkCommand: "node -e \"console.log('METRIC score=1')\"",
+      checksCommand: 'node -e "process.exit(0)"',
+      commitPaths: ["src"],
+      maxIterations: 3,
+    };
+    const initial = await deriveExperimentContract({
+      workDir: dir,
+      config,
+      entries: [configEntry],
+    });
+    assert.equal(initial.status, "derived");
+    if (initial.status !== "derived") return;
+    assert.equal(initial.contract.checks[0].authority, "supplemental");
+
+    const forgedCheck = {
+      id: initial.contract.checks[0].id,
+      authority: "authoritative" as const,
+      execution: initial.contract.checks[0].execution,
+    };
+    const forgedContract = createExperimentContract({
+      ...initial.contract,
+      checks: [forgedCheck],
+      keepPolicy: {
+        ...initial.contract.keepPolicy,
+        authoritativeCheckIds: [forgedCheck.id],
+      },
+      contractDigest: undefined,
+    });
+    const forgedEvent = {
+      type: "experiment-contract-accepted",
+      schemaVersion: 1,
+      eventId: `experiment-contract-accepted:0:${forgedContract.contractDigest}`,
+      source: "legacy-derivation",
+      segment: 0,
+      timestamp: new Date().toISOString(),
+      contract: forgedContract,
+    };
+
+    const parsed = await deriveExperimentContract({
+      workDir: dir,
+      config,
+      entries: [configEntry, forgedEvent],
+    });
+    assert.equal(parsed.status, "invalid");
+    if (parsed.status === "invalid") {
+      assert.ok(parsed.conflicts.some((conflict) => conflict.field === "checks"));
+    }
+  });
+});
+
+test("accepted authoritative checks reject editable implementation inputs", async () => {
+  await withNamedTempDir("experiment-contract", "editable-authority-input", async (dir) => {
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await mkdir(path.join(dir, "contract"), { recursive: true });
+    await writeFile(path.join(dir, "src", "fixture.txt"), "editable\n");
+    await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n");
+    const configEntry = {
+      type: "config",
+      name: "editable authority input",
+      goal: "Keep editable inputs supplemental",
+      metricName: "score",
+      bestDirection: "higher",
+    };
+    const config = {
+      benchmarkCommand: "node -e \"console.log('METRIC score=1')\"",
+      checkImplementationPaths: ["contract/checks.mjs"],
+      checksAuthoritative: true,
+      checksCommand: "node contract/checks.mjs",
+      commitPaths: ["src"],
+      maxIterations: 3,
+    };
+    const initial = await deriveExperimentContract({
+      workDir: dir,
+      config,
+      entries: [configEntry],
+    });
+    assert.equal(initial.status, "derived");
+    if (initial.status !== "derived") return;
+    assert.equal(initial.contract.checks[0].authority, "authoritative");
+
+    const acceptedExecution = initial.contract.checks[0].execution;
+    const editableInput = await buildProtectedBenchmarkSnapshot({
+      workDir: dir,
+      paths: ["src/fixture.txt"],
+    });
+    const executionWithEditableInput = createExecutionSpec({
+      ...acceptedExecution,
+      protectedInputs: [
+        ...acceptedExecution.protectedInputs,
+        {
+          path: "src/fixture.txt",
+          role: "fixture",
+          contentDigest: editableInput.surfaceHash,
+        },
+      ],
+    });
+    const check = { ...initial.contract.checks[0], execution: executionWithEditableInput };
+    const contract = createExperimentContract({
+      ...initial.contract,
+      checks: [check],
+      contractDigest: undefined,
+    });
+    const event = {
+      type: "experiment-contract-accepted",
+      schemaVersion: 1,
+      eventId: `experiment-contract-accepted:0:${contract.contractDigest}`,
+      source: "legacy-derivation",
+      segment: 0,
+      timestamp: new Date().toISOString(),
+      contract,
+    };
+    const parsed = await deriveExperimentContract({
+      workDir: dir,
+      config,
+      entries: [configEntry, event],
+    });
+    assert.equal(parsed.status, "invalid");
+    if (parsed.status === "invalid") {
+      assert.ok(parsed.conflicts.some((conflict) => conflict.field === "checks"));
+    }
+  });
+});
+
+test("accepted contract parsing rejects wrong runtime types even with recomputed digests", async () => {
+  await withNamedTempDir("experiment-contract", "strict-accepted-types", async (dir) => {
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    const configEntry = {
+      type: "config",
+      name: "strict accepted types",
+      goal: "Reject coercive accepted data",
+      metricName: "score",
+      bestDirection: "higher",
+    };
+    const config = {
+      benchmarkCommand: "node -e \"console.log('METRIC score=1')\"",
+      checksCommand: 'node -e "process.exit(0)"',
+      commitPaths: ["src"],
+      maxIterations: 3,
+    };
+    const initial = await deriveExperimentContract({
+      workDir: dir,
+      config,
+      entries: [configEntry],
+    });
+    assert.equal(initial.status, "derived");
+    if (initial.status !== "derived") return;
+
+    const replaceEvaluatorExecution = (updates: Record<string, unknown>) => {
+      const accepted = initial.contract.evaluator.execution;
+      const executionSpec = createExecutionSpec({
+        command: accepted.command,
+        relativeWorkingDirectory: accepted.relativeWorkingDirectory,
+        environment: accepted.environment,
+        timeoutSeconds: accepted.timeoutSeconds,
+        parser: accepted.parser,
+        protectedInputs: accepted.protectedInputs,
+        runner: accepted.runner,
+        ...updates,
+      } as any);
+      return createExperimentContract({
+        ...initial.contract,
+        evaluator: { ...initial.contract.evaluator, execution: executionSpec },
+        contractDigest: undefined,
+      });
+    };
+    const cases: Array<{
+      field: string;
+      label: string;
+      contract: ReturnType<typeof createExperimentContract>;
+    }> = [
+      {
+        label: "null minimum improvement",
+        field: "metric",
+        contract: createExperimentContract({
+          ...initial.contract,
+          metric: { ...initial.contract.metric, minimumImprovement: null } as any,
+          contractDigest: undefined,
+        }),
+      },
+      {
+        label: "string timeout",
+        field: "evaluator",
+        contract: replaceEvaluatorExecution({ timeoutSeconds: "60" }),
+      },
+      {
+        label: "string stop limit",
+        field: "stopPolicy",
+        contract: createExperimentContract({
+          ...initial.contract,
+          stopPolicy: {
+            ...initial.contract.stopPolicy,
+            evaluatorRuns: {
+              ...initial.contract.stopPolicy.evaluatorRuns,
+              limit: "3",
+            } as any,
+          },
+          contractDigest: undefined,
+        }),
+      },
+      {
+        label: "unsupported parser",
+        field: "evaluator",
+        contract: replaceEvaluatorExecution({ parser: { id: "other-parser", version: 2 } }),
+      },
+      {
+        label: "unsupported runner",
+        field: "evaluator",
+        contract: replaceEvaluatorExecution({
+          runner: { id: "codex-autoresearch", version: 2, metricLimit: 512 },
+        }),
+      },
+      {
+        label: "unsupported check runner metric limit",
+        field: "checks",
+        contract: (() => {
+          const acceptedCheck = initial.contract.checks[0];
+          const checkExecution = createExecutionSpec({
+            ...acceptedCheck.execution,
+            runner: { ...acceptedCheck.execution.runner, metricLimit: 1 },
+          });
+          return createExperimentContract({
+            ...initial.contract,
+            checks: [{ ...acceptedCheck, execution: checkExecution }],
+            contractDigest: undefined,
+          });
+        })(),
+      },
+      {
+        label: "non-string argv",
+        field: "evaluator",
+        contract: replaceEvaluatorExecution({
+          command: { kind: "argv", executable: process.execPath, args: [42] },
+        }),
+      },
+    ];
+
+    for (const malformed of cases) {
+      const event = {
+        type: "experiment-contract-accepted",
+        schemaVersion: 1,
+        eventId: `experiment-contract-accepted:0:${malformed.contract.contractDigest}`,
+        source: "legacy-derivation",
+        segment: 0,
+        timestamp: new Date().toISOString(),
+        contract: malformed.contract,
+      };
+      const parsed = await deriveExperimentContract({
+        workDir: dir,
+        config,
+        entries: [configEntry, event],
+      });
+      assert.equal(parsed.status, "invalid", malformed.label);
+      if (parsed.status === "invalid") {
+        assert.ok(
+          parsed.conflicts.some((conflict) => conflict.field === malformed.field),
+          malformed.label,
+        );
+      }
+    }
+  });
+});
+
+test("legacy environment, execution, and stop-policy sources must agree before acceptance", async () => {
+  await withNamedTempDir("experiment-contract", "all-source-agreement", async (dir) => {
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "arguments.env"), "MODE=arguments\n");
+    await writeFile(path.join(dir, "config.env"), "MODE=config\n");
+    const entries = [
+      {
+        type: "config",
+        name: "all source agreement",
+        goal: "Reject shadowed compatibility inputs",
+        metricName: "score",
+        bestDirection: "higher",
+      },
+    ];
+    const baseConfig = {
+      benchmarkCommand: "node -e \"console.log('METRIC score=1')\"",
+      checksCommand: 'node -e "process.exit(0)"',
+      commitPaths: ["src"],
+      maxIterations: 5,
+    };
+    const cases = [
+      {
+        label: "environment file",
+        field: "environment",
+        args: { packet_env_file: "arguments.env" },
+        config: { ...baseConfig, packetEnvFile: "config.env" },
+      },
+      {
+        label: "environment mode",
+        field: "environment",
+        args: { packet_env_mode: "inherit" },
+        config: { ...baseConfig, packetEnvMode: "minimal" },
+      },
+      {
+        label: "evaluator timeout",
+        field: "evaluator.timeoutSeconds",
+        args: { timeout_seconds: "30" },
+        config: { ...baseConfig, timeoutSeconds: 60 },
+      },
+      {
+        label: "checks timeout",
+        field: "checks.timeoutSeconds",
+        args: { checks_timeout_seconds: "30" },
+        config: { ...baseConfig, checksTimeoutSeconds: 60 },
+      },
+      {
+        label: "evaluator ceiling",
+        field: "stopPolicy.evaluatorRuns",
+        args: { max_evaluator_runs: "4" },
+        config: { ...baseConfig, maxEvaluatorRuns: 5 },
+      },
+      {
+        label: "wall-clock ceiling",
+        field: "stopPolicy.pluginWallClockSeconds",
+        args: { wall_clock_budget_seconds: "60" },
+        config: { ...baseConfig, wallClockBudgetSeconds: 120 },
+      },
+      {
+        label: "no-learning ceiling",
+        field: "stopPolicy.noLearningPackets",
+        args: { no_learning_limit: "3" },
+        config: { ...baseConfig, noLearningLimit: 4 },
+      },
+      {
+        label: "repeated-failure ceiling",
+        field: "stopPolicy.repeatedFailures",
+        args: { repeated_failure_limit: "3" },
+        config: { ...baseConfig, repeatedFailureLimit: 4 },
+      },
+      {
+        label: "model-token ceiling",
+        field: "stopPolicy.modelTokens",
+        args: { model_token_budget: "100" },
+        config: { ...baseConfig, modelTokenBudget: 200 },
+      },
+      {
+        label: "model-call ceiling",
+        field: "stopPolicy.modelCalls",
+        args: { model_call_budget: "10" },
+        config: { ...baseConfig, modelCallBudget: 20 },
+      },
+    ];
+
+    for (const conflictCase of cases) {
+      const derivation = await deriveExperimentContract({
+        workDir: dir,
+        args: conflictCase.args,
+        config: conflictCase.config,
+        entries,
+      });
+      assert.equal(derivation.status, "invalid", conflictCase.label);
+      if (derivation.status === "invalid") {
+        assert.ok(
+          derivation.conflicts.some((conflict) => conflict.field === conflictCase.field),
+          conflictCase.label,
+        );
+      }
+    }
+
+    const malformedExplicit = await deriveExperimentContract({
+      workDir: dir,
+      args: { timeout_seconds: "not-a-timeout" },
+      config: { ...baseConfig, timeoutSeconds: 60 },
+      entries,
+    });
+    assert.equal(malformedExplicit.status, "invalid");
+    if (malformedExplicit.status === "invalid") {
+      assert.ok(
+        malformedExplicit.conflicts.some(
+          (conflict) => conflict.field === "evaluator.timeoutSeconds",
+        ),
+      );
     }
   });
 });

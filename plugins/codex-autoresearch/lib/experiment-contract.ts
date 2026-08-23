@@ -3,9 +3,15 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { buildProtectedBenchmarkSnapshot } from "./benchmark/contract-guards.js";
+import { parsePorcelainV1Z } from "./git-paths.js";
 import { insideGitRepo, runGit } from "./git-private-state.js";
 import { normalizeRelativePaths } from "./literal-paths.js";
 import { appendJsonl, readJsonl, stateFromSessionRecords } from "./session-core.js";
+import {
+  AUTORESEARCH_DASHBOARD_FILE,
+  AUTORESEARCH_RESEARCH_DIR,
+  AUTORESEARCH_SESSION_FILES,
+} from "./session-paths.js";
 import type { UnknownRecord } from "./types/json.js";
 
 export type ExecutableCommand =
@@ -44,7 +50,13 @@ export type NoiseModel =
   | { kind: "bounded"; tolerance: number; repeats: number }
   | { kind: "unknown"; qualificationRepeats: number };
 
-export type TreePolicy = { kind: "require-clean" } | { kind: "initial-dirty"; fingerprint: string };
+export type TreePolicy =
+  | { kind: "require-clean"; outsideEditableFingerprint: string }
+  | {
+      kind: "initial-dirty";
+      fingerprint: string;
+      outsideEditableFingerprint: string;
+    };
 
 export interface RepositoryContract {
   repositoryIdentity: string;
@@ -229,6 +241,36 @@ export type ContractStopStatus =
       message: string;
     };
 
+export interface ContractCheckOutcome {
+  id: string;
+  executionDigest: string;
+  passed: boolean;
+}
+
+export interface ContractEvaluationEvidence extends UnknownRecord {
+  contractDigest: string;
+  candidateFingerprint: string;
+  acceptedEvaluation: true;
+  metric: number;
+  checksPassed: true;
+}
+
+export type ContractKeepEligibility =
+  | {
+      eligible: true;
+      reasons: [];
+      completedRepeats: number;
+      requiredRepeats: number;
+      referenceMetric: number | null;
+    }
+  | {
+      eligible: false;
+      reasons: [string, ...string[]];
+      completedRepeats: number;
+      requiredRepeats: number;
+      referenceMetric: number | null;
+    };
+
 export interface DeriveExperimentContractInput {
   workDir: string;
   args?: UnknownRecord;
@@ -241,6 +283,12 @@ export interface DeriveExperimentContractInput {
 const DEFAULT_EVALUATOR_TIMEOUT_SECONDS = 600;
 const DEFAULT_CHECK_TIMEOUT_SECONDS = 300;
 const DEFAULT_METRIC_LIMIT = 512;
+const MAX_SUPPORTED_METRIC_LIMIT = 4096;
+const SESSION_OWNED_DIRS = [
+  AUTORESEARCH_RESEARCH_DIR,
+  "target/autoresearch",
+  ".autoresearch-cache",
+];
 
 export async function deriveExperimentContract({
   workDir,
@@ -383,16 +431,21 @@ export async function deriveExperimentContract({
     });
   }
 
-  const packetLimitInput = config.maxIterations ?? config.packetBudget;
-  const packetLimit = positiveInteger(packetLimitInput);
-  if (packetLimit == null && packetLimitInput == null) {
+  const packetLimitResolution = resolveLegacyPositiveInteger({
+    field: "stopPolicy.packets",
+    sources: [
+      {
+        name: "arguments",
+        record: args,
+        keys: ["max_iterations", "maxIterations", "packet_budget", "packetBudget"],
+      },
+      { name: "config", record: config, keys: ["maxIterations", "packetBudget"] },
+    ],
+    conflicts,
+  });
+  const packetLimit = packetLimitResolution.value;
+  if (packetLimit == null && !packetLimitResolution.provided) {
     missing.push({ field: "stopPolicy.packets", message: "A packet ceiling is required." });
-  } else if (packetLimit == null) {
-    conflicts.push({
-      field: "stopPolicy.packets",
-      sources: ["config"],
-      message: "The packet ceiling must be a positive integer.",
-    });
   }
   let metric: MetricSemantics | null = null;
   try {
@@ -426,65 +479,115 @@ export async function deriveExperimentContract({
     return { status: "invalid", contract: null, missing, conflicts, event: null };
   }
 
-  const repository = await repositoryContract(workDir);
-  const environmentModeInput =
-    args.packet_env_mode ?? args.packetEnvMode ?? config.packetEnvMode ?? "minimal";
-  if (environmentModeInput !== "inherit" && environmentModeInput !== "minimal") {
-    return {
-      status: "invalid",
-      contract: null,
-      missing: [],
-      conflicts: [
-        {
-          field: "environment",
-          sources:
-            args.packet_env_mode != null || args.packetEnvMode != null ? ["arguments"] : ["config"],
-          message: "Environment inheritance mode must be minimal or inherit.",
-        },
-      ],
-      event: null,
-    };
+  const repository = await repositoryContract(workDir, editable);
+  const environment = await resolveLegacyEnvironment({
+    workDir,
+    worktreeIdentity: repository.worktreeIdentity,
+    args,
+    config,
+    conflicts,
+  });
+  const evaluatorTimeoutResolution = resolveLegacyPositiveInteger({
+    field: "evaluator.timeoutSeconds",
+    sources: [
+      {
+        name: "arguments",
+        record: args,
+        keys: ["timeout_seconds", "timeoutSeconds"],
+      },
+      { name: "config", record: config, keys: ["timeoutSeconds"] },
+    ],
+    conflicts,
+  });
+  const checkTimeoutResolution = resolveLegacyPositiveInteger({
+    field: "checks.timeoutSeconds",
+    sources: [
+      {
+        name: "arguments",
+        record: args,
+        keys: ["checks_timeout_seconds", "checksTimeoutSeconds"],
+      },
+      { name: "config", record: config, keys: ["checksTimeoutSeconds"] },
+    ],
+    conflicts,
+  });
+  const evaluatorLimitResolution = resolveLegacyPositiveInteger({
+    field: "stopPolicy.evaluatorRuns",
+    sources: [
+      {
+        name: "arguments",
+        record: args,
+        keys: ["max_evaluator_runs", "maxEvaluatorRuns"],
+      },
+      { name: "config", record: config, keys: ["maxEvaluatorRuns"] },
+    ],
+    conflicts,
+  });
+  const wallClockLimitResolution = resolveLegacyPositiveInteger({
+    field: "stopPolicy.pluginWallClockSeconds",
+    sources: [
+      {
+        name: "arguments",
+        record: args,
+        keys: ["wall_clock_budget_seconds", "wallClockBudgetSeconds"],
+      },
+      { name: "config", record: config, keys: ["wallClockBudgetSeconds"] },
+    ],
+    conflicts,
+  });
+  const noLearningLimitResolution = resolveLegacyPositiveInteger({
+    field: "stopPolicy.noLearningPackets",
+    sources: [
+      {
+        name: "arguments",
+        record: args,
+        keys: ["no_learning_limit", "noLearningLimit"],
+      },
+      { name: "config", record: config, keys: ["noLearningLimit"] },
+    ],
+    conflicts,
+  });
+  const repeatedFailureLimitResolution = resolveLegacyPositiveInteger({
+    field: "stopPolicy.repeatedFailures",
+    sources: [
+      {
+        name: "arguments",
+        record: args,
+        keys: ["repeated_failure_limit", "repeatedFailureLimit"],
+      },
+      { name: "config", record: config, keys: ["repeatedFailureLimit"] },
+    ],
+    conflicts,
+  });
+  const modelTokenLimitResolution = resolveLegacyPositiveInteger({
+    field: "stopPolicy.modelTokens",
+    sources: [
+      {
+        name: "arguments",
+        record: args,
+        keys: ["model_token_budget", "modelTokenBudget"],
+      },
+      { name: "config", record: config, keys: ["modelTokenBudget"] },
+    ],
+    conflicts,
+  });
+  const modelCallLimitResolution = resolveLegacyPositiveInteger({
+    field: "stopPolicy.modelCalls",
+    sources: [
+      {
+        name: "arguments",
+        record: args,
+        keys: ["model_call_budget", "modelCallBudget"],
+      },
+      { name: "config", record: config, keys: ["modelCallBudget"] },
+    ],
+    conflicts,
+  });
+  if (!environment || conflicts.length > 0) {
+    return { status: "invalid", contract: null, missing, conflicts, event: null };
   }
-  const environmentMode = environmentModeInput;
-  const environmentFile =
-    args.packet_env_file ??
-    args.packetEnvFile ??
-    args.env_file ??
-    args.envFile ??
-    config.packetEnvFile ??
-    config.envFile;
-  const environmentSource =
-    args.packet_env_file != null ||
-    args.packetEnvFile != null ||
-    args.env_file != null ||
-    args.envFile != null
-      ? "arguments"
-      : "config";
-  let environment: ExecutionEnvironment;
-  try {
-    environment = environmentFile
-      ? await environmentFromFile(
-          workDir,
-          String(environmentFile),
-          repository.worktreeIdentity,
-          environmentMode,
-        )
-      : emptyEnvironment(environmentMode);
-  } catch (error) {
-    return {
-      status: "invalid",
-      contract: null,
-      missing: [],
-      conflicts: [
-        {
-          field: "environment",
-          sources: [environmentSource],
-          message: errorMessage(error),
-        },
-      ],
-      event: null,
-    };
-  }
+  const evaluatorTimeout = evaluatorTimeoutResolution.value ?? DEFAULT_EVALUATOR_TIMEOUT_SECONDS;
+  const checkTimeout = checkTimeoutResolution.value ?? DEFAULT_CHECK_TIMEOUT_SECONDS;
   const typedProtectedPathSet = new Set([...fixturePaths, ...datasetPaths, ...runnerConfigPaths]);
   let protectedInputs: ProtectedExecutionInput[];
   let typedProtectedInputs: ProtectedExecutionInput[];
@@ -530,13 +633,6 @@ export async function deriveExperimentContract({
       contentDigest: environment.source.contentDigest,
     });
   }
-  const evaluatorTimeout =
-    positiveInteger(args.timeout_seconds ?? args.timeoutSeconds ?? config.timeoutSeconds) ??
-    DEFAULT_EVALUATOR_TIMEOUT_SECONDS;
-  const checkTimeout =
-    positiveInteger(
-      args.checks_timeout_seconds ?? args.checksTimeoutSeconds ?? config.checksTimeoutSeconds,
-    ) ?? DEFAULT_CHECK_TIMEOUT_SECONDS;
   const metricName = metric.metricName;
   const evaluatorExecution = createExecutionSpec({
     command: evaluatorCommand,
@@ -608,13 +704,13 @@ export async function deriveExperimentContract({
           execution: checksExecution,
         },
   ];
-  const evaluatorLimit = positiveInteger(config.maxEvaluatorRuns) ?? packetLimit;
+  const evaluatorLimit = evaluatorLimitResolution.value ?? packetLimit;
   const wallClockLimit =
-    positiveInteger(config.wallClockBudgetSeconds) ??
+    wallClockLimitResolution.value ??
     packetLimit *
       (evaluatorTimeout + checks.reduce((sum, check) => sum + check.execution.timeoutSeconds, 0));
-  const modelTokens = hostBudgetDimension(config.modelTokenBudget);
-  const modelCalls = hostBudgetDimension(config.modelCallBudget);
+  const modelTokens = hostBudgetDimension(modelTokenLimitResolution.value);
+  const modelCalls = hostBudgetDimension(modelCallLimitResolution.value);
   const draft: Omit<ExperimentContract, "contractDigest"> = {
     schemaVersion: 1,
     goal: {
@@ -647,8 +743,8 @@ export async function deriveExperimentContract({
       },
       modelTokens,
       modelCalls,
-      noLearningPackets: { limit: positiveInteger(config.noLearningLimit) ?? 2 },
-      repeatedFailures: { limit: positiveInteger(config.repeatedFailureLimit) ?? 2 },
+      noLearningPackets: { limit: noLearningLimitResolution.value ?? 2 },
+      repeatedFailures: { limit: repeatedFailureLimitResolution.value ?? 2 },
     },
   };
   const contract = createExperimentContract(draft);
@@ -690,7 +786,7 @@ async function acceptedContractConflicts({
 }): Promise<ContractConflict[]> {
   const conflicts = acceptedContractBoundaryConflicts(event);
   if (conflicts.length > 0) return conflicts;
-  const currentRepository = await repositoryContract(workDir);
+  const currentRepository = await repositoryContract(workDir, event.contract.scope.editable);
   if (
     currentRepository.repositoryIdentity !== event.contract.repository.repositoryIdentity ||
     currentRepository.worktreeIdentity !== event.contract.repository.worktreeIdentity
@@ -703,6 +799,29 @@ async function acceptedContractConflicts({
     });
     return conflicts;
   }
+  const expectedHead = expectedHeadFromLedger(
+    event.contract.repository,
+    state.current,
+    event.timestamp,
+  );
+  if (!revisionMatches(currentRepository.expectedHead, expectedHead)) {
+    conflicts.push({
+      field: "repository.expectedHead",
+      sources: ["accepted-contract", "ledger", "worktree"],
+      message: `The repository revision does not match accepted expected HEAD ${expectedHead}. Start a new segment.`,
+    });
+  }
+  if (
+    currentRepository.treePolicy.outsideEditableFingerprint !==
+    event.contract.repository.treePolicy.outsideEditableFingerprint
+  ) {
+    conflicts.push({
+      field: "repository.treePolicy",
+      sources: ["accepted-contract", "worktree"],
+      message:
+        "The Git dirty state outside accepted editable scope changed. Restore the accepted tree policy or start a new segment.",
+    });
+  }
   conflicts.push(
     ...(await acceptedEnvironmentCompatibilityConflicts({
       workDir,
@@ -714,6 +833,7 @@ async function acceptedContractConflicts({
   );
   conflicts.push(
     ...acceptedConfigurationCompatibilityConflicts({
+      args,
       config,
       stateConfig: state.config,
       accepted: event.contract,
@@ -722,6 +842,21 @@ async function acceptedContractConflicts({
   const activeConfigEntry = recordValue(state.activeConfigEntry);
   const ledgerBenchmarkContract = recordValue(activeConfigEntry.benchmarkContract);
   const packetHistory = recordValue(packet?.history);
+  const packetRun = recordValue(packet?.run);
+  const packetUsesAcceptedAuthority =
+    packetRun.executionAuthority === "accepted-contract" &&
+    packetRun.experimentContractDigest === event.contract.contractDigest;
+  if (
+    packet &&
+    packetRun.executionAuthority === "accepted-contract" &&
+    packetRun.experimentContractDigest !== event.contract.contractDigest
+  ) {
+    conflicts.push({
+      field: "contractDigest",
+      sources: ["accepted-contract", "packet"],
+      message: "The packet was produced under a different accepted experiment contract.",
+    });
+  }
   const packetBenchmarkContract =
     Number(packetHistory.segment ?? state.segment) === state.segment
       ? recordValue(packetHistory.benchmarkContract)
@@ -734,7 +869,9 @@ async function acceptedContractConflicts({
       args,
       config,
       ledgerCommand: ledgerBenchmarkContract.command ?? activeConfigEntry.benchmarkCommand,
-      packetCommand: packetBenchmarkContract.command ?? packetHistory.command,
+      packetCommand: packetUsesAcceptedAuthority
+        ? undefined
+        : (packetBenchmarkContract.command ?? packetHistory.command),
     });
   } catch (error) {
     conflicts.push({
@@ -749,7 +886,9 @@ async function acceptedContractConflicts({
       args,
       config,
       ledgerCommand: ledgerBenchmarkContract.checksCommand ?? activeConfigEntry.checksCommand,
-      packetCommand: packetBenchmarkContract.checksCommand ?? packetHistory.checksCommand,
+      packetCommand: packetUsesAcceptedAuthority
+        ? undefined
+        : (packetBenchmarkContract.checksCommand ?? packetHistory.checksCommand),
     });
   } catch (error) {
     conflicts.push({
@@ -781,51 +920,87 @@ async function acceptedContractConflicts({
 }
 
 function acceptedConfigurationCompatibilityConflicts({
+  args,
   config,
   stateConfig,
   accepted,
 }: {
+  args: UnknownRecord;
   config: UnknownRecord;
   stateConfig: { metricName: string; metricUnit: string; bestDirection: "lower" | "higher" };
   accepted: ExperimentContract;
 }): ContractConflict[] {
   const conflicts: ContractConflict[] = [];
-  const compareLimit = (field: string, keys: string[], acceptedLimit: number) => {
-    const key = keys.find((candidate) => Object.hasOwn(config, candidate));
-    if (!key) return;
-    const limit = positiveInteger(config[key]);
-    if (limit !== acceptedLimit) {
+  const compareLimit = (
+    field: string,
+    argumentKeys: string[],
+    configKeys: string[],
+    acceptedLimit: number,
+  ) => {
+    const resolution = resolveLegacyPositiveInteger({
+      field,
+      sources: [
+        { name: "arguments", record: args, keys: argumentKeys },
+        { name: "config", record: config, keys: configKeys },
+      ],
+      conflicts,
+    });
+    if (!resolution.provided || resolution.value === acceptedLimit) return;
+    if (resolution.value != null) {
       conflicts.push({
         field,
-        sources: ["accepted-contract", "config"],
+        sources: ["accepted-contract", "compatibility-input"],
         message: `Configured ${field} does not match the accepted limit ${acceptedLimit}. Start a new segment.`,
       });
     }
   };
   compareLimit(
     "stopPolicy.packets",
+    ["max_iterations", "maxIterations", "packet_budget", "packetBudget"],
     ["maxIterations", "packetBudget"],
     accepted.stopPolicy.packets.limit,
   );
   compareLimit(
     "stopPolicy.evaluatorRuns",
+    ["max_evaluator_runs", "maxEvaluatorRuns"],
     ["maxEvaluatorRuns"],
     accepted.stopPolicy.evaluatorRuns.limit,
   );
   compareLimit(
     "stopPolicy.pluginWallClockSeconds",
+    ["wall_clock_budget_seconds", "wallClockBudgetSeconds"],
     ["wallClockBudgetSeconds"],
     accepted.stopPolicy.pluginWallClockSeconds.limit,
   );
   compareLimit(
     "stopPolicy.noLearningPackets",
+    ["no_learning_limit", "noLearningLimit"],
     ["noLearningLimit"],
     accepted.stopPolicy.noLearningPackets.limit,
   );
   compareLimit(
     "stopPolicy.repeatedFailures",
+    ["repeated_failure_limit", "repeatedFailureLimit"],
     ["repeatedFailureLimit"],
     accepted.stopPolicy.repeatedFailures.limit,
+  );
+  compareHostBudgetCompatibility(
+    "stopPolicy.modelTokens",
+    args,
+    ["model_token_budget", "modelTokenBudget"],
+    config,
+    ["modelTokenBudget"],
+    accepted.stopPolicy.modelTokens,
+    conflicts,
+  );
+  compareHostBudgetCompatibility(
+    "stopPolicy.modelCalls",
+    args,
+    ["model_call_budget", "modelCallBudget"],
+    config,
+    ["modelCallBudget"],
+    accepted.stopPolicy.modelCalls,
+    conflicts,
   );
   if (Object.hasOwn(config, "metricSemantics")) {
     try {
@@ -869,14 +1044,18 @@ function acceptedConfigurationCompatibilityConflicts({
     }
   }
   compareOptionalExecutionLimit(
+    args,
     config,
+    ["timeout_seconds", "timeoutSeconds"],
     ["timeoutSeconds"],
     accepted.evaluator.execution.timeoutSeconds,
     "evaluator.timeoutSeconds",
     conflicts,
   );
   compareOptionalExecutionLimit(
+    args,
     config,
+    ["checks_timeout_seconds", "checksTimeoutSeconds"],
     ["checksTimeoutSeconds"],
     accepted.checks[0].execution.timeoutSeconds,
     "checks.timeoutSeconds",
@@ -886,19 +1065,57 @@ function acceptedConfigurationCompatibilityConflicts({
 }
 
 function compareOptionalExecutionLimit(
+  args: UnknownRecord,
   config: UnknownRecord,
-  keys: string[],
+  argumentKeys: string[],
+  configKeys: string[],
   acceptedLimit: number,
   field: string,
   conflicts: ContractConflict[],
 ): void {
-  const key = keys.find((candidate) => Object.hasOwn(config, candidate));
-  if (!key) return;
-  if (positiveInteger(config[key]) !== acceptedLimit) {
+  const before = conflicts.length;
+  const resolution = resolveLegacyPositiveInteger({
+    field,
+    sources: [
+      { name: "arguments", record: args, keys: argumentKeys },
+      { name: "config", record: config, keys: configKeys },
+    ],
+    conflicts,
+  });
+  if (conflicts.length === before && resolution.provided && resolution.value !== acceptedLimit) {
     conflicts.push({
       field,
-      sources: ["accepted-contract", "config"],
+      sources: ["accepted-contract", "compatibility-input"],
       message: `Configured ${field} does not match the accepted execution specification. Start a new segment.`,
+    });
+  }
+}
+
+function compareHostBudgetCompatibility(
+  field: string,
+  args: UnknownRecord,
+  argumentKeys: string[],
+  config: UnknownRecord,
+  configKeys: string[],
+  accepted: HostBudgetDimension,
+  conflicts: ContractConflict[],
+): void {
+  const before = conflicts.length;
+  const resolution = resolveLegacyPositiveInteger({
+    field,
+    sources: [
+      { name: "arguments", record: args, keys: argumentKeys },
+      { name: "config", record: config, keys: configKeys },
+    ],
+    conflicts,
+  });
+  if (conflicts.length !== before || !resolution.provided) return;
+  const acceptedLimit = "limit" in accepted ? accepted.limit : undefined;
+  if (resolution.value !== acceptedLimit) {
+    conflicts.push({
+      field,
+      sources: ["accepted-contract", "compatibility-input"],
+      message: `Configured ${field} does not match the accepted host-budget specification. Start a new segment.`,
     });
   }
 }
@@ -916,46 +1133,98 @@ async function acceptedEnvironmentCompatibilityConflicts({
   accepted: ExecutionEnvironment;
   worktreeIdentity: string;
 }): Promise<ContractConflict[]> {
-  const argumentFile = args.packet_env_file ?? args.packetEnvFile ?? args.env_file ?? args.envFile;
-  const configFile = config.packetEnvFile ?? config.envFile;
-  const file = argumentFile ?? configFile;
-  const argumentMode = args.packet_env_mode ?? args.packetEnvMode;
-  const configMode = config.packetEnvMode;
-  const modeValue = argumentMode ?? configMode;
-  if (file == null && modeValue == null) return [];
-  const source = argumentFile != null || argumentMode != null ? "arguments" : "config";
-  const mode = String(modeValue ?? accepted.inheritance);
-  if (mode !== "minimal" && mode !== "inherit") {
-    return [
-      {
+  const conflicts: ContractConflict[] = [];
+  const argumentMode = legacyStringForSource({
+    field: "environment",
+    source: "arguments",
+    record: args,
+    keys: ["packet_env_mode", "packetEnvMode"],
+    conflicts,
+  });
+  const configMode = legacyStringForSource({
+    field: "environment",
+    source: "config",
+    record: config,
+    keys: ["packet_env_mode", "packetEnvMode"],
+    conflicts,
+  });
+  const argumentFile = legacyStringForSource({
+    field: "environment",
+    source: "arguments",
+    record: args,
+    keys: ["packet_env_file", "packetEnvFile", "env_file", "envFile"],
+    conflicts,
+  });
+  const configFile = legacyStringForSource({
+    field: "environment",
+    source: "config",
+    record: config,
+    keys: ["packet_env_file", "packetEnvFile", "env_file", "envFile"],
+    conflicts,
+  });
+  if (
+    argumentMode == null &&
+    configMode == null &&
+    argumentFile == null &&
+    configFile == null &&
+    conflicts.length === 0
+  ) {
+    return [];
+  }
+  for (const [source, mode] of [
+    ["arguments", argumentMode],
+    ["config", configMode],
+  ] as const) {
+    if (mode != null && mode !== "minimal" && mode !== "inherit") {
+      conflicts.push({
         field: "environment",
         sources: ["accepted-contract", source],
         message: `Compatibility source ${source} has an invalid environment inheritance mode.`,
-      },
-    ];
+      });
+    }
   }
-  try {
-    const candidate = file
-      ? await environmentFromFile(workDir, String(file), worktreeIdentity, mode)
-      : { ...accepted, inheritance: mode };
-    return digestJson(candidate) === digestJson(accepted)
-      ? []
-      : [
-          {
-            field: "environment",
-            sources: ["accepted-contract", source],
-            message: `Compatibility source ${source} does not match the accepted execution environment digest.`,
-          },
-        ];
-  } catch (error) {
-    return [
-      {
+  if (argumentMode != null && configMode != null && argumentMode !== configMode) {
+    conflicts.push({
+      field: "environment",
+      sources: ["accepted-contract", "arguments", "config"],
+      message: "Compatibility environment inheritance modes do not agree.",
+    });
+  }
+  if (conflicts.length > 0) return conflicts;
+  const mode = (argumentMode ?? configMode ?? accepted.inheritance) as "minimal" | "inherit";
+  for (const [source, file] of [
+    ["arguments", argumentFile],
+    ["config", configFile],
+  ] as const) {
+    if (file == null) continue;
+    try {
+      const candidate = await environmentFromFile(workDir, file, worktreeIdentity, mode);
+      if (digestJson(candidate) !== digestJson(accepted)) {
+        conflicts.push({
+          field: "environment",
+          sources: ["accepted-contract", source],
+          message: `Compatibility source ${source} does not match the accepted execution environment digest.`,
+        });
+      }
+    } catch (error) {
+      conflicts.push({
         field: "environment",
         sources: ["accepted-contract", source],
         message: errorMessage(error),
-      },
-    ];
+      });
+    }
   }
+  if (argumentFile == null && configFile == null) {
+    const candidate = { ...accepted, inheritance: mode };
+    if (digestJson(candidate) !== digestJson(accepted)) {
+      conflicts.push({
+        field: "environment",
+        sources: ["accepted-contract", argumentMode != null ? "arguments" : "config"],
+        message: "Compatibility environment mode does not match accepted authority.",
+      });
+    }
+  }
+  return conflicts;
 }
 
 function compareCompatibilityCandidates(
@@ -984,11 +1253,23 @@ function compareCompatibilityCandidates(
   }
 }
 
-export function appendExperimentContractAcceptance(
+export async function appendExperimentContractAcceptance(
   workDir: string,
   derivation: Extract<ContractDerivation, { status: "derived" }>,
   segment: number,
-): ExperimentContractAcceptedEvent {
+): Promise<ExperimentContractAcceptedEvent> {
+  const currentRepository = await repositoryContract(workDir, derivation.contract.scope.editable);
+  if (
+    currentRepository.repositoryIdentity !== derivation.contract.repository.repositoryIdentity ||
+    currentRepository.worktreeIdentity !== derivation.contract.repository.worktreeIdentity ||
+    currentRepository.expectedHead !== derivation.contract.repository.expectedHead ||
+    currentRepository.treePolicy.outsideEditableFingerprint !==
+      derivation.contract.repository.treePolicy.outsideEditableFingerprint
+  ) {
+    throw new Error(
+      "Repository revision or dirty state changed during contract acceptance. Retry new-segment from a stable checkout.",
+    );
+  }
   const event: ExperimentContractAcceptedEvent = {
     type: "experiment-contract-accepted",
     schemaVersion: 1,
@@ -1010,7 +1291,7 @@ export async function acceptedExperimentContractForMutation(
   if (derivation.status === "accepted") return derivation;
   const entries = input.entries ?? readJsonl(input.workDir);
   const state = stateFromSessionRecords(input.workDir, entries);
-  const event = appendExperimentContractAcceptance(input.workDir, derivation, state.segment);
+  const event = await appendExperimentContractAcceptance(input.workDir, derivation, state.segment);
   return {
     status: "accepted",
     contract: derivation.contract,
@@ -1082,6 +1363,22 @@ function acceptedContractBoundaryConflicts(
   ) {
     reject("goal", "The accepted goal specification is malformed.");
   }
+  const scope = recordValue(contract.scope);
+  let acceptedEditable: string[] = [];
+  let acceptedProtected: string[] = [];
+  if (!stringArray(scope.editable, true) || !stringArray(scope.protected, false)) {
+    reject("scope", "The accepted editable and protected scope is malformed.");
+  } else {
+    try {
+      acceptedEditable = normalizeRelativePaths(scope.editable, "accepted editable scope");
+      acceptedProtected = normalizeRelativePaths(scope.protected, "accepted protected scope");
+      if (scopeOverlaps(acceptedEditable, acceptedProtected).length > 0) {
+        reject("scope", "The accepted editable and protected scope overlaps.");
+      }
+    } catch (error) {
+      reject("scope", errorMessage(error));
+    }
+  }
   if (!validRepositoryContract(contract.repository)) {
     reject("repository", "The accepted repository identity contract is malformed.");
   }
@@ -1089,26 +1386,20 @@ function acceptedContractBoundaryConflicts(
     reject("metric", "The accepted metric semantics are malformed.");
   }
   const evaluator = recordValue(contract.evaluator);
-  if (typeof evaluator.id !== "string" || !validExecutionSpec(evaluator.execution)) {
+  if (evaluator.id !== "primary" || !validExecutionSpec(evaluator.execution, "evaluator")) {
     reject("evaluator", "The accepted evaluator execution specification is malformed.");
   }
   const checks = Array.isArray(contract.checks) ? contract.checks : [];
-  if (checks.length === 0 || !checks.every(validAcceptedCheck)) {
-    reject("checks", "The accepted checks list must contain valid execution specifications.");
-  }
-  const scope = recordValue(contract.scope);
-  if (!stringArray(scope.editable, true) || !stringArray(scope.protected, false)) {
-    reject("scope", "The accepted editable and protected scope is malformed.");
-  } else {
-    try {
-      const editable = normalizeRelativePaths(scope.editable, "accepted editable scope");
-      const protectedScope = normalizeRelativePaths(scope.protected, "accepted protected scope");
-      if (scopeOverlaps(editable, protectedScope).length > 0) {
-        reject("scope", "The accepted editable and protected scope overlaps.");
-      }
-    } catch (error) {
-      reject("scope", errorMessage(error));
-    }
+  if (
+    checks.length === 0 ||
+    !checks.every((check) =>
+      validAcceptedCheck(check, { editable: acceptedEditable, protected: acceptedProtected }),
+    )
+  ) {
+    reject(
+      "checks",
+      "The accepted checks list must contain valid execution specifications with recomputed authority.",
+    );
   }
   if (!validNoiseModel(contract.noise)) {
     reject("noise", "The accepted noise model is malformed.");
@@ -1155,6 +1446,8 @@ function validRepositoryContract(value: unknown): value is RepositoryContract {
       record.segmentBaseRevision,
       record.expectedHead,
     ].every((field) => typeof field === "string" && field.length > 0) &&
+    typeof treePolicy.outsideEditableFingerprint === "string" &&
+    treePolicy.outsideEditableFingerprint.length > 0 &&
     (treePolicy.kind === "require-clean" ||
       (treePolicy.kind === "initial-dirty" &&
         typeof treePolicy.fingerprint === "string" &&
@@ -1172,16 +1465,19 @@ function validMetricSemantics(value: unknown): value is MetricSemantics {
     return false;
   }
   if (record.kind === "minimize" || record.kind === "maximize") {
-    return nonNegativeNumber(record.minimumImprovement) != null;
+    return isExactNonNegativeNumber(record.minimumImprovement);
   }
   return (
     record.kind === "threshold" &&
-    ["<", "<=", "=", ">=", ">"].includes(String(record.comparator)) &&
-    Number.isFinite(Number(record.target))
+    ["<", "<=", "=", ">=", ">"].includes(record.comparator as string) &&
+    isExactFiniteNumber(record.target)
   );
 }
 
-function validExecutionSpec(value: unknown): value is ExecutionSpec {
+function validExecutionSpec(
+  value: unknown,
+  purpose: "evaluator" | "check",
+): value is ExecutionSpec {
   const record = recordValue(value);
   const command = recordValue(record.command);
   const validCommand =
@@ -1231,7 +1527,7 @@ function validExecutionSpec(value: unknown): value is ExecutionSpec {
           "fixture",
           "dataset",
           "runner-config",
-        ].includes(String(input.role)) &&
+        ].includes(input.role as string) &&
         typeof input.contentDigest === "string" &&
         input.contentDigest.length > 0
       );
@@ -1242,13 +1538,15 @@ function validExecutionSpec(value: unknown): value is ExecutionSpec {
     path.isAbsolute(record.relativeWorkingDirectory) ||
     record.relativeWorkingDirectory.split(/[\\/]/).includes("..") ||
     !validEnvironment ||
-    positiveInteger(record.timeoutSeconds) == null ||
-    typeof parser.id !== "string" ||
-    positiveInteger(parser.version) == null ||
+    !isExactPositiveInteger(record.timeoutSeconds) ||
+    parser.id !== (purpose === "evaluator" ? "metric-lines" : "exit-code") ||
+    parser.version !== 1 ||
     !validProtectedInputs ||
     runner.id !== "codex-autoresearch" ||
-    positiveInteger(runner.version) == null ||
-    positiveInteger(runner.metricLimit) == null ||
+    runner.version !== 1 ||
+    !isExactPositiveInteger(runner.metricLimit) ||
+    runner.metricLimit > MAX_SUPPORTED_METRIC_LIMIT ||
+    (purpose === "check" && runner.metricLimit !== DEFAULT_METRIC_LIMIT) ||
     typeof record.executionDigest !== "string"
   ) {
     return false;
@@ -1267,14 +1565,37 @@ function validExecutionSpec(value: unknown): value is ExecutionSpec {
   );
 }
 
-function validAcceptedCheck(value: unknown): value is AcceptedCheck {
+function validAcceptedCheck(
+  value: unknown,
+  scope: { editable: string[]; protected: string[] },
+): value is AcceptedCheck {
   const record = recordValue(value);
-  return (
+  const structurallyValid =
     typeof record.id === "string" &&
     record.id.length > 0 &&
     ((record.authority === "authoritative" && record.reason == null) ||
       (record.authority === "supplemental" && typeof record.reason === "string")) &&
-    validExecutionSpec(record.execution)
+    validExecutionSpec(record.execution, "check");
+  if (!structurallyValid) return false;
+  if (record.authority !== "authoritative") return true;
+  const execution = recordValue(record.execution);
+  const protectedInputs = execution.protectedInputs as ProtectedExecutionInput[];
+  const implementationInputs = protectedInputs.filter(
+    (input) => input.role === "check" || input.role === "command-file",
+  );
+  const authorityInputsAreIndependent = protectedInputs.every(
+    (input) =>
+      !scope.editable.some((editablePath) => pathsOverlap(editablePath, input.path)) ||
+      scope.protected.some((protectedPath) => pathsOverlap(protectedPath, input.path)),
+  );
+  return (
+    implementationInputs.length > 0 &&
+    authorityInputsAreIndependent &&
+    implementationInputs.every(
+      (input) =>
+        !scope.editable.some((editablePath) => pathsOverlap(editablePath, input.path)) ||
+        scope.protected.some((protectedPath) => pathsOverlap(protectedPath, input.path)),
+    )
   );
 }
 
@@ -1283,9 +1604,9 @@ function validNoiseModel(value: unknown): value is NoiseModel {
   return (
     record.kind === "deterministic" ||
     (record.kind === "bounded" &&
-      nonNegativeNumber(record.tolerance) != null &&
-      positiveInteger(record.repeats) != null) ||
-    (record.kind === "unknown" && positiveInteger(record.qualificationRepeats) != null)
+      isExactNonNegativeNumber(record.tolerance) &&
+      isExactPositiveInteger(record.repeats)) ||
+    (record.kind === "unknown" && isExactPositiveInteger(record.qualificationRepeats))
   );
 }
 
@@ -1302,6 +1623,7 @@ function validKeepPolicy(value: unknown, checks: unknown[]): value is KeepPolicy
     record.requiresMetricComparison === true &&
     record.requiresNoiseQualification === true &&
     Array.isArray(record.authoritativeCheckIds) &&
+    record.authoritativeCheckIds.every((id) => typeof id === "string") &&
     JSON.stringify([...record.authoritativeCheckIds].sort()) === JSON.stringify(authoritativeIds)
   );
 }
@@ -1314,8 +1636,8 @@ function validStopPolicy(value: unknown): value is ExecutableStopPolicy {
     validEnforcedBudget(record.pluginWallClockSeconds) &&
     validHostBudget(record.modelTokens) &&
     validHostBudget(record.modelCalls) &&
-    positiveInteger(recordValue(record.noLearningPackets).limit) != null &&
-    positiveInteger(recordValue(record.repeatedFailures).limit) != null
+    isExactPositiveInteger(recordValue(record.noLearningPackets).limit) &&
+    isExactPositiveInteger(recordValue(record.repeatedFailures).limit)
   );
 }
 
@@ -1323,7 +1645,7 @@ function validEnforcedBudget(value: unknown): value is EnforcedBudgetDimension {
   const record = recordValue(value);
   return (
     record.status === "enforced" &&
-    positiveInteger(record.limit) != null &&
+    isExactPositiveInteger(record.limit) &&
     (record.telemetry === "plugin" || record.telemetry === "trusted-host")
   );
 }
@@ -1331,12 +1653,12 @@ function validEnforcedBudget(value: unknown): value is EnforcedBudgetDimension {
 function validHostBudget(value: unknown): value is HostBudgetDimension {
   const record = recordValue(value);
   if (record.status === "enforced") {
-    return positiveInteger(record.limit) != null && record.telemetry === "trusted-host";
+    return isExactPositiveInteger(record.limit) && record.telemetry === "trusted-host";
   }
   if (record.status === "advisory") {
     return (
       typeof record.reason === "string" &&
-      (record.limit == null || positiveInteger(record.limit) != null)
+      (record.limit === undefined || isExactPositiveInteger(record.limit))
     );
   }
   return record.status === "unsupported" && typeof record.reason === "string";
@@ -1348,6 +1670,199 @@ function stringArray(value: unknown, requireNonEmpty: boolean): value is string[
     (!requireNonEmpty || value.length > 0) &&
     value.every((item) => typeof item === "string")
   );
+}
+
+interface LegacyPositiveIntegerResolution {
+  provided: boolean;
+  value: number | null;
+}
+
+function resolveLegacyPositiveInteger({
+  field,
+  sources,
+  conflicts,
+}: {
+  field: string;
+  sources: Array<{ name: string; record: UnknownRecord; keys: string[] }>;
+  conflicts: ContractConflict[];
+}): LegacyPositiveIntegerResolution {
+  const resolved: Array<{ source: string; value: number }> = [];
+  let provided = false;
+  let invalid = false;
+  for (const source of sources) {
+    const values = source.keys
+      .filter((key) => Object.hasOwn(source.record, key))
+      .map((key) => source.record[key]);
+    if (values.length === 0) continue;
+    provided = true;
+    const parsed = values.map(legacyPositiveInteger);
+    if (parsed.some((value) => value == null)) {
+      conflicts.push({
+        field,
+        sources: [source.name],
+        message: `Legacy ${source.name} ${field} must be a positive integer.`,
+      });
+      invalid = true;
+      continue;
+    }
+    const canonical = [...new Set(parsed as number[])];
+    if (canonical.length !== 1) {
+      conflicts.push({
+        field,
+        sources: [source.name],
+        message: `Legacy ${source.name} aliases for ${field} do not agree.`,
+      });
+      invalid = true;
+      continue;
+    }
+    resolved.push({ source: source.name, value: canonical[0] });
+  }
+  if (new Set(resolved.map((item) => item.value)).size > 1) {
+    conflicts.push({
+      field,
+      sources: resolved.map((item) => item.source),
+      message: `Legacy sources for ${field} do not agree.`,
+    });
+    invalid = true;
+  }
+  return {
+    provided,
+    value: invalid ? null : (resolved[0]?.value ?? null),
+  };
+}
+
+function legacyPositiveInteger(value: unknown): number | null {
+  if (isExactPositiveInteger(value)) return value;
+  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value.trim())) return null;
+  const parsed = Number(value.trim());
+  return isExactPositiveInteger(parsed) ? parsed : null;
+}
+
+async function resolveLegacyEnvironment({
+  workDir,
+  worktreeIdentity,
+  args,
+  config,
+  conflicts,
+}: {
+  workDir: string;
+  worktreeIdentity: string;
+  args: UnknownRecord;
+  config: UnknownRecord;
+  conflicts: ContractConflict[];
+}): Promise<ExecutionEnvironment | null> {
+  const argumentMode = legacyStringForSource({
+    field: "environment",
+    source: "arguments",
+    record: args,
+    keys: ["packet_env_mode", "packetEnvMode"],
+    conflicts,
+  });
+  const configMode = legacyStringForSource({
+    field: "environment",
+    source: "config",
+    record: config,
+    keys: ["packet_env_mode", "packetEnvMode"],
+    conflicts,
+  });
+  for (const [source, candidate] of [
+    ["arguments", argumentMode],
+    ["config", configMode],
+  ] as const) {
+    if (candidate != null && candidate !== "minimal" && candidate !== "inherit") {
+      conflicts.push({
+        field: "environment",
+        sources: [source],
+        message: "Environment inheritance mode must be minimal or inherit.",
+      });
+    }
+  }
+  if (argumentMode != null && configMode != null && argumentMode !== configMode) {
+    conflicts.push({
+      field: "environment",
+      sources: ["arguments", "config"],
+      message: "Legacy environment inheritance modes do not agree.",
+    });
+  }
+  const argumentFile = legacyStringForSource({
+    field: "environment",
+    source: "arguments",
+    record: args,
+    keys: ["packet_env_file", "packetEnvFile", "env_file", "envFile"],
+    conflicts,
+  });
+  const configFile = legacyStringForSource({
+    field: "environment",
+    source: "config",
+    record: config,
+    keys: ["packet_env_file", "packetEnvFile", "env_file", "envFile"],
+    conflicts,
+  });
+  if (conflicts.some((conflict) => conflict.field === "environment")) return null;
+  const mode = (argumentMode ?? configMode ?? "minimal") as "minimal" | "inherit";
+  const candidates: Array<{ source: string; environment: ExecutionEnvironment }> = [];
+  for (const [source, file] of [
+    ["arguments", argumentFile],
+    ["config", configFile],
+  ] as const) {
+    if (file == null) continue;
+    try {
+      candidates.push({
+        source,
+        environment: await environmentFromFile(workDir, file, worktreeIdentity, mode),
+      });
+    } catch (error) {
+      conflicts.push({
+        field: "environment",
+        sources: [source],
+        message: errorMessage(error),
+      });
+    }
+  }
+  if (new Set(candidates.map((candidate) => digestJson(candidate.environment))).size > 1) {
+    conflicts.push({
+      field: "environment",
+      sources: candidates.map((candidate) => candidate.source),
+      message: "Legacy environment files do not resolve to the same execution environment.",
+    });
+  }
+  if (conflicts.some((conflict) => conflict.field === "environment")) return null;
+  return candidates[0]?.environment ?? emptyEnvironment(mode);
+}
+
+function legacyStringForSource({
+  field,
+  source,
+  record,
+  keys,
+  conflicts,
+}: {
+  field: string;
+  source: string;
+  record: UnknownRecord;
+  keys: string[];
+  conflicts: ContractConflict[];
+}): string | null {
+  const values = keys.filter((key) => Object.hasOwn(record, key)).map((key) => record[key]);
+  if (values.length === 0) return null;
+  if (values.some((value) => typeof value !== "string" || value.length === 0)) {
+    conflicts.push({
+      field,
+      sources: [source],
+      message: `Legacy ${source} ${field} value must be a non-empty string.`,
+    });
+    return null;
+  }
+  const strings = values as string[];
+  if (new Set(strings).size !== 1) {
+    conflicts.push({
+      field,
+      sources: [source],
+      message: `Legacy ${source} aliases for ${field} do not agree.`,
+    });
+    return null;
+  }
+  return strings[0];
 }
 
 interface LegacyCommandCandidate {
@@ -1592,7 +2107,10 @@ async function legacyRepositoryIdentityConflicts({
   return conflicts;
 }
 
-async function repositoryContract(workDir: string): Promise<RepositoryContract> {
+async function repositoryContract(
+  workDir: string,
+  editable: string[] = [],
+): Promise<RepositoryContract> {
   const resolved = await fsp.realpath(workDir).catch(() => path.resolve(workDir));
   const git = await insideGitRepo(workDir).catch(() => false);
   if (!git) {
@@ -1602,26 +2120,103 @@ async function repositoryContract(workDir: string): Promise<RepositoryContract> 
       worktreeIdentity: identity,
       segmentBaseRevision: "non-git",
       expectedHead: "non-git",
-      treePolicy: { kind: "require-clean" },
+      treePolicy: {
+        kind: "require-clean",
+        outsideEditableFingerprint: digestJson([]),
+      },
     };
   }
   const [topLevel, commonDir, head, status] = await Promise.all([
     requiredGitOutput(workDir, ["rev-parse", "--show-toplevel"]),
     requiredGitOutput(workDir, ["rev-parse", "--git-common-dir"]),
     requiredGitOutput(workDir, ["rev-parse", "HEAD"]),
-    requiredGitOutput(workDir, ["status", "--porcelain=v1", "-z", "-uall"]),
+    requiredGitRawOutput(workDir, ["status", "--porcelain=v1", "-z", "-uall"]),
   ]);
   const repositoryIdentity = digestText(`repository\0${path.resolve(workDir, commonDir)}`);
   const worktreeIdentity = digestText(`worktree\0${path.resolve(topLevel)}`);
+  const outsideEditableFingerprint = await dirtyStateOutsideEditableFingerprint(
+    workDir,
+    status,
+    editable,
+  );
   return {
     repositoryIdentity,
     worktreeIdentity,
     segmentBaseRevision: head,
     expectedHead: head,
     treePolicy: status
-      ? { kind: "initial-dirty", fingerprint: digestText(status) }
-      : { kind: "require-clean" },
+      ? {
+          kind: "initial-dirty",
+          fingerprint: digestText(status),
+          outsideEditableFingerprint,
+        }
+      : { kind: "require-clean", outsideEditableFingerprint },
   };
+}
+
+function expectedHeadFromLedger(
+  repository: RepositoryContract,
+  currentRuns: UnknownRecord[],
+  acceptedAt: string,
+): string {
+  const acceptedAtMilliseconds = Date.parse(acceptedAt);
+  const keptCommit = [...currentRuns]
+    .reverse()
+    .find(
+      (run) =>
+        run.status === "keep" &&
+        typeof run.commit === "string" &&
+        run.commit.length > 0 &&
+        typeof run.timestamp === "number" &&
+        run.timestamp >= acceptedAtMilliseconds,
+    )?.commit;
+  return typeof keptCommit === "string" ? keptCommit : repository.expectedHead;
+}
+
+function revisionMatches(actual: string, expected: string): boolean {
+  return actual === expected || actual.startsWith(expected) || expected.startsWith(actual);
+}
+
+async function dirtyStateOutsideEditableFingerprint(
+  workDir: string,
+  status: string,
+  editable: string[],
+): Promise<string> {
+  if (!status) return digestJson([]);
+  const outsidePaths = (entryPaths: string[]) =>
+    entryPaths.filter(
+      (entryPath) => !pathCoveredByAnyScope(entryPath, editable) && !isSessionOwnedPath(entryPath),
+    );
+  const entries = parsePorcelainV1Z(status)
+    .map((entry) => ({ status: entry.status, paths: outsidePaths(entry.paths).sort() }))
+    .filter((entry) => entry.paths.length > 0)
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  if (entries.length === 0) return digestJson([]);
+  const paths = uniqueStrings(entries.flatMap((entry) => entry.paths));
+  const snapshot = await buildProtectedBenchmarkSnapshot({
+    workDir,
+    paths,
+    capturedAt: "contract-tree-policy",
+  });
+  return digestJson({
+    entries,
+    surfaceHash: snapshot.surfaceHash,
+    quarantined: snapshot.quarantined,
+  });
+}
+
+function pathCoveredByAnyScope(filePath: string, scopes: string[]): boolean {
+  return scopes.some((scopePath) => filePath === scopePath || filePath.startsWith(`${scopePath}/`));
+}
+
+function isSessionOwnedPath(filePath: string): boolean {
+  return (
+    AUTORESEARCH_SESSION_FILES.includes(filePath as (typeof AUTORESEARCH_SESSION_FILES)[number]) ||
+    filePath === AUTORESEARCH_DASHBOARD_FILE ||
+    SESSION_OWNED_DIRS.some(
+      (directory) => filePath === directory || filePath.startsWith(`${directory}/`),
+    )
+  );
 }
 
 async function requiredGitOutput(workDir: string, args: string[]): Promise<string> {
@@ -1630,6 +2225,14 @@ async function requiredGitOutput(workDir: string, args: string[]): Promise<strin
     throw new Error(`Git ${args.join(" ")} failed: ${result.stderr || result.stdout}`);
   }
   return result.stdout.trim();
+}
+
+async function requiredGitRawOutput(workDir: string, args: string[]): Promise<string> {
+  const result = await runGit(args, workDir);
+  if (result.code !== 0) {
+    throw new Error(`Git ${args.join(" ")} failed: ${result.stderr || result.stdout}`);
+  }
+  return result.stdout;
 }
 
 async function protectedInputsForPaths(
@@ -1961,6 +2564,162 @@ export function noiseQualificationStatus(
   };
 }
 
+export async function contractCandidateFingerprintForWorkDir(
+  workDir: string,
+  contract: ExperimentContract,
+): Promise<string> {
+  const snapshot = await buildProtectedBenchmarkSnapshot({
+    workDir,
+    paths: contract.scope.editable,
+    capturedAt: "contract-candidate",
+  });
+  const blockingQuarantine = snapshot.quarantined.filter(
+    (item) => item.reason !== "protected_benchmark_entry_limit",
+  );
+  if (blockingQuarantine.length > 0) {
+    throw new Error(
+      `Accepted editable scope could not be fingerprinted: ${blockingQuarantine
+        .map((item) => JSON.stringify(item))
+        .join(" ")}`,
+    );
+  }
+  return digestJson({
+    contractDigest: contract.contractDigest,
+    editable: contract.scope.editable,
+    truncated: snapshot.quarantined.length > 0,
+    surfaceHash: snapshot.surfaceHash,
+  });
+}
+
+export function completedContractNoiseRepeats(
+  contract: ExperimentContract,
+  currentRuns: UnknownRecord[],
+  input: { candidateFingerprint: string; metric: number },
+): number {
+  const priorRepeats = currentRuns.filter((run) => {
+    const evidence = recordValue(run.contractEvaluationEvidence);
+    if (
+      evidence.contractDigest !== contract.contractDigest ||
+      evidence.candidateFingerprint !== input.candidateFingerprint ||
+      evidence.acceptedEvaluation !== true ||
+      evidence.checksPassed !== true ||
+      !isExactFiniteNumber(evidence.metric)
+    ) {
+      return false;
+    }
+    return contract.noise.kind !== "bounded"
+      ? evidence.metric === input.metric
+      : Math.abs(evidence.metric - input.metric) <= contract.noise.tolerance;
+  }).length;
+  return priorRepeats + 1;
+}
+
+export function evaluateContractKeepEligibility(
+  contract: ExperimentContract,
+  input: {
+    acceptedEvaluation: boolean;
+    checkOutcomes: ContractCheckOutcome[];
+    completedRepeats: number;
+    metric: number | null;
+    referenceMetric: number | null;
+  },
+): ContractKeepEligibility {
+  const reasons: string[] = [];
+  if (!input.acceptedEvaluation) {
+    reasons.push("Keep requires an accepted-contract evaluator result.");
+  }
+  if (input.metric == null || !Number.isFinite(input.metric)) {
+    reasons.push("Keep requires a finite accepted metric.");
+  }
+  const outcomeById = new Map(input.checkOutcomes.map((outcome) => [outcome.id, outcome]));
+  const allChecksPassed =
+    input.checkOutcomes.length === contract.checks.length &&
+    outcomeById.size === contract.checks.length &&
+    contract.checks.every((check) => {
+      const outcome = outcomeById.get(check.id);
+      return outcome?.executionDigest === check.execution.executionDigest && outcome.passed;
+    });
+  if (!allChecksPassed) {
+    reasons.push("Keep requires every accepted check to pass its accepted execution digest.");
+  }
+  if (contract.keepPolicy.authoritativeCheckIds.length === 0) {
+    reasons.push(
+      "Keep requires at least one proven authoritative check; supplemental checks cannot authorize it.",
+    );
+  } else if (
+    !contract.keepPolicy.authoritativeCheckIds.every((id) => outcomeById.get(id)?.passed === true)
+  ) {
+    reasons.push("Keep requires every authoritative check to pass.");
+  }
+  if (input.metric != null && Number.isFinite(input.metric)) {
+    const metricReason = metricComparisonFailureReason(
+      contract.metric,
+      contract.noise,
+      input.metric,
+      input.referenceMetric,
+    );
+    if (metricReason) reasons.push(metricReason);
+  }
+  const qualification = noiseQualificationStatus(contract.noise, {
+    completedRepeats: input.completedRepeats,
+    purpose: "candidate",
+  });
+  if (!qualification.keepEligible) {
+    reasons.push(
+      `Keep requires accepted noise qualification (${qualification.completedRepeats}/${qualification.requiredRepeats} repeats).`,
+    );
+  }
+  const shared = {
+    completedRepeats: qualification.completedRepeats,
+    requiredRepeats: qualification.requiredRepeats,
+    referenceMetric: input.referenceMetric,
+  };
+  return reasons.length === 0
+    ? { eligible: true, reasons: [], ...shared }
+    : {
+        eligible: false,
+        reasons: reasons as [string, ...string[]],
+        ...shared,
+      };
+}
+
+function metricComparisonFailureReason(
+  metric: MetricSemantics,
+  noise: NoiseModel,
+  candidate: number,
+  reference: number | null,
+): string | null {
+  if (metric.kind === "threshold") {
+    const passed =
+      metric.comparator === "<"
+        ? candidate < metric.target
+        : metric.comparator === "<="
+          ? candidate <= metric.target
+          : metric.comparator === "="
+            ? candidate === metric.target
+            : metric.comparator === ">="
+              ? candidate >= metric.target
+              : candidate > metric.target;
+    return passed
+      ? null
+      : `Accepted metric comparison did not meet threshold ${metric.comparator} ${metric.target}.`;
+  }
+  if (reference == null || !Number.isFinite(reference)) {
+    return "Keep requires a prior accepted reference metric; log this packet as measure.";
+  }
+  const improvement = metric.kind === "maximize" ? candidate - reference : reference - candidate;
+  if (improvement <= 0) {
+    return "Accepted metric comparison did not improve on the reference metric.";
+  }
+  if (improvement < metric.minimumImprovement) {
+    return `Accepted improvement ${improvement} is below minimum improvement ${metric.minimumImprovement}.`;
+  }
+  if (noise.kind === "bounded" && improvement <= noise.tolerance) {
+    return `Accepted improvement ${improvement} does not exceed bounded noise tolerance ${noise.tolerance}.`;
+  }
+  return null;
+}
+
 export function contractStopStatus(
   contract: ExperimentContract,
   input: {
@@ -2187,6 +2946,18 @@ function positiveInteger(value: unknown): number | null {
 function nonNegativeNumber(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function isExactPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function isExactFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isExactNonNegativeNumber(value: unknown): value is number {
+  return isExactFiniteNumber(value) && value >= 0;
 }
 
 function digestJson(value: unknown): string {

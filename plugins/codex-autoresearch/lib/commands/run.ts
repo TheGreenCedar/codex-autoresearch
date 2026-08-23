@@ -10,7 +10,10 @@ import { numberOption } from "../cli/args.js";
 import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
 import {
   acceptedExperimentContractForMutation,
+  completedContractNoiseRepeats,
+  contractCandidateFingerprintForWorkDir,
   contractStopStatus,
+  evaluateContractKeepEligibility,
   executionCommandText,
   materializeExecutionEnvironment,
   type ExecutionSpec,
@@ -52,7 +55,6 @@ import { runWithRequiredCleanup } from "../required-cleanup.js";
 
 const DEFAULT_TIMEOUT_SECONDS = 600;
 const DEFAULT_CHECKS_TIMEOUT_SECONDS = 300;
-const MAX_PARSED_METRICS = 512;
 type ProgressStageResult = {
   durationSeconds: number;
   exitCode: number | null;
@@ -95,6 +97,10 @@ async function runExperimentWithProgressWriter(
   if (stopPolicyStatus.status === "exhausted") {
     throw new Error(stopPolicyStatus.message);
   }
+  const contractCandidateFingerprint = await contractCandidateFingerprintForWorkDir(
+    workDir,
+    experimentContract,
+  );
   const protectedBenchmarkGuard = await protectedBenchmarkGuardForWorkDir(workDir, config, state);
   const evaluatorExecution = experimentContract.evaluator.execution;
   const command = executionCommandText(evaluatorExecution.command);
@@ -199,7 +205,7 @@ async function runExperimentWithProgressWriter(
   const parseSource = metricParseSource(benchmark);
   const parsedMetricResult = parseMetricLines(parseSource, {
     primaryMetricName: state.config.metricName,
-    maxMetrics: MAX_PARSED_METRICS,
+    maxMetrics: evaluatorExecution.runner.metricLimit,
     withTruncation: true,
   });
   const { artifacts, artifactWarnings } = parseArtifactLines(
@@ -259,12 +265,35 @@ async function runExperimentWithProgressWriter(
   const checksPassedOrSkipped = checksPassed === null || checksPassed;
   const passed = benchmarkPassed && primaryPresent && checksPassedOrSkipped;
   const failedStatus = benchmarkPassed && primaryPresent ? "checks_failed" : "crash";
-  const allowedStatuses = passed ? ["keep", "discard", "measure"] : [failedStatus];
+  const contractCheckOutcomes = checkRuns.map(({ check, result }) => ({
+    id: check.id,
+    executionDigest: check.execution.executionDigest,
+    passed: result.exitCode === 0 && !result.timedOut && !result.terminationFailed,
+  }));
+  const completedNoiseRepeats =
+    primaryMetric == null
+      ? 0
+      : completedContractNoiseRepeats(experimentContract, state.current, {
+          candidateFingerprint: contractCandidateFingerprint,
+          metric: primaryMetric,
+        });
+  const contractKeepEligibility = evaluateContractKeepEligibility(experimentContract, {
+    acceptedEvaluation: benchmarkPassed && primaryPresent,
+    checkOutcomes: contractCheckOutcomes,
+    completedRepeats: completedNoiseRepeats,
+    metric: primaryMetric,
+    referenceMetric: finiteMetric(state.best ?? state.baseline),
+  });
+  const allowedStatuses = passed
+    ? contractKeepEligibility.eligible
+      ? ["keep", "discard", "measure"]
+      : ["discard", "measure"]
+    : [failedStatus];
   const suggestedStatus = passed
-    ? isBaseline
-      ? "measure"
-      : improvesPrimary
-        ? "keep"
+    ? contractKeepEligibility.eligible
+      ? "keep"
+      : isBaseline
+        ? "measure"
         : "discard"
     : failedStatus;
   const checksWereVerified = checksPassed === true;
@@ -278,7 +307,7 @@ async function runExperimentWithProgressWriter(
       ? "Safe to consider keep because this is a checked improvement; still review ASI before logging."
       : safeSuggestedStatus === "measure"
         ? "Log this as measure because it is a baseline or diagnostic packet without a prior improvement comparison; use keep only when real improvement evidence exists."
-        : "Default to discard unless the operator can justify keep with ASI and verification evidence; use measure for non-promotional metric evidence."
+        : `Keep is unavailable under the accepted contract: ${contractKeepEligibility.reasons.join(" ")} Log discard, or measure when retaining non-promotional evidence.`
     : `Only ${failedStatus} is allowed because the benchmark or checks failed.`;
   const progress = buildRunProgress({ benchmark, checks, checksCommand, passed });
   if (terminationFailed) {
@@ -311,6 +340,8 @@ async function runExperimentWithProgressWriter(
     command,
     executionAuthority: "accepted-contract",
     experimentContractDigest: experimentContract.contractDigest,
+    contractCandidateFingerprint,
+    contractKeepEligibility,
     stopPolicyStatus,
     acceptedEvaluator: experimentContract.evaluator,
     acceptedChecks: experimentContract.checks,
@@ -384,6 +415,16 @@ async function runExperimentWithProgressWriter(
           })),
         }
       : null,
+    contractEvaluationEvidence:
+      benchmarkPassed && primaryMetric != null && checksPassed === true
+        ? {
+            contractDigest: experimentContract.contractDigest,
+            candidateFingerprint: contractCandidateFingerprint,
+            acceptedEvaluation: true,
+            metric: primaryMetric,
+            checksPassed: true,
+          }
+        : null,
     tailOutput: tailText(benchmark.output),
     logHint: {
       metric: primary,

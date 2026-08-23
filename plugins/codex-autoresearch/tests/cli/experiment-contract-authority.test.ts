@@ -4,8 +4,136 @@ import path from "node:path";
 import test from "node:test";
 
 import { quoteForShell } from "../helpers/process.js";
-import { runCli, setupFixture, withTempDir } from "../helpers/cli-test-context.js";
+import { git, runCli, setupFixture, withTempDir } from "../helpers/cli-test-context.js";
 import { createExecutionSpec, createExperimentContract } from "../../lib/experiment-contract.js";
+
+async function setupKeepPolicyFixture(
+  dir: string,
+  input: {
+    baseline: number;
+    candidate: number;
+    config?: Record<string, unknown>;
+    supplementalChecks?: boolean;
+  },
+) {
+  await mkdir(path.join(dir, "src"), { recursive: true });
+  await mkdir(path.join(dir, "contract"), { recursive: true });
+  await setupFixture(dir, {
+    name: "mechanical keep policy",
+    goal: "Only keep contract-qualified improvements.",
+    metricName: "score",
+    direction: "higher",
+  });
+  await writeFile(
+    path.join(dir, "contract", "evaluator.mjs"),
+    `console.log("METRIC score=${input.candidate}");\n`,
+  );
+  await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n");
+  const evaluator = `${quoteForShell(process.execPath)} contract/evaluator.mjs`;
+  const checks = `${quoteForShell(process.execPath)} contract/checks.mjs`;
+  await writeFile(
+    path.join(dir, "autoresearch.config.json"),
+    `${JSON.stringify(
+      {
+        benchmarkCommand: evaluator,
+        checksAuthoritative: !input.supplementalChecks,
+        checksCommand: checks,
+        commitPaths: ["src"],
+        maxIterations: 8,
+        protectedBenchmarkPaths: ["contract/evaluator.mjs"],
+        ...(!input.supplementalChecks ? { checkImplementationPaths: ["contract/checks.mjs"] } : {}),
+        ...input.config,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const baseline = await runCli([
+    "log",
+    "--cwd",
+    dir,
+    "--metric",
+    String(input.baseline),
+    "--status",
+    "measure",
+    "--description",
+    "Reference measurement",
+  ]);
+  assert.equal(baseline.code, 0, baseline.stderr);
+}
+
+async function assertMechanicalKeepRejected(dir: string, message: RegExp) {
+  const next = await runCli(["next", "--cwd", dir]);
+  assert.equal(next.code, 0, next.stderr);
+  const payload = JSON.parse(next.stdout);
+  assert.equal(payload.decision.allowedStatuses.includes("keep"), false);
+  assert.match(payload.run.contractKeepEligibility.reasons.join("\n"), message);
+
+  const packetPath = path.join(dir, "autoresearch.last-run.json");
+  const packet = JSON.parse(await readFile(packetPath, "utf8"));
+  packet.decision.allowedStatuses = ["keep", "discard", "measure"];
+  packet.decision.suggestedStatus = "keep";
+  await writeFile(packetPath, `${JSON.stringify(packet, null, 2)}\n`);
+  const forgedKeep = await runCli([
+    "log",
+    "--cwd",
+    dir,
+    "--from-last",
+    "--status",
+    "keep",
+    "--description",
+    "Forged keep request",
+  ]);
+  assert.notEqual(forgedKeep.code, 0);
+  assert.match(forgedKeep.stderr, message);
+}
+
+async function setupGitContractFixture(dir: string) {
+  await mkdir(path.join(dir, "src"), { recursive: true });
+  await mkdir(path.join(dir, "contract"), { recursive: true });
+  await setupFixture(dir, {
+    name: "git contract authority",
+    goal: "Keep repository authority bound to the accepted checkout.",
+    metricName: "score",
+    direction: "higher",
+  });
+  await writeFile(path.join(dir, "src", "score.txt"), "1\n");
+  await writeFile(path.join(dir, "README.md"), "initial\n");
+  await writeFile(
+    path.join(dir, "contract", "evaluator.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const score = readFileSync("src/score.txt", "utf8").trim();',
+      "console.log(`METRIC score=${score}`);",
+      "",
+    ].join("\n"),
+  );
+  await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n");
+  const evaluator = `${quoteForShell(process.execPath)} contract/evaluator.mjs`;
+  const checks = `${quoteForShell(process.execPath)} contract/checks.mjs`;
+  await writeFile(
+    path.join(dir, "autoresearch.config.json"),
+    `${JSON.stringify(
+      {
+        benchmarkCommand: evaluator,
+        checkImplementationPaths: ["contract/checks.mjs"],
+        checksAuthoritative: true,
+        checksCommand: checks,
+        commitPaths: ["src"],
+        maxIterations: 10,
+        metricSemantics: { kind: "maximize", minimumImprovement: 0 },
+        noiseModel: { kind: "deterministic" },
+        protectedBenchmarkPaths: ["contract/evaluator.mjs"],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await git(dir, ["init"]);
+  await git(dir, ["add", "."]);
+  await git(dir, ["commit", "-m", "initial"]);
+  return { evaluator, checks };
+}
 
 test("new-segment accepts one executable contract and next runs its evaluator and checks", async () => {
   await withTempDir("experiment-contract-authority", async (dir) => {
@@ -293,11 +421,16 @@ test("next executes every accepted check exactly once", async () => {
       ...acceptedEvent.contract,
       checks: [
         acceptedEvent.contract.checks[0],
-        { id: "second", authority: "authoritative", execution: secondExecution },
+        {
+          id: "second",
+          authority: "supplemental",
+          reason: "The synthetic test check has no independently protected implementation input.",
+          execution: secondExecution,
+        },
       ],
       keepPolicy: {
         ...acceptedEvent.contract.keepPolicy,
-        authoritativeCheckIds: ["second"],
+        authoritativeCheckIds: acceptedEvent.contract.keepPolicy.authoritativeCheckIds,
       },
       contractDigest: undefined,
     });
@@ -518,5 +651,343 @@ test("next refuses an expired accepted plugin wall-clock budget before evaluator
     assert.notEqual(next.code, 0);
     assert.match(next.stderr, /accepted plugin wall-clock ceiling reached/i);
     await assert.rejects(readFile(path.join(dir, "evaluator-ran.txt")), /ENOENT/);
+  });
+});
+
+test("unknown noise blocks keep until the accepted qualification repeats exist", async () => {
+  await withTempDir("contract-keep-unknown-noise", async (dir) => {
+    await setupKeepPolicyFixture(dir, {
+      baseline: 10,
+      candidate: 12,
+      config: { noiseModel: { kind: "unknown", qualificationRepeats: 2 } },
+    });
+    await assertMechanicalKeepRejected(dir, /noise qualification/i);
+  });
+});
+
+test("threshold metric semantics block keep below the accepted target", async () => {
+  await withTempDir("contract-keep-threshold", async (dir) => {
+    await setupKeepPolicyFixture(dir, {
+      baseline: 10,
+      candidate: 12,
+      config: {
+        metricSemantics: { kind: "threshold", comparator: ">=", target: 20 },
+        noiseModel: { kind: "deterministic" },
+      },
+    });
+    await assertMechanicalKeepRejected(dir, /threshold|metric comparison/i);
+  });
+});
+
+test("minimum improvement blocks keep when directional gain is too small", async () => {
+  await withTempDir("contract-keep-minimum-improvement", async (dir) => {
+    await setupKeepPolicyFixture(dir, {
+      baseline: 10,
+      candidate: 10.5,
+      config: {
+        metricSemantics: { kind: "maximize", minimumImprovement: 1 },
+        noiseModel: { kind: "deterministic" },
+      },
+    });
+    await assertMechanicalKeepRejected(dir, /minimum improvement/i);
+  });
+});
+
+test("supplemental-only checks cannot authorize keep", async () => {
+  await withTempDir("contract-keep-supplemental", async (dir) => {
+    await setupKeepPolicyFixture(dir, {
+      baseline: 10,
+      candidate: 12,
+      supplementalChecks: true,
+      config: { noiseModel: { kind: "deterministic" } },
+    });
+    await assertMechanicalKeepRejected(dir, /authoritative check/i);
+  });
+});
+
+test("manual log cannot bypass accepted evaluation authority for keep", async () => {
+  await withTempDir("contract-keep-manual-bypass", async (dir) => {
+    await setupKeepPolicyFixture(dir, {
+      baseline: 10,
+      candidate: 12,
+      config: {
+        metricSemantics: { kind: "maximize", minimumImprovement: 1 },
+        noiseModel: { kind: "deterministic" },
+      },
+    });
+    const next = await runCli(["next", "--cwd", dir]);
+    assert.equal(next.code, 0, next.stderr);
+
+    const manualKeep = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "12",
+      "--status",
+      "keep",
+      "--description",
+      "Bypass accepted packet evidence",
+    ]);
+    assert.notEqual(manualKeep.code, 0);
+    assert.match(manualKeep.stderr, /accepted.*evaluation|accepted.*packet/i);
+  });
+});
+
+test("next uses the accepted evaluator runner metric limit", async () => {
+  await withTempDir("contract-runner-metric-limit", async (dir) => {
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await setupFixture(dir, {
+      name: "runner metric limit",
+      goal: "Use every accepted runner field.",
+      metricName: "score",
+      direction: "higher",
+    });
+    const evaluator = `${quoteForShell(process.execPath)} -e "console.log('METRIC first=1\\nMETRIC second=2\\nMETRIC score=3')"`;
+    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      `${JSON.stringify(
+        {
+          benchmarkCommand: evaluator,
+          checksCommand: checks,
+          commitPaths: ["src"],
+          maxIterations: 4,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const segment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--benchmark-command",
+      evaluator,
+      "--checks-command",
+      checks,
+      "--yes",
+    ]);
+    assert.equal(segment.code, 0, segment.stderr);
+
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const entries = (await readFile(ledgerPath, "utf8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line));
+    const acceptance = entries.findLast((entry) => entry.type === "experiment-contract-accepted");
+    const evaluatorExecution = acceptance.contract.evaluator.execution;
+    const limitedExecution = createExecutionSpec({
+      command: evaluatorExecution.command,
+      relativeWorkingDirectory: evaluatorExecution.relativeWorkingDirectory,
+      environment: evaluatorExecution.environment,
+      timeoutSeconds: evaluatorExecution.timeoutSeconds,
+      parser: evaluatorExecution.parser,
+      protectedInputs: evaluatorExecution.protectedInputs,
+      runner: { ...evaluatorExecution.runner, metricLimit: 1 },
+    });
+    const contract = createExperimentContract({
+      ...acceptance.contract,
+      evaluator: { ...acceptance.contract.evaluator, execution: limitedExecution },
+      contractDigest: undefined,
+    });
+    acceptance.contract = contract;
+    acceptance.eventId = `experiment-contract-accepted:${acceptance.segment}:${contract.contractDigest}`;
+    await writeFile(ledgerPath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+    const next = await runCli(["next", "--cwd", dir]);
+    assert.equal(next.code, 0, next.stderr);
+    const payload = JSON.parse(next.stdout);
+    assert.equal(payload.run.parsedPrimary, 3);
+    assert.equal(payload.run.metricsTruncated, true);
+    assert.deepEqual(payload.run.parsedMetrics, { first: 1, score: 3 });
+  });
+});
+
+test("explicit timeout conflicts with configured timeout before first acceptance", async () => {
+  await withTempDir("contract-timeout-source-conflict", async (dir) => {
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await setupFixture(dir, {
+      name: "timeout source conflict",
+      goal: "Reject shadowed execution limits.",
+      metricName: "score",
+      direction: "higher",
+    });
+    const evaluator = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')"`;
+    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      `${JSON.stringify(
+        {
+          benchmarkCommand: evaluator,
+          checksCommand: checks,
+          commitPaths: ["src"],
+          maxIterations: 4,
+          timeoutSeconds: 60,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const next = await runCli(["next", "--cwd", dir, "--timeout-seconds", "30"]);
+    assert.notEqual(next.code, 0);
+    assert.match(next.stderr, /evaluator\.timeoutSeconds|do not agree/i);
+    const ledger = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
+    assert.doesNotMatch(ledger, /experiment-contract-accepted/);
+  });
+});
+
+test("accepted clean-tree policy permits candidate edits only inside editable scope", async () => {
+  await withTempDir("contract-editable-tree", async (dir) => {
+    const { evaluator, checks } = await setupGitContractFixture(dir);
+    const segment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--benchmark-command",
+      evaluator,
+      "--checks-command",
+      checks,
+      "--yes",
+    ]);
+    assert.equal(segment.code, 0, segment.stderr);
+    await writeFile(path.join(dir, "src", "score.txt"), "2\n");
+
+    const next = await runCli(["next", "--cwd", dir]);
+    assert.equal(next.code, 0, next.stderr);
+    assert.equal(JSON.parse(next.stdout).run.parsedPrimary, 2);
+  });
+});
+
+test("accepted repository authority rejects an unauthorized HEAD change", async () => {
+  await withTempDir("contract-head-drift", async (dir) => {
+    const { evaluator, checks } = await setupGitContractFixture(dir);
+    const segment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--benchmark-command",
+      evaluator,
+      "--checks-command",
+      checks,
+      "--yes",
+    ]);
+    assert.equal(segment.code, 0, segment.stderr);
+    await git(dir, ["commit", "--allow-empty", "-m", "unauthorized head"]);
+
+    const next = await runCli(["next", "--cwd", dir]);
+    assert.notEqual(next.code, 0);
+    assert.match(next.stderr, /expected HEAD|repository revision|new segment/i);
+  });
+});
+
+test("accepted tree policy rejects dirty-state drift outside editable scope", async () => {
+  await withTempDir("contract-tree-drift", async (dir) => {
+    const { evaluator, checks } = await setupGitContractFixture(dir);
+    const segment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--benchmark-command",
+      evaluator,
+      "--checks-command",
+      checks,
+      "--yes",
+    ]);
+    assert.equal(segment.code, 0, segment.stderr);
+    await writeFile(path.join(dir, "README.md"), "unauthorized drift\n");
+
+    const next = await runCli(["next", "--cwd", dir]);
+    assert.notEqual(next.code, 0);
+    assert.match(next.stderr, /dirty|tree policy|outside editable/i);
+  });
+});
+
+test("accepted initial-dirty policy permits its baseline but rejects later outside-scope drift", async () => {
+  await withTempDir("contract-initial-dirty-drift", async (dir) => {
+    const { evaluator, checks } = await setupGitContractFixture(dir);
+    await writeFile(path.join(dir, "README.md"), "initial dirty state\n");
+    const segment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--benchmark-command",
+      evaluator,
+      "--checks-command",
+      checks,
+      "--yes",
+    ]);
+    assert.equal(segment.code, 0, segment.stderr);
+
+    const first = await runCli(["next", "--cwd", dir]);
+    assert.equal(first.code, 0, first.stderr);
+    const logged = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "Initial dirty baseline",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    await writeFile(path.join(dir, "README.md"), "changed dirty state\n");
+
+    const drift = await runCli(["next", "--cwd", dir]);
+    assert.notEqual(drift.code, 0);
+    assert.match(drift.stderr, /dirty|tree policy|outside editable/i);
+  });
+});
+
+test("ledger-backed kept commits advance the accepted expected HEAD", async () => {
+  await withTempDir("contract-kept-head", async (dir) => {
+    const { evaluator, checks } = await setupGitContractFixture(dir);
+    const segment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--benchmark-command",
+      evaluator,
+      "--checks-command",
+      checks,
+      "--yes",
+    ]);
+    assert.equal(segment.code, 0, segment.stderr);
+
+    const baseline = await runCli(["next", "--cwd", dir]);
+    assert.equal(baseline.code, 0, baseline.stderr);
+    const baselineLog = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "Accepted baseline",
+    ]);
+    assert.equal(baselineLog.code, 0, baselineLog.stderr);
+
+    await writeFile(path.join(dir, "src", "score.txt"), "2\n");
+    const candidate = await runCli(["next", "--cwd", dir]);
+    assert.equal(candidate.code, 0, candidate.stderr);
+    assert.equal(JSON.parse(candidate.stdout).decision.allowedStatuses.includes("keep"), true);
+    const kept = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "keep",
+      "--description",
+      "Keep accepted candidate",
+    ]);
+    assert.equal(kept.code, 0, kept.stderr);
+
+    const afterKeep = await runCli(["next", "--cwd", dir]);
+    assert.equal(afterKeep.code, 0, afterKeep.stderr);
+    assert.equal(JSON.parse(afterKeep.stdout).run.executionAuthority, "accepted-contract");
   });
 });

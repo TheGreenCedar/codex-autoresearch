@@ -4370,16 +4370,15 @@ async function newSegment(args: any) {
       "new-segment requires --dry-run or --yes because it appends to autoresearch.jsonl.",
     );
   }
-  const contractEvent = dryRun
-    ? null
-    : (() => {
-        appendJsonl(workDir, entry);
-        return appendExperimentContractAcceptance(
-          workDir,
-          contractDerivation,
-          prospectiveState.segment,
-        );
-      })();
+  let contractEvent = null;
+  if (!dryRun) {
+    appendJsonl(workDir, entry);
+    contractEvent = await appendExperimentContractAcceptance(
+      workDir,
+      contractDerivation,
+      prospectiveState.segment,
+    );
+  }
   return {
     ok: true,
     workDir,
