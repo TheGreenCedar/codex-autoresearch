@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  contractCandidateFingerprintForWorkDir,
   contractStopStatus,
   createExecutionSpec,
   createExperimentContract,
@@ -12,7 +13,7 @@ import {
   verifyExecutionSpecForWorkDir,
   type ExecutableCommand,
 } from "../lib/experiment-contract.js";
-import { withTempDir as withNamedTempDir } from "./helpers/process.js";
+import { runGit, withTempDir as withNamedTempDir } from "./helpers/process.js";
 import { buildResearchIntegrity } from "../lib/truth-signals.js";
 import { buildProtectedBenchmarkSnapshot } from "../lib/benchmark/contract-guards.js";
 import { runExecutableCommand } from "../lib/runner.js";
@@ -27,6 +28,18 @@ const execution = (command: ExecutableCommand) =>
     protectedInputs: [],
     runner: { id: "codex-autoresearch", version: 1, metricLimit: 512 },
   });
+
+async function gitOk(workDir: string, args: string[]): Promise<void> {
+  await runGit(workDir, args);
+}
+
+async function writeNumberedFiles(workDir: string, relativeDir: string, count: number) {
+  const directory = path.join(workDir, relativeDir);
+  await mkdir(directory, { recursive: true });
+  for (let index = 0; index < count; index += 1) {
+    await writeFile(path.join(directory, `file-${String(index).padStart(3, "0")}.txt`), "x\n");
+  }
+}
 
 test("execution digests preserve mode, shell, argv boundaries, quoting, and whitespace", () => {
   const bash = execution({ kind: "shell", shell: "bash", script: 'printf "a  b"\n' });
@@ -937,6 +950,181 @@ test("accepted repository and worktree identities cannot be replayed in another 
       }
     });
   });
+});
+
+test("complete candidate snapshots remain authoritative and content-sensitive", async () => {
+  await withNamedTempDir("experiment-contract", "complete-candidate-fingerprint", async (dir) => {
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "candidate.txt"), "first\n");
+    const configEntry = {
+      type: "config",
+      name: "complete candidate fingerprint",
+      goal: "Fingerprint a complete candidate",
+      metricName: "score",
+      bestDirection: "higher",
+    };
+    const config = {
+      benchmarkCommand: "node -e \"console.log('METRIC score=1')\"",
+      checksCommand: 'node -e "process.exit(0)"',
+      commitPaths: ["src"],
+      maxIterations: 3,
+    };
+    const derivation = await deriveExperimentContract({
+      workDir: dir,
+      config,
+      entries: [configEntry],
+    });
+    assert.equal(derivation.status, "derived");
+    if (derivation.status !== "derived") return;
+
+    const first = await contractCandidateFingerprintForWorkDir(dir, derivation.contract);
+    assert.match(first, /^[a-f0-9]{64}$/);
+    await writeFile(path.join(dir, "src", "candidate.txt"), "second\n");
+    const second = await contractCandidateFingerprintForWorkDir(dir, derivation.contract);
+    assert.match(second, /^[a-f0-9]{64}$/);
+    assert.notEqual(first, second);
+  });
+});
+
+test("candidate snapshots with an entry-limit quarantine are unusable authority", async () => {
+  await withNamedTempDir("experiment-contract", "truncated-candidate-fingerprint", async (dir) => {
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    const configEntry = {
+      type: "config",
+      name: "truncated candidate fingerprint",
+      goal: "Reject incomplete candidate authority",
+      metricName: "score",
+      bestDirection: "higher",
+    };
+    const derivation = await deriveExperimentContract({
+      workDir: dir,
+      config: {
+        benchmarkCommand: "node -e \"console.log('METRIC score=1')\"",
+        checksCommand: 'node -e "process.exit(0)"',
+        commitPaths: ["src"],
+        maxIterations: 3,
+      },
+      entries: [configEntry],
+    });
+    assert.equal(derivation.status, "derived");
+    if (derivation.status !== "derived") return;
+    await writeNumberedFiles(dir, "src", 505);
+
+    await assert.rejects(
+      contractCandidateFingerprintForWorkDir(dir, derivation.contract),
+      /candidate fingerprint.*entry limit|entry-limit.*candidate fingerprint|incomplete candidate fingerprint/i,
+    );
+  });
+});
+
+test("initial-dirty acceptance rejects entry-limited tree fingerprints as a typed conflict", async () => {
+  await withNamedTempDir(
+    "experiment-contract",
+    "truncated-initial-dirty-acceptance",
+    async (dir) => {
+      await mkdir(path.join(dir, "src"), { recursive: true });
+      await writeFile(path.join(dir, "src", "seed.txt"), "seed\n");
+      await gitOk(dir, ["init"]);
+      await gitOk(dir, ["config", "user.email", "codex@example.test"]);
+      await gitOk(dir, ["config", "user.name", "Codex Test"]);
+      await gitOk(dir, ["add", "."]);
+      await gitOk(dir, ["commit", "-m", "initial"]);
+      await writeNumberedFiles(dir, "outside", 505);
+      const derivation = await deriveExperimentContract({
+        workDir: dir,
+        config: {
+          benchmarkCommand: "node -e \"console.log('METRIC score=1')\"",
+          checksCommand: 'node -e "process.exit(0)"',
+          commitPaths: ["src"],
+          maxIterations: 3,
+        },
+        entries: [
+          {
+            type: "config",
+            name: "truncated initial dirty acceptance",
+            goal: "Reject incomplete tree authority",
+            metricName: "score",
+            bestDirection: "higher",
+          },
+        ],
+      });
+
+      assert.equal(derivation.status, "invalid");
+      if (derivation.status === "invalid") {
+        assert.ok(
+          derivation.conflicts.some(
+            (conflict) =>
+              conflict.field === "repository.treePolicy" &&
+              /entry limit|incomplete|quarantin/i.test(conflict.message),
+          ),
+        );
+      }
+    },
+  );
+});
+
+test("accepted initial-dirty verification reports entry-limited drift as a typed blocker", async () => {
+  await withNamedTempDir(
+    "experiment-contract",
+    "truncated-initial-dirty-verification",
+    async (dir) => {
+      await mkdir(path.join(dir, "src"), { recursive: true });
+      await writeFile(path.join(dir, "src", "seed.txt"), "seed\n");
+      await gitOk(dir, ["init"]);
+      await gitOk(dir, ["config", "user.email", "codex@example.test"]);
+      await gitOk(dir, ["config", "user.name", "Codex Test"]);
+      await gitOk(dir, ["add", "."]);
+      await gitOk(dir, ["commit", "-m", "initial"]);
+      await mkdir(path.join(dir, "outside"), { recursive: true });
+      await writeFile(path.join(dir, "outside", "baseline.txt"), "dirty baseline\n");
+      const configEntry = {
+        type: "config",
+        name: "truncated initial dirty verification",
+        goal: "Reject incomplete verification authority",
+        metricName: "score",
+        bestDirection: "higher",
+      };
+      const config = {
+        benchmarkCommand: "node -e \"console.log('METRIC score=1')\"",
+        checksCommand: 'node -e "process.exit(0)"',
+        commitPaths: ["src"],
+        maxIterations: 3,
+      };
+      const initial = await deriveExperimentContract({
+        workDir: dir,
+        config,
+        entries: [configEntry],
+      });
+      assert.equal(initial.status, "derived");
+      if (initial.status !== "derived") return;
+      const accepted = {
+        type: "experiment-contract-accepted",
+        schemaVersion: 1,
+        eventId: `experiment-contract-accepted:0:${initial.contract.contractDigest}`,
+        source: "legacy-derivation",
+        segment: 0,
+        timestamp: new Date().toISOString(),
+        contract: initial.contract,
+      };
+      await writeNumberedFiles(dir, "outside/overflow", 505);
+
+      const verification = await deriveExperimentContract({
+        workDir: dir,
+        config,
+        entries: [configEntry, accepted],
+      });
+      assert.equal(verification.status, "invalid");
+      if (verification.status === "invalid") {
+        assert.ok(
+          verification.conflicts.some(
+            (conflict) =>
+              conflict.field === "repository.treePolicy" &&
+              /entry limit|incomplete|quarantin/i.test(conflict.message),
+          ),
+        );
+      }
+    },
+  );
 });
 
 test("editable checks remain supplemental and editable/protected overlap is invalid", async () => {

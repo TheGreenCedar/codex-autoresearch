@@ -734,6 +734,30 @@ test("manual log cannot bypass accepted evaluation authority for keep", async ()
   });
 });
 
+test("entry-limited candidate fingerprints cannot qualify noise or authorize keep", async () => {
+  await withTempDir("contract-keep-truncated-candidate", async (dir) => {
+    await setupKeepPolicyFixture(dir, {
+      baseline: 10,
+      candidate: 12,
+      config: { noiseModel: { kind: "unknown", qualificationRepeats: 1 } },
+    });
+    for (let index = 0; index < 505; index += 1) {
+      await writeFile(
+        path.join(dir, "src", `candidate-${String(index).padStart(3, "0")}.txt`),
+        "x\n",
+      );
+    }
+
+    const next = await runCli(["next", "--cwd", dir]);
+    assert.notEqual(next.code, 0);
+    assert.match(
+      next.stderr,
+      /candidate fingerprint.*entry limit|incomplete candidate fingerprint/i,
+    );
+    await assert.rejects(readFile(path.join(dir, "autoresearch.last-run.json")), /ENOENT/);
+  });
+});
+
 test("next uses the accepted evaluator runner metric limit", async () => {
   await withTempDir("contract-runner-metric-limit", async (dir) => {
     await mkdir(path.join(dir, "src"), { recursive: true });

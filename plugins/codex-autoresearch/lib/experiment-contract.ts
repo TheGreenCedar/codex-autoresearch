@@ -290,6 +290,31 @@ const SESSION_OWNED_DIRS = [
   ".autoresearch-cache",
 ];
 
+class ContractFingerprintAuthorityError extends Error {
+  readonly field: "candidateFingerprint" | "repository.treePolicy";
+
+  constructor(
+    field: "candidateFingerprint" | "repository.treePolicy",
+    label: string,
+    quarantined: UnknownRecord[],
+  ) {
+    const reasons = uniqueStrings(
+      quarantined.map((item) => String(item.reason || "unknown quarantine").replaceAll("_", " ")),
+    );
+    super(
+      `${label} is incomplete and cannot be authoritative: ${reasons.join(", ") || "quarantined snapshot"}.`,
+    );
+    this.name = "ContractFingerprintAuthorityError";
+    this.field = field;
+  }
+}
+
+function contractFingerprintConflict(error: unknown, sources: string[]): ContractConflict | null {
+  return error instanceof ContractFingerprintAuthorityError
+    ? { field: error.field, sources, message: error.message }
+    : null;
+}
+
 export async function deriveExperimentContract({
   workDir,
   args = {},
@@ -358,14 +383,6 @@ export async function deriveExperimentContract({
       message: errorMessage(error),
     });
   }
-  conflicts.push(
-    ...(await legacyRepositoryIdentityConflicts({
-      workDir,
-      config,
-      ledgerConfig: state.config,
-      packetHistory,
-    })),
-  );
   const evaluatorResolution = agreedExecutableCommand(
     "evaluator.command",
     evaluatorCandidates,
@@ -430,6 +447,15 @@ export async function deriveExperimentContract({
       message: `Editable and protected scope overlap: ${overlaps.join(", ")}.`,
     });
   }
+  conflicts.push(
+    ...(await legacyRepositoryIdentityConflicts({
+      workDir,
+      editable,
+      config,
+      ledgerConfig: state.config,
+      packetHistory,
+    })),
+  );
 
   const packetLimitResolution = resolveLegacyPositiveInteger({
     field: "stopPolicy.packets",
@@ -786,7 +812,17 @@ async function acceptedContractConflicts({
 }): Promise<ContractConflict[]> {
   const conflicts = acceptedContractBoundaryConflicts(event);
   if (conflicts.length > 0) return conflicts;
-  const currentRepository = await repositoryContract(workDir, event.contract.scope.editable);
+  let currentRepository: RepositoryContract;
+  try {
+    currentRepository = await repositoryContract(workDir, event.contract.scope.editable);
+  } catch (error) {
+    const fingerprintConflict = contractFingerprintConflict(error, [
+      "accepted-contract",
+      "worktree",
+    ]);
+    if (fingerprintConflict) return [...conflicts, fingerprintConflict];
+    throw error;
+  }
   if (
     currentRepository.repositoryIdentity !== event.contract.repository.repositoryIdentity ||
     currentRepository.worktreeIdentity !== event.contract.repository.worktreeIdentity
@@ -2050,18 +2086,27 @@ function agreedExecutableCommand(
 
 async function legacyRepositoryIdentityConflicts({
   workDir,
+  editable,
   config,
   ledgerConfig,
   packetHistory,
 }: {
   workDir: string;
+  editable: string[];
   config: UnknownRecord;
   ledgerConfig: UnknownRecord;
   packetHistory: UnknownRecord;
 }): Promise<ContractConflict[]> {
   const conflicts: ContractConflict[] = [];
   const currentPath = await fsp.realpath(workDir).catch(() => path.resolve(workDir));
-  const currentRepository = await repositoryContract(workDir);
+  let currentRepository: RepositoryContract;
+  try {
+    currentRepository = await repositoryContract(workDir, editable);
+  } catch (error) {
+    const fingerprintConflict = contractFingerprintConflict(error, ["legacy-boundary", "worktree"]);
+    if (fingerprintConflict) return [fingerprintConflict];
+    throw error;
+  }
   for (const [source, record] of [
     ["config", config],
     ["ledger", ledgerConfig],
@@ -2198,6 +2243,13 @@ async function dirtyStateOutsideEditableFingerprint(
     paths,
     capturedAt: "contract-tree-policy",
   });
+  if (snapshot.quarantined.length > 0) {
+    throw new ContractFingerprintAuthorityError(
+      "repository.treePolicy",
+      "Repository tree-policy fingerprint",
+      snapshot.quarantined,
+    );
+  }
   return digestJson({
     entries,
     surfaceHash: snapshot.surfaceHash,
@@ -2573,20 +2625,17 @@ export async function contractCandidateFingerprintForWorkDir(
     paths: contract.scope.editable,
     capturedAt: "contract-candidate",
   });
-  const blockingQuarantine = snapshot.quarantined.filter(
-    (item) => item.reason !== "protected_benchmark_entry_limit",
-  );
-  if (blockingQuarantine.length > 0) {
-    throw new Error(
-      `Accepted editable scope could not be fingerprinted: ${blockingQuarantine
-        .map((item) => JSON.stringify(item))
-        .join(" ")}`,
+  if (snapshot.quarantined.length > 0) {
+    throw new ContractFingerprintAuthorityError(
+      "candidateFingerprint",
+      "Candidate fingerprint",
+      snapshot.quarantined,
     );
   }
   return digestJson({
     contractDigest: contract.contractDigest,
     editable: contract.scope.editable,
-    truncated: snapshot.quarantined.length > 0,
+    truncated: false,
     surfaceHash: snapshot.surfaceHash,
   });
 }

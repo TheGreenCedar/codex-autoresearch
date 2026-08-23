@@ -567,22 +567,14 @@ test("next refuses runs when dirty fingerprints would be truncated", async () =>
       "--checks-policy",
       "manual",
     ]);
-    assert.equal(next.code, 0, next.stderr);
-    const packet = JSON.parse(next.stdout);
-    assert.equal(packet.ok, false);
-    assert.equal(packet.refused, true);
-    assert.equal(packet.code, "next_blocked_by_truncated_fingerprints");
-    assert.match(
-      JSON.stringify(packet.git.dirtyFileFingerprints),
-      /dirty_file_entry_limit|directory_entry_limit/,
-    );
-    assert.match(packet.nextAction, /Clean or narrow the dirty tree/);
+    assert.notEqual(next.code, 0);
+    assert.match(next.stderr, /repository\.treePolicy.*entry limit/i);
     await assert.rejects(access(path.join(dir, "autoresearch.last-run.json")));
     await assert.rejects(access(path.join(dir, ".git", "autoresearch", "last-run.json")));
   });
 });
 
-test("next allows clean repos with broad scoped commit paths", async () => {
+test("next rejects entry-limited candidate authority even when the repository is clean", async () => {
   await withTempDir("large-clean-scoped-commit-path", async (dir) => {
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
@@ -618,28 +610,9 @@ test("next allows clean repos with broad scoped commit paths", async () => {
       "--checks-policy",
       "manual",
     ]);
-    assert.equal(next.code, 0, next.stderr);
-    const packet = JSON.parse(next.stdout);
-    assert.notEqual(packet.code, "next_blocked_by_truncated_fingerprints");
-    assert.equal(packet.decision.metric, 3);
-    const lastRun = JSON.parse(await readFile(packet.lastRunPath, "utf8"));
-    assert.match(JSON.stringify(lastRun.history.git.fileFingerprints), /scoped_file_entry_limit/);
-    assert.equal(
-      JSON.stringify(lastRun.history.git.dirtyFileFingerprints).includes("truncated"),
-      false,
-    );
-
-    const logged = await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--from-last",
-      "--status",
-      "measure",
-      "--description",
-      "Large clean scoped path measurement",
-    ]);
-    assert.equal(logged.code, 0, logged.stderr);
+    assert.notEqual(next.code, 0);
+    assert.match(next.stderr, /candidate fingerprint.*entry limit/i);
+    await assert.rejects(access(path.join(dir, "autoresearch.last-run.json")));
   });
 });
 
