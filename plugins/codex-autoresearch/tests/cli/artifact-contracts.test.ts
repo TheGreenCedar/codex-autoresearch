@@ -6,6 +6,17 @@ import { quoteForShell } from "../helpers/process.js";
 
 import { runCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
 
+test("skill metadata keeps the default prompt inside the interface mapping", async () => {
+  const metadata = await readFile(
+    path.join(process.cwd(), "skills", "codex-autoresearch", "agents", "openai.yaml"),
+    "utf8",
+  );
+  const interfaceBlock = metadata.match(/^interface:\n((?:^ {2}[^\n]+\n?)*)/m)?.[1] || "";
+
+  assert.match(interfaceBlock, /^ {2}default_prompt:\s+".+"$/m);
+  assert.doesNotMatch(metadata, /^default_prompt:/m);
+});
+
 test("next supports command-file, env-file, and ARTIFACT output contracts", async () => {
   await withTempDir("command-env-artifact", async (dir) => {
     await setupFixture(dir, { name: "artifact packet", metricName: "score", direction: "higher" });

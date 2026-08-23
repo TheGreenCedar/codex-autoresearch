@@ -141,7 +141,7 @@ export function adaptLegacySessionMetadata(
 
 export function classifyFit({ prompt, session }: FitInput): FitDecision {
   const request = parsePromptContract(prompt);
-  const replacementRequested = hasReplacementIntent(prompt);
+  const replacementRequested = hasReplacementIntent(prompt, session);
   const loopRequested = hasExplicitRepeatedMeasuredLoop(prompt);
   const sessionRelation = relationForDirectRequest(prompt, session);
 
@@ -272,18 +272,31 @@ function explicitlyNamesSession(prompt: string, name: string): boolean {
   ).test(prompt);
 }
 
-function hasReplacementIntent(prompt: string): boolean {
-  return /\b(?:replace|abandon)\b|\bstart(?:ing)?\s+(?:a\s+)?new\s+session\b/i.test(prompt);
+function hasReplacementIntent(prompt: string, session: LegacySessionMetadata | null): boolean {
+  if (
+    /\b(?:replace|abandon)\s+(?:the\s+)?(?:active|current)\s+(?:autoresearch\s+)?session\b/i.test(
+      prompt,
+    ) ||
+    /\bstart(?:ing)?\s+(?:a\s+)?new\s+(?:autoresearch\s+)?session\b/i.test(prompt)
+  ) {
+    return true;
+  }
+  const name = session?.name.trim();
+  if (!name) return false;
+  const escapedName = escapeRegExp(name);
+  return new RegExp(
+    `\\b(?:replace|abandon)\\s+(?:the\\s+)?(?:["']${escapedName}["']|(?:autoresearch\\s+)?session\\s+(?:named\\s+)?${escapedName})\\b`,
+    "i",
+  ).test(prompt);
 }
 
 function hasExplicitRepeatedMeasuredLoop(prompt: string): boolean {
-  const repeated = /\b(?:repeat(?:ed)?|iterations?|runs?|packets?)\b/i.test(prompt);
-  const count = /\b\d{1,4}\b(?=[^.\n]{0,64}\b(?:times|iterations?|runs?|packets?)\b)/i.test(prompt);
+  const repeated = /\b(?:repeat(?:ed)?|iterations?|runs|packets?)\b/i.test(prompt);
   const measured =
     /\b(?:measured|measure|benchmark|metric|optimi[sz](?:e|ation)?|improv(?:e|ement))\b/i.test(
       prompt,
     );
-  return repeated && count && measured;
+  return repeated && measured;
 }
 
 interface PromptContract {

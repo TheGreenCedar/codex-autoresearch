@@ -142,6 +142,28 @@ test("prompt-plan asks for the exact missing fields of an explicit incomplete re
   });
 });
 
+test("prompt-plan treats an uncounted repeated measured loop as incomplete", async () => {
+  await withTempDir("fit-first-uncounted-loop", async (dir) => {
+    const payload = await promptPlan(
+      dir,
+      "Run a repeated measured optimization loop for checkout latency.",
+    );
+
+    const fit = payload.fit as Record<string, unknown>;
+    assert.equal(fit.disposition, "needs-user");
+    assert.equal(fit.mode, null);
+    assert.equal(fit.sessionRelation, "none");
+    assert.deepEqual(fit.missing, [
+      "benchmark_command",
+      "metric_name",
+      "direction",
+      "checks_command",
+      "scope",
+      "max_iterations",
+    ]);
+  });
+});
+
 test("prompt-plan reuses only a complete matching legacy session as an in-memory loop candidate", async () => {
   await withTempDir("fit-first-matching", async (dir) => {
     await writeLegacySession(dir);
@@ -224,6 +246,29 @@ test("prompt-plan preserves an unrelated active session until replacement is exp
       (replacementFit.contract as Record<string, unknown>).metricName,
       "requests_per_second",
     );
+    assert.deepEqual(await directorySnapshot(dir), before);
+  });
+});
+
+test("prompt-plan does not treat a code replacement as session replacement", async () => {
+  await withTempDir("fit-first-code-replacement", async (dir) => {
+    await writeLegacySession(dir);
+    const before = await directorySnapshot(dir);
+    const payload = await promptPlan(
+      dir,
+      [
+        "Replace the API parser while running 3 repeated measured optimization iterations.",
+        "Benchmark: node scripts/api-benchmark.mjs",
+        "Metric: requests_per_second, higher is better",
+        "Checks: node --test tests/api.test.mjs",
+        "Scope: src/api",
+      ].join("\n"),
+    );
+
+    const fit = payload.fit as Record<string, unknown>;
+    assert.equal(fit.disposition, "needs-user");
+    assert.equal(fit.sessionRelation, "unrelated");
+    assert.notEqual(fit.sessionRelation, "replacement-requested");
     assert.deepEqual(await directorySnapshot(dir), before);
   });
 });
