@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Autoresearch"
   short_description: "Run measured, resumable improvement loops"
-  default_prompt: "Use $codex-autoresearch to measure a baseline, run scoped experiments, and show me the next safe action."
+default_prompt: "Use $codex-autoresearch to triage this request first. Hand back direct work unless it explicitly asks for a complete, repeated measured loop."

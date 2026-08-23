@@ -194,7 +194,7 @@ test("doctor does not treat routine rollback wording as evidence invalidation", 
   });
 });
 
-test("prompt-plan prefers documented repo benchmark hints over generic cargo recipes", async () => {
+test("prompt-plan returns direct work before reading documented benchmark hints", async () => {
   await withTempDir("prompt-plan-doc-hints", async (dir) => {
     await mkdir(path.join(dir, "scripts"), { recursive: true });
     await mkdir(path.join(dir, "docs"), { recursive: true });
@@ -242,16 +242,12 @@ test("prompt-plan prefers documented repo benchmark hints over generic cargo rec
     ]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
-    assert.match(payload.intent.setupDefaults.benchmarkCommand, /embedding-harness\.mjs/);
-    assert.doesNotMatch(payload.intent.setupDefaults.benchmarkCommand, /cargo\s+(test|bench)/);
-    assert.equal(
-      payload.intent.inferredFrom.discoveredBenchmark.path,
-      "docs/autoresearch-benchmark.md",
-    );
+    assert.equal(payload.fit.disposition, "continue-direct");
+    assert.equal("intent" in payload, false);
   });
 });
 
-test("prompt-plan flags retrieval speed work as needing a quality constraint", async () => {
+test("prompt-plan does not invent a retrieval constraint for direct speed work", async () => {
   await withTempDir("prompt-plan-retrieval-quality", async (dir) => {
     const result = await runCli([
       "prompt-plan",
@@ -264,9 +260,8 @@ test("prompt-plan flags retrieval speed work as needing a quality constraint", a
     const payload = JSON.parse(result.stdout);
     const serialized = JSON.stringify(payload);
 
-    assert.match(serialized, /quality constraint/i);
-    assert.match(serialized, /accuracy|recall|ranking/i);
-    assert.doesNotMatch(serialized, /cargo test.*primary benchmark/i);
+    assert.equal(payload.fit.disposition, "continue-direct");
+    assert.doesNotMatch(serialized, /retrieval_constraint/i);
   });
 });
 

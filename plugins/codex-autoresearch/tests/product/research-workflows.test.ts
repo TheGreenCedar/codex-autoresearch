@@ -195,11 +195,9 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.equal(promptPlan.code, 0, promptPlan.stderr);
     const promptPayload = JSON.parse(promptPlan.stdout);
     assert.equal(promptPayload.kind, "codex-autoresearch-prompt-plan");
-    assert.equal(promptPayload.intent.metric.name, "seconds");
-    assert.match(promptPayload.intent.safeInterpretation, /preserving test coverage/);
-    assert.match(promptPayload.intent.nextAction, /Run setup, doctor, then one packet/);
-    assert.doesNotMatch(promptPayload.intent.nextAction, /live dashboard, then one packet/i);
-    assert.match(promptPayload.setup.nextCommand, /--files-in-scope/);
+    assert.equal(promptPayload.fit.disposition, "continue-direct");
+    assert.equal("intent" in promptPayload, false);
+    assert.equal("setup" in promptPayload, false);
 
     const compositePromptPlan = await runCli([
       "prompt-plan",
@@ -210,8 +208,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(compositePromptPlan.code, 0, compositePromptPlan.stderr);
     const compositePayload = JSON.parse(compositePromptPlan.stdout);
-    assert.equal(compositePayload.intent.metric.name, "score");
-    assert.equal(compositePayload.intent.metric.direction, "higher");
+    assert.equal(compositePayload.fit.disposition, "continue-direct");
 
     await writeFile(
       path.join(dir, "Cargo.toml"),
@@ -235,10 +232,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(cargoPromptPlan.code, 0, cargoPromptPlan.stderr);
     const cargoPayload = JSON.parse(cargoPromptPlan.stdout);
-    assert.equal(cargoPayload.intent.inferredFrom.discoveredBenchmark.path, "Cargo.toml#bench");
-    assert.equal(cargoPayload.intent.setupDefaults.benchmarkCommand, "");
-    assert.ok(cargoPayload.intent.missing.includes("benchmark_command"));
-    assert.match(cargoPayload.intent.setupDefaults.constraints.join("\n"), /wrapper/);
+    assert.equal(cargoPayload.fit.disposition, "continue-direct");
     await rm(path.join(dir, "Cargo.toml"), { force: true });
 
     await mkdir(path.join(dir, "scripts"), { recursive: true });
@@ -255,11 +249,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(domainPromptPlan.code, 0, domainPromptPlan.stderr);
     const domainPayload = JSON.parse(domainPromptPlan.stdout);
-    assert.equal(domainPayload.intent.metric.name, "semantic_score");
-    assert.match(
-      domainPayload.intent.setupDefaults.benchmarkCommand,
-      /scripts\/semantic-domain-benchmark\.mjs/,
-    );
+    assert.equal(domainPayload.fit.disposition, "continue-direct");
 
     await writeFile(
       path.join(dir, "scripts", "autoresearch-indexer-embedder-pipeline.mjs"),
@@ -274,13 +264,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(pipelinePromptPlan.code, 0, pipelinePromptPlan.stderr);
     const pipelinePayload = JSON.parse(pipelinePromptPlan.stdout);
-    assert.equal(pipelinePayload.intent.metric.name, "pipeline_score");
-    assert.equal(pipelinePayload.intent.metric.direction, "higher");
-    assert.match(
-      pipelinePayload.intent.setupDefaults.benchmarkCommand,
-      /scripts\/autoresearch-indexer-embedder-pipeline\.mjs/,
-    );
-    assert.match(pipelinePayload.intent.setupDefaults.constraints.join("\n"), /primary score/);
+    assert.equal(pipelinePayload.fit.disposition, "continue-direct");
 
     await writeFile(
       path.join(dir, "scripts", "cross-repo-promotion-benchmark.mjs"),
@@ -295,11 +279,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(frictionPromptPlan.code, 0, frictionPromptPlan.stderr);
     const frictionPayload = JSON.parse(frictionPromptPlan.stdout);
-    assert.equal(frictionPayload.intent.loopKind, "quality-gap");
-    assert.equal(frictionPayload.intent.metric.name, "quality_gap");
-    assert.equal(frictionPayload.intent.inferredFrom.discoveredBenchmark, null);
-    assert.equal(frictionPayload.intent.setupDefaults.benchmarkCommand, "");
-    assert.equal(frictionPayload.intent.setupDefaults.recipe, "quality-gap");
+    assert.equal(frictionPayload.fit.disposition, "continue-direct");
 
     for (const qualitativePrompt of [
       "Deepen security evidence hygiene around redaction, token handling, and stack trace leaks.",
@@ -315,10 +295,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
       ]);
       assert.equal(qualitativePlan.code, 0, qualitativePlan.stderr);
       const qualitativePayload = JSON.parse(qualitativePlan.stdout);
-      assert.equal(qualitativePayload.intent.loopKind, "quality-gap");
-      assert.equal(qualitativePayload.intent.metric.name, "quality_gap");
-      assert.equal(qualitativePayload.intent.inferredFrom.discoveredBenchmark, null);
-      assert.equal(qualitativePayload.intent.setupDefaults.recipe, "quality-gap");
+      assert.equal(qualitativePayload.fit.disposition, "continue-direct");
     }
 
     const explicitMeasuredPlan = await runCli([
@@ -335,9 +312,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(explicitMeasuredPlan.code, 0, explicitMeasuredPlan.stderr);
     const explicitMeasuredPayload = JSON.parse(explicitMeasuredPlan.stdout);
-    assert.equal(explicitMeasuredPayload.intent.loopKind, "measured-optimization");
-    assert.equal(explicitMeasuredPayload.intent.metric.name, "seconds");
-    assert.match(explicitMeasuredPayload.intent.setupDefaults.benchmarkCommand, /METRIC seconds=2/);
+    assert.equal(explicitMeasuredPayload.fit.disposition, "continue-direct");
 
     const broadPromptPlan = await runCli([
       "prompt-plan",
@@ -348,8 +323,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(broadPromptPlan.code, 0, broadPromptPlan.stderr);
     const broadPayload = JSON.parse(broadPromptPlan.stdout);
-    assert.equal(broadPayload.intent.loopKind, "quality-gap");
-    assert.equal(broadPayload.intent.setupDefaults.maxIterations, 100);
+    assert.equal(broadPayload.fit.disposition, "continue-direct");
 
     const hooks = await runCli(["doctor", "hooks", "--cwd", dir]);
     assert.equal(hooks.code, 0, hooks.stderr);
@@ -417,9 +391,8 @@ test("CLI exposes onboarding, prompt planning, benchmark probes, recommend-next,
       "Use $Codex Autoresearch to figure out why p99 latency is so much higher than p90. I suspect: DNS lookup, event loop throttling, memory spike, CPU spike. Use @experiments.md.",
     ]);
     assert.equal(promptPlan.code, 0, promptPlan.stderr);
-    assert.match(promptPlan.stdout, /p99_p90_ratio/);
-    assert.match(promptPlan.stdout, /DNS lookup/);
-    assert.match(promptPlan.stdout, /experiments\.md/);
+    assert.match(promptPlan.stdout, /"disposition": "continue-direct"/);
+    assert.doesNotMatch(promptPlan.stdout, /p99_p90_ratio/);
 
     const lint = await runCli([
       "benchmark-lint",

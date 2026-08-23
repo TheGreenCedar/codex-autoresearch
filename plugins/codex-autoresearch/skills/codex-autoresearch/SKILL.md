@@ -5,24 +5,38 @@ description: Run or resume a measured improvement loop in a local project. Use f
 
 # Codex Autoresearch
 
-Turn an improvement request into a measured, resumable loop. Report the metric, decision, evidence, next action, and real publication state. Do not replace them with a generic claim that the project is "better."
+Route the request before doing repository discovery, default inference, setup, or session mutation. Most requests are direct work; use an Autoresearch loop only for an explicit, complete repeated measurement contract.
 
 ```text
-setup -> doctor -> next -> log -> state -> finalize-preview
+fit triage -> direct handback | clarification | in-memory loop candidate
 ```
 
 Use this as the only Codex-facing Autoresearch skill. Do not route to retired subskills, slash commands, or MCP surfaces.
 
-## Establish the working truth
+## Triage fit first
 
-1. Identify the repository or child package that owns the work.
+Classify the prompt with `prompt-plan` before scanning a repository or proposing setup:
+
+```bash
+node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt "<request>"
+```
+
+1. Return direct work for architecture, documentation, UX, product study, open-ended research, generic bugs, quality, delight, or improvement language unless the user explicitly requests a repeated measured loop.
+2. For direct work, hand back the evidence capsule: outcome, main uncertainty, cheapest discriminating evidence, direct action, verification, and claim boundary. Do not create a session or infer a benchmark, metric, scope, retrieval constraint, repository files, or session name.
+3. For an incomplete loop request, ask only for its printed missing fields. Do not infer defaults from the repository.
+4. Treat an existing session as matching only with explicit, complete compatibility. Shared words are not a match. Leave unrelated sessions untouched; replacement requires an explicit replace, abandon, or start-new-session instruction.
+5. A `run-loop` result is only an in-memory contract candidate in this release. It neither accepts the contract nor authorizes packet execution.
+
+## Establish the working truth for a selected loop
+
+1. Identify the repository or child package that owns the selected loop.
 2. Run `git status --short --branch`; preserve unrelated changes.
 3. When changing Autoresearch itself, use the checkout in this repository:
    - wrapper root: `node plugins/codex-autoresearch/scripts/autoresearch.mjs ...`
    - package root: `node scripts/autoresearch.mjs ...`
 4. Treat source and installed-plugin behavior as different until their version and built-entrypoint fingerprint match.
 
-## Start or resume
+## Start or resume after contract acceptance
 
 For a new session:
 

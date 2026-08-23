@@ -174,23 +174,21 @@ test("external catalog recipes require trust and record provenance", async () =>
     assert.equal(config.recipeCatalogProvenance.source, "recipes.json");
     assert.match(config.recipeCatalogProvenance.recipeHash, /^[a-f0-9]{64}$/);
 
-    const promptPlan = await runCli([
-      "prompt-plan",
+    const plan = await runCli([
+      "setup-plan",
       "--cwd",
       dir,
-      "--prompt",
-      "Optimize the external speed recipe.",
       "--recipe",
       "external-speed",
       "--catalog",
       catalogPath,
       "--trust-catalog",
     ]);
-    assert.equal(promptPlan.code, 0, promptPlan.stderr);
-    const promptPayload = JSON.parse(promptPlan.stdout);
-    assert.equal(promptPayload.setup.recommendedRecipe.id, "external-speed");
-    assert.match(promptPayload.setup.nextCommand, /--catalog/);
-    assert.match(promptPayload.setup.nextCommand, /--trust-catalog/);
+    assert.equal(plan.code, 0, plan.stderr);
+    const planPayload = JSON.parse(plan.stdout);
+    assert.equal(planPayload.recommendedRecipe.id, "external-speed");
+    assert.match(planPayload.nextCommand, /--catalog/);
+    assert.match(planPayload.nextCommand, /--trust-catalog/);
 
     catalog.recipes[0].benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
     await writeFile(catalogPath, JSON.stringify(catalog, null, 2), "utf8");

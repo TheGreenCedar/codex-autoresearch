@@ -246,15 +246,7 @@ export const commandTable = [
     category: "setup",
     audience: "default",
     handler: "promptPlan",
-    outputFields: [
-      "ok",
-      "workDir",
-      "intent",
-      "setup",
-      "missingEssentials",
-      "nextAction",
-      "nextStep",
-    ],
+    outputFields: ["ok", "workDir", "fit", "directEvidence", "contractCandidate", "nextAction"],
     defaultHelp: true,
     help: ["node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>"],
     cliOptions: [
@@ -262,7 +254,7 @@ export const commandTable = [
       { name: "compact", key: "compact", kind: "boolean" },
     ],
     description:
-      "Convert a natural-language Autoresearch request into inferred loop intent, missing essentials, setup defaults, and first safe commands.",
+      "Classify a natural-language request before discovery, then return direct evidence, clarification, or an in-memory loop candidate.",
     inputSchema: {
       type: "object",
       properties: {
