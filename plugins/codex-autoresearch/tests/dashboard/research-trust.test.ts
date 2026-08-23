@@ -458,7 +458,7 @@ test("dashboard view model marks perfect quality metrics suspicious without fres
   );
 });
 
-test("dashboard view model treats perfect secondary metrics as suspicious", () => {
+test("dashboard view model does not infer perfect semantics from metric names", () => {
   const viewModel = buildDashboardViewModel({
     state: {
       config: {
@@ -488,10 +488,10 @@ test("dashboard view model treats perfect secondary metrics as suspicious", () =
   });
 
   const reasons = viewModel.researchTruth.suspiciousReasons.join("\n");
-  assert.match(reasons, /mrr_at_10/);
-  assert.match(reasons, /hit_at_1/);
-  assert.match(reasons, /quality_component/);
-  assert.match(reasons, /promotion-grade/);
+  assert.doesNotMatch(reasons, /mrr_at_10/);
+  assert.doesNotMatch(reasons, /hit_at_1/);
+  assert.doesNotMatch(reasons, /quality_component/);
+  assert.doesNotMatch(reasons, /perfect/i);
 });
 
 test("dashboard view model clears suspicious-perfect reasons when breadth and promotion evidence are present", () => {

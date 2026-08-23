@@ -1,6 +1,8 @@
 import { execFile, spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
+import type { ExecutableCommand } from "./experiment-contract.js";
+
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 const OUTPUT_MAX_LINES = 20;
@@ -69,7 +71,9 @@ export interface MetricParseResult {
 export interface ProcessRunOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  envMode?: "inherit" | "minimal";
   maxOutputBytes?: number;
+  onProgress?: (event: { observedAt: string; output: string }) => void;
   terminateProcessTree?: ProcessTreeTerminator;
   terminationTimeoutMs?: number;
   timeoutSeconds?: number;
@@ -433,8 +437,10 @@ export async function runProcess(
   {
     cwd,
     env: extraEnv,
+    envMode = "inherit",
     timeoutSeconds = 600,
     maxOutputBytes = PROCESS_OUTPUT_CAPTURE_BYTES,
+    onProgress,
     terminateProcessTree: terminate = terminateProcessTree,
     terminationTimeoutMs,
   }: ProcessRunOptions = {},
@@ -447,7 +453,12 @@ export async function runProcess(
     const child = spawn(command, argv, {
       cwd,
       detached: process.platform !== "win32",
-      env: extraEnv ? { ...process.env, ...extraEnv } : undefined,
+      env:
+        envMode === "minimal"
+          ? { ...minimalProcessEnvironment(), ...extraEnv }
+          : extraEnv
+            ? { ...process.env, ...extraEnv }
+            : undefined,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -466,6 +477,7 @@ export async function runProcess(
     const appendOutput = (target: "stdout" | "stderr", text: string) => {
       if (settled) return;
       lastOutputAt = new Date().toISOString();
+      onProgress?.({ observedAt: lastOutputAt, output: text });
       metricCollector.append(text);
       let value = target === "stdout" ? stdout : stderr;
       let truncated = target === "stdout" ? stdoutTruncated : stderrTruncated;
@@ -543,6 +555,58 @@ export async function runProcess(
       finish({ exitCode: code, stdout, stderr });
     });
   });
+}
+
+export async function runExecutableCommand(
+  command: ExecutableCommand,
+  cwd: string,
+  timeoutSeconds = 600,
+  options: ShellRunOptions = {},
+): Promise<ShellRunResult> {
+  const processCommand =
+    command.kind === "argv" ? command.executable : command.shell === "bash" ? "bash" : "powershell";
+  const processArgs =
+    command.kind === "argv"
+      ? command.args
+      : command.shell === "bash"
+        ? ["-c", command.script]
+        : ["-NoProfile", "-NonInteractive", "-Command", command.script];
+  const result = await runProcess(processCommand, processArgs, {
+    cwd,
+    env: options.env,
+    envMode: options.envMode,
+    maxOutputBytes: options.maxFullOutputBytes ?? FULL_OUTPUT_CAPTURE_BYTES,
+    onProgress: options.onProgress,
+    terminateProcessTree: options.terminateProcessTree,
+    terminationTimeoutMs: options.terminationTimeoutMs,
+    timeoutSeconds,
+  });
+  const combinedOutput = result.combinedOutput;
+  return {
+    command: command.kind === "shell" ? command.script : result.commandDisplay,
+    durationSeconds: result.durationSeconds,
+    exitCode: result.exitCode,
+    finishedAt: result.finishedAt,
+    fullOutput: combinedOutput,
+    fullOutputTruncated: result.outputTruncated,
+    lastOutputAt: result.lastOutputAt,
+    metricOutput: "",
+    metricOutputTruncated: false,
+    output: tailText(
+      combinedOutput,
+      Number.MAX_SAFE_INTEGER,
+      options.maxOutputBytes ?? OUTPUT_CAPTURE_BYTES,
+    ),
+    outputTruncated:
+      result.outputTruncated ||
+      Buffer.byteLength(combinedOutput, "utf8") > (options.maxOutputBytes ?? OUTPUT_CAPTURE_BYTES),
+    parsedMetrics: result.parsedMetrics,
+    retainedMetricOutput: "",
+    startedAt: result.startedAt,
+    termination: result.termination,
+    terminationFailed: result.terminationFailed,
+    timedOut: result.timedOut,
+  };
 }
 
 function appendBoundedOutput(current: string, text: string, maxBytes: number) {

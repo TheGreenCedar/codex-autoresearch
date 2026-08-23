@@ -1050,7 +1050,6 @@ export function buildResearchTruth({
     ...stringList(source.suspiciousReasons),
     ...stringList(source.suspicious_reasons),
     ...perfectMetricSuspicion({
-      state,
       settings,
       current,
       qualityGap,
@@ -1713,7 +1712,6 @@ function stringList(value: unknown): string[] {
 }
 
 function perfectMetricSuspicion({
-  state,
   settings = {},
   current = [],
   qualityGap = null,
@@ -1724,8 +1722,7 @@ function perfectMetricSuspicion({
   promotionGrade,
 }: LooseObject): string[] {
   const latest = current.at(-1) || null;
-  const perfectMetricNames = perfectQualityMetricNames({ state, latest });
-  if (!isPerfectMetricState({ state, qualityGap }) && !perfectMetricNames.length) return [];
+  if (!isExplicitQualityGapCompletion(qualityGap)) return [];
   const reasons = [];
   const hasFreshness = Boolean(
     settings.researchTruth?.fresh ||
@@ -1738,55 +1735,14 @@ function perfectMetricSuspicion({
   const hasBreadth = [queryCount, holdoutCount, adversarialCount, externalRepoCount].some(
     (value) => Number.isFinite(value) && value > 0,
   );
-  if (perfectMetricNames.length) {
-    reasons.push(`Perfect secondary metrics need corroboration: ${perfectMetricNames.join(", ")}.`);
-  }
   if (!hasFreshness) reasons.push("Perfect metrics have no freshness evidence.");
   if (!hasBreadth) reasons.push("Perfect metrics have no breadth evidence.");
   if (promotionGrade !== true) reasons.push("Perfect metrics are not marked promotion-grade.");
   return reasons;
 }
 
-function perfectQualityMetricNames({
-  state,
-  latest,
-}: {
-  state: LooseObject;
-  latest: RunLike | null;
-}): string[] {
-  const names = new Set<string>();
-  const addIfPerfect = (name: unknown, value: unknown) => {
-    if (!/mrr|hit|accuracy|quality|score/i.test(String(name || ""))) return;
-    if (/promotion|query|holdout|adversarial|external/i.test(String(name || ""))) return;
-    if (finiteMetric(value) === 1) names.add(String(name));
-  };
-  if (state?.config?.bestDirection === "higher") {
-    addIfPerfect(state?.config?.metricName, state?.best);
-  }
-  for (const [name, value] of Object.entries(latest?.metrics || {})) {
-    addIfPerfect(name, value);
-  }
-  return [...names].sort((a, b) => a.localeCompare(b));
-}
-
-function isPerfectMetricState({
-  state,
-  qualityGap,
-}: {
-  state: LooseObject;
-  qualityGap: LooseObject | null;
-}): boolean {
-  const best = finiteMetric(state?.best);
-  const metricName = String(state?.config?.metricName || "").toLowerCase();
-  if (qualityGap && Number(qualityGap.open) === 0 && Number(qualityGap.total) > 0) return true;
-  if (metricName === "quality_gap" && best === 0) return true;
-  if (
-    state?.config?.bestDirection === "lower" &&
-    best === 0 &&
-    /gap|error|fail|defect|issue/.test(metricName)
-  )
-    return true;
-  return false;
+function isExplicitQualityGapCompletion(qualityGap: LooseObject | null): boolean {
+  return Boolean(qualityGap && Number(qualityGap.open) === 0 && Number(qualityGap.total) > 0);
 }
 
 function evidenceChip({

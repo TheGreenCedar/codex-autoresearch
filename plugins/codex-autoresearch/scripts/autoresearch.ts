@@ -74,6 +74,13 @@ import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js"
 import { buildDriftReport, runtimeProvenance } from "../lib/drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
 import {
+  acceptedExperimentContractForMutation,
+  appendExperimentContractAcceptance,
+  contractDerivationError,
+  deriveExperimentContract,
+  executionCommandText,
+} from "../lib/experiment-contract.js";
+import {
   createActiveProgressWriter,
   deleteActiveProgressSnapshotIfSafe,
   readActiveProgressSnapshot,
@@ -110,7 +117,6 @@ import { isPathInside } from "../lib/path-containment.js";
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
 import { goalCompletionUnresolvedBlockers } from "../lib/goal-frame.js";
-import { fixedControlBlockForCommand } from "../lib/fixed-control.js";
 import { runWithRequiredCleanup } from "../lib/required-cleanup.js";
 import { normalizeRelativePaths } from "../lib/literal-paths.js";
 import {
@@ -2439,16 +2445,6 @@ async function writeSessionFile(filePath: string, content: any, options: LooseOb
   return { path: filePath, action: exists ? "overwritten" : "created" };
 }
 
-function fixedControlBlockedDoctorSummary(doctor: LooseObject): LooseObject {
-  return redactEvidenceObject({
-    ok: doctor.ok === true,
-    workDir: doctor.workDir || "",
-    issues: Array.isArray(doctor.issues) ? doctor.issues.slice(0, 10) : [],
-    warnings: Array.isArray(doctor.warnings) ? doctor.warnings.slice(0, 10) : [],
-    nextAction: typeof doctor.nextAction === "string" ? doctor.nextAction : "",
-  }) as LooseObject;
-}
-
 function mergeRuntimeConfig(sessionCwd: any, updates: any) {
   const configPath = runtimeConfigPath(sessionCwd);
   const existing = readConfig(sessionCwd);
@@ -4304,7 +4300,7 @@ async function doctorHooks(args: LooseObject = {}): Promise<LooseObject> {
 }
 
 async function newSegment(args: any) {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
   const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
   const confirmed = boolOption(args.confirm ?? args.yes, false);
@@ -4334,8 +4330,12 @@ async function newSegment(args: any) {
     segmentReason: reason,
     timestamp: new Date().toISOString(),
   };
-  const benchmarkCommand = String(args.benchmark_command || args.benchmarkCommand || "").trim();
-  const checksCommand = String(args.checks_command || args.checksCommand || "").trim();
+  const benchmarkCommand = String(
+    args.benchmark_command || args.benchmarkCommand || config.benchmarkCommand || "",
+  ).trim();
+  const checksCommand = String(
+    args.checks_command || args.checksCommand || config.checksCommand || "",
+  ).trim();
   if (benchmarkCommand || checksCommand) {
     entry.benchmarkContractAccepted = true;
     entry.benchmarkContractScope = "segment";
@@ -4350,12 +4350,36 @@ async function newSegment(args: any) {
     bestDirection: nextDirection,
   });
   if (metricSemanticsWarning) entry.metricSemanticsWarning = metricSemanticsWarning;
+  const prospectiveEntries = [...loadSessionRecords(workDir), entry];
+  const prospectiveState = stateFromSessionRecords(workDir, prospectiveEntries);
+  const contractDerivation = await deriveExperimentContract({
+    workDir,
+    args,
+    config,
+    entries: prospectiveEntries,
+    ignoreAccepted: true,
+  });
+  if (contractDerivation.status === "invalid") {
+    throw contractDerivationError(contractDerivation);
+  }
+  if (contractDerivation.status !== "derived") {
+    throw new Error("New-segment contract derivation unexpectedly resolved an active contract.");
+  }
   if (!dryRun && !confirmed) {
     throw new Error(
       "new-segment requires --dry-run or --yes because it appends to autoresearch.jsonl.",
     );
   }
-  if (!dryRun) appendJsonl(workDir, entry);
+  const contractEvent = dryRun
+    ? null
+    : (() => {
+        appendJsonl(workDir, entry);
+        return appendExperimentContractAcceptance(
+          workDir,
+          contractDerivation,
+          prospectiveState.segment,
+        );
+      })();
   return {
     ok: true,
     workDir,
@@ -4365,6 +4389,13 @@ async function newSegment(args: any) {
     entry,
     metricSemanticsWarning,
     benchmarkContract: entry.benchmarkContract || null,
+    experimentContract: {
+      status: contractEvent ? "accepted" : "derived",
+      contract: contractDerivation.contract,
+      event: contractEvent,
+      missing: [],
+      conflicts: [],
+    },
     nextAction: dryRun
       ? "Review the segment entry, then rerun with --yes to append it."
       : "Run and log a fresh baseline or next packet for the new segment.",
@@ -4676,14 +4707,20 @@ async function realPathOrResolved(target: string): Promise<string> {
 
 async function nextExperiment(args: any) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  let ownsActiveProgress = false;
   return await runWithRequiredCleanup(
-    () => nextExperimentWithActiveProgress(args),
-    () => deleteActiveProgressSnapshotIfSafe(workDir),
+    () =>
+      nextExperimentWithActiveProgress(args, () => {
+        ownsActiveProgress = true;
+      }),
+    async () => {
+      if (ownsActiveProgress) await deleteActiveProgressSnapshotIfSafe(workDir);
+    },
     "Failed to remove active progress snapshot",
   );
 }
 
-async function nextExperimentWithActiveProgress(args: any) {
+async function nextExperimentWithActiveProgress(args: any, markProgressOwned: () => void) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const retainedProgress = await readActiveProgressSnapshot(workDir, config);
   if (retainedProgress?.exitState === "termination_failed") {
@@ -4721,13 +4758,34 @@ async function nextExperimentWithActiveProgress(args: any) {
       }),
     };
   }
-  await writeNextPreflightProgressSnapshot(workDir, args, config);
-  const doctor = await doctorSession({
-    ...args,
-    check_benchmark: false,
-    checkBenchmark: false,
-    jsonFull: true,
+  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const contractAuthority = await acceptedExperimentContractForMutation({
+    workDir,
+    args,
+    config,
+    packet: lastRun,
   });
+  const acceptedEvaluatorCommand = executionCommandText(
+    contractAuthority.contract.evaluator.execution.command,
+  );
+  const acceptedChecksCommand = contractAuthority.contract.checks
+    .map((check) => executionCommandText(check.execution.command))
+    .join(" && ");
+  const authorityArgs = acceptedContractAuthorityArgs(
+    args,
+    acceptedEvaluatorCommand,
+    acceptedChecksCommand,
+  );
+  markProgressOwned();
+  await writeNextPreflightProgressSnapshot(workDir, authorityArgs, config);
+  const doctor = acceptedContractDoctorView(
+    await doctorSession({
+      ...authorityArgs,
+      check_benchmark: false,
+      checkBenchmark: false,
+      jsonFull: true,
+    }),
+  );
   if (!doctor.ok) {
     const loopContract = doctor.resolvedDecision?.loopContract || doctor.loopContract || {};
     const blockingAction = blockingLoopAction(
@@ -4797,8 +4855,7 @@ async function nextExperimentWithActiveProgress(args: any) {
       ),
     };
   }
-  const stateBeforeRun = currentState(workDir);
-  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const stateBeforeRun = acceptedContractStateView(currentState(workDir));
   const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun, config) : null;
   const preflightEnvelope = withCanonicalActionCommand(
     buildDecisionEnvelope({
@@ -4855,38 +4912,6 @@ async function nextExperimentWithActiveProgress(args: any) {
           blockingAction?.reason ||
           capsule?.nextExperiment ||
           "Loop contract blocked the next packet.",
-      }),
-    };
-  }
-  const fixedControlCommandSource = await resolveBenchmarkCommandSource(args, workDir, {
-    fallbackToDefault: true,
-    requireCommand: true,
-    config,
-  });
-  const fixedControlBlock = fixedControlBlockForCommand(
-    fixedControlCommandSource.command,
-    config,
-    args,
-  );
-  if (fixedControlBlock) {
-    const nextAction =
-      fixedControlBlock.message ||
-      "A fixed control artifact is active; reuse it instead of rerunning the control command.";
-    return {
-      ok: false,
-      workDir,
-      refused: true,
-      code: fixedControlBlock.code,
-      doctor: fixedControlBlockedDoctorSummary(doctor),
-      run: null as LooseObject | null,
-      decision: null as LooseObject | null,
-      fixedControlViolation: fixedControlBlock.fixedControlViolation,
-      nextAction,
-      clearingCondition:
-        "Reuse the fixed control artifact, update the fixedControl config when an invalidator changes, or pass --allow-fixed-control-rerun explicitly.",
-      commandHint: fixedControlBlock.commandHint || continuationCommands(workDir).state,
-      continuation: loopContinuation(workDir, stateBeforeRun, config, "blocked", {
-        stopReason: nextAction,
       }),
     };
   }
@@ -5003,6 +5028,67 @@ async function nextExperimentWithActiveProgress(args: any) {
   };
   await writeLastRunPacket(run.workDir, packet);
   return boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet;
+}
+
+function acceptedContractAuthorityArgs(
+  args: LooseObject,
+  evaluatorCommand: string,
+  checksCommand: string,
+): LooseObject {
+  const {
+    command_file: _commandFileSnake,
+    commandFile: _commandFileCamel,
+    benchmark_command: _benchmarkCommandSnake,
+    benchmarkCommand: _benchmarkCommandCamel,
+    ...rest
+  } = args;
+  return {
+    ...rest,
+    _: [String(Array.isArray(args._) ? args._[0] || "next" : "next")],
+    command: evaluatorCommand,
+    checks_command: checksCommand,
+    checksCommand,
+  };
+}
+
+function acceptedContractDoctorView(doctor: LooseObject): LooseObject {
+  const legacyMessages = new Set(
+    (Array.isArray(doctor.warningDetails) ? doctor.warningDetails : [])
+      .filter((detail: LooseObject) => detail?.code === "benchmark_contract_changed")
+      .map((detail: LooseObject) => String(detail.message || ""))
+      .filter(Boolean),
+  );
+  const issues = (Array.isArray(doctor.issues) ? doctor.issues : []).filter(
+    (issue: unknown) => !legacyMessages.has(String(issue)),
+  );
+  const warnings = (Array.isArray(doctor.warnings) ? doctor.warnings : []).filter(
+    (warning: unknown) => !legacyMessages.has(String(warning)),
+  );
+  const warningDetails = (Array.isArray(doctor.warningDetails) ? doctor.warningDetails : []).filter(
+    (detail: LooseObject) => detail?.code !== "benchmark_contract_changed",
+  );
+  return {
+    ...doctor,
+    ok: issues.length === 0,
+    issues,
+    warnings,
+    warningDetails,
+  };
+}
+
+function acceptedContractStateView(state: LooseObject): LooseObject {
+  const warningDetails = (Array.isArray(state.warningDetails) ? state.warningDetails : []).filter(
+    (detail: LooseObject) => detail?.code !== "benchmark_contract_changed",
+  );
+  const sourceCleanliness = compactRecord(state.sourceCleanliness);
+  const warningCodes = (
+    Array.isArray(sourceCleanliness?.warningCodes) ? sourceCleanliness.warningCodes : []
+  ).filter((code: unknown) => code !== "benchmark_contract_changed");
+  return {
+    ...state,
+    warningDetails,
+    ...(sourceCleanliness ? { sourceCleanliness: { ...sourceCleanliness, warningCodes } } : {}),
+  };
 }
 
 async function writeNextPreflightProgressSnapshot(

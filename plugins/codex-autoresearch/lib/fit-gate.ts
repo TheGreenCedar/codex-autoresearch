@@ -8,7 +8,7 @@ export type ContractField =
   | "scope"
   | "max_iterations";
 
-export interface ExperimentContract {
+export interface ExperimentContractCandidate {
   goal: string;
   benchmarkCommand: string;
   metricName: string;
@@ -19,6 +19,9 @@ export interface ExperimentContract {
   commitPaths?: string[];
   maxIterations: number;
 }
+
+/** @deprecated Use ExperimentContractCandidate for fit-gate output. */
+export type ExperimentContract = ExperimentContractCandidate;
 
 export interface ContractConflict {
   field: ContractField;
@@ -62,7 +65,7 @@ export type FitDecision =
       disposition: "run-loop";
       mode: "full-loop";
       sessionRelation: "matching" | "replacement-requested";
-      contract: ExperimentContract;
+      contract: ExperimentContractCandidate;
       nextAction: LoopAction;
     }
   | {
@@ -78,7 +81,9 @@ export type FitDecision =
 export interface LegacySessionMetadata {
   status: "complete" | "incomplete";
   name: string;
-  contract: (Omit<ExperimentContract, "maxIterations"> & { maxIterations?: number }) | null;
+  contract:
+    | (Omit<ExperimentContractCandidate, "maxIterations"> & { maxIterations?: number })
+    | null;
 }
 
 export interface FitInput {
@@ -129,7 +134,7 @@ export function adaptLegacySessionMetadata(
           benchmarkCommand,
           metricName,
           metricUnit,
-          direction: direction as ExperimentContract["direction"],
+          direction: direction as ExperimentContractCandidate["direction"],
           checksCommand,
           filesInScope,
           ...(commitPaths.length ? { commitPaths } : {}),
@@ -197,7 +202,7 @@ function directDecision(sessionRelation: "none" | "matching" | "unrelated"): Fit
 
 function loopDecision(
   sessionRelation: "matching" | "replacement-requested",
-  contract: ExperimentContract,
+  contract: ExperimentContractCandidate,
 ): FitDecision {
   return {
     disposition: "run-loop",
@@ -353,7 +358,7 @@ function isComplete(contract: PromptContract): boolean {
   return missingFields(contract).length === 0;
 }
 
-function completeContract(contract: PromptContract): ExperimentContract {
+function completeContract(contract: PromptContract): ExperimentContractCandidate {
   if (!isComplete(contract) || !contract.direction || !contract.maxIterations) {
     throw new Error("Cannot build a complete contract from incomplete prompt fields.");
   }
@@ -372,7 +377,7 @@ function completeContract(contract: PromptContract): ExperimentContract {
 function completeLegacyContract(
   contract: LegacySessionMetadata["contract"],
   maxIterations: number | null,
-): ExperimentContract | null {
+): ExperimentContractCandidate | null {
   if (!contract) return null;
   const iterations = maxIterations ?? contract.maxIterations;
   if (!iterations) return null;

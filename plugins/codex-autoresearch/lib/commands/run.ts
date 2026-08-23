@@ -1,16 +1,20 @@
+import path from "node:path";
+
 import {
   createActiveProgressWriter,
   readActiveProgressSnapshot,
 } from "../active-progress-store.js";
-import {
-  benchmarkCommandFromArgs,
-  normalizePowerShellEscapedCommandArg,
-} from "../benchmark/command-input.js";
 import { benchmarkContractSnapshot } from "../benchmark/contract-snapshot.js";
-import { checksPolicyFromArgs, defaultChecksCommand, shouldRunChecks } from "../check-policy.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../command-execution-boundary.js";
 import { numberOption } from "../cli/args.js";
 import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
+import {
+  acceptedExperimentContractForMutation,
+  contractStopStatus,
+  executionCommandText,
+  materializeExecutionEnvironment,
+  type ExecutionSpec,
+} from "../experiment-contract.js";
 import {
   currentState,
   finiteMetric,
@@ -24,10 +28,7 @@ import {
   assertRunResourcePreflight,
   buildProcessLifecycleRecord,
 } from "../process-governor.js";
-import {
-  protectedBenchmarkGuardError,
-  protectedBenchmarkGuardForWorkDir,
-} from "../benchmark/contract-guards.js";
+import { protectedBenchmarkGuardForWorkDir } from "../benchmark/contract-guards.js";
 import { fixedControlBlockForCommand, fixedControlRerunError } from "../fixed-control.js";
 import { resolvePathInsideRootSync } from "../path-containment.js";
 import { redactPathDisplay } from "../evidence-redaction.js";
@@ -40,8 +41,9 @@ import {
 import {
   metricParseSource,
   parseMetricLines,
-  runShell,
+  runExecutableCommand,
   tailText,
+  type ShellRunOptions,
   type ShellRunResult,
 } from "../runner.js";
 import { commandDiagnostics } from "../truth-signals.js";
@@ -80,24 +82,35 @@ async function runExperimentWithProgressWriter(
   const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
   const state = currentState(workDir);
   const limit = iterationLimitInfo(state, config);
-  if (limit.limitReached) {
-    throw new Error(
-      limit.stopReason ||
-        `maxIterations reached (${limit.maxIterations}). Start a new segment with init/setup or raise maxIterations before running more experiments.`,
-    );
+  const contractAuthority = await acceptedExperimentContractForMutation({
+    workDir,
+    args,
+    config,
+  });
+  const experimentContract = contractAuthority.contract;
+  const stopPolicyStatus = contractStopStatus(experimentContract, {
+    acceptedAt: contractAuthority.event.timestamp,
+    currentRuns: state.current,
+  });
+  if (stopPolicyStatus.status === "exhausted") {
+    throw new Error(stopPolicyStatus.message);
   }
   const protectedBenchmarkGuard = await protectedBenchmarkGuardForWorkDir(workDir, config, state);
-  if (protectedBenchmarkGuard.configured && !protectedBenchmarkGuard.ok) {
-    throw new Error(protectedBenchmarkGuardError(protectedBenchmarkGuard));
-  }
-  const commandInput = await benchmarkCommandFromArgs(args, workDir, config);
-  const { command } = commandInput;
+  const evaluatorExecution = experimentContract.evaluator.execution;
+  const command = executionCommandText(evaluatorExecution.command);
+  const commandInput = {
+    command,
+    commandFile: "",
+    env: undefined,
+    envFile: "",
+    envKeys: evaluatorExecution.environment.declared.map((item) => item.name),
+    explicitEnvKeys: evaluatorExecution.environment.declared.map((item) => item.name),
+    packetEnvMode: evaluatorExecution.environment.inheritance,
+    separatorCommand: evaluatorExecution.command.kind === "argv",
+  };
   const fixedControlBlock = fixedControlBlockForCommand(command, config, args);
   if (fixedControlBlock) throw fixedControlRerunError(fixedControlBlock);
-  const timeoutSeconds = numberOption(
-    args.timeout_seconds ?? args.timeoutSeconds,
-    DEFAULT_TIMEOUT_SECONDS,
-  );
+  const timeoutSeconds = evaluatorExecution.timeoutSeconds || DEFAULT_TIMEOUT_SECONDS;
   const retainedProcessProgress = await readActiveProgressSnapshot(workDir, config);
   const resourcePreflight = assertRunResourcePreflight({
     command,
@@ -134,13 +147,19 @@ async function runExperimentWithProgressWriter(
     progressSnapshot = progressWriter.queue(progressSnapshot);
   };
   const runPacketStage = async (
-    stageCommand: string,
+    execution: ExecutionSpec,
     stageTimeoutSeconds: number,
-    options: Parameters<typeof runShell>[3],
+    options: ShellRunOptions,
     timeoutPhase: "benchmark" | "checks",
   ) => {
     try {
-      return await runShell(stageCommand, workDir, stageTimeoutSeconds, options);
+      const env = await materializeExecutionEnvironment(workDir, execution.environment);
+      return await runExecutableCommand(
+        execution.command,
+        path.resolve(workDir, execution.relativeWorkingDirectory),
+        stageTimeoutSeconds,
+        { ...options, env, envMode: execution.environment.inheritance },
+      );
     } catch (error) {
       progressSnapshot = finishProgressSnapshot(progressSnapshot, {
         exitCode: null,
@@ -166,7 +185,7 @@ async function runExperimentWithProgressWriter(
     }
   };
   const benchmark = await runPacketStage(
-    command,
+    evaluatorExecution,
     timeoutSeconds,
     {
       env: commandInput.env,
@@ -195,41 +214,44 @@ async function runExperimentWithProgressWriter(
     primaryMetric != null &&
     (state.best == null || isBetter(primaryMetric, state.best, state.config.bestDirection));
   const isBaseline = state.current.filter(isBaselineEligibleMetricRun).length === 0;
-  let checks = null;
-  const rawChecksCommand =
-    args.checks_command || args.checksCommand || (await defaultChecksCommand(workDir));
-  const checksCommand = rawChecksCommand
-    ? normalizePowerShellEscapedCommandArg(rawChecksCommand)
-    : "";
-  const checksPolicy = checksPolicyFromArgs(args, config);
-  const explicitChecksCommand = Boolean(args.checks_command || args.checksCommand);
-  if (
-    checksCommand &&
-    shouldRunChecks(checksPolicy, {
-      benchmarkPassed,
-      primaryPresent,
-      checksCommand,
-      improvesPrimary,
-      explicitChecksCommand,
-    })
-  ) {
-    checks = await runPacketStage(
-      checksCommand,
-      numberOption(
-        args.checks_timeout_seconds ?? args.checksTimeoutSeconds,
-        DEFAULT_CHECKS_TIMEOUT_SECONDS,
-      ),
-      {
-        env: commandInput.env,
-        envMode: commandInput.packetEnvMode,
-        onProgress: updateProgress,
-      },
-      "checks",
-    );
+  const checkRuns: Array<{
+    check: (typeof experimentContract.checks)[number];
+    result: ShellRunResult;
+  }> = [];
+  const checksCommand = experimentContract.checks
+    .map((check) => executionCommandText(check.execution.command))
+    .join(" && ");
+  const checksPolicy = "always";
+  if (checksCommand && benchmarkPassed && primaryPresent) {
+    for (const check of experimentContract.checks) {
+      const result = await runPacketStage(
+        check.execution,
+        check.execution.timeoutSeconds || DEFAULT_CHECKS_TIMEOUT_SECONDS,
+        {
+          env: commandInput.env,
+          envMode: commandInput.packetEnvMode,
+          onProgress: updateProgress,
+        },
+        "checks",
+      );
+      checkRuns.push({ check, result });
+      if (result.terminationFailed) break;
+    }
   }
-  const checksPassed = checks ? checks.exitCode === 0 && !checks.timedOut : null;
-  const terminationFailed = Boolean(benchmark.terminationFailed || checks?.terminationFailed);
-  const termination = checks?.termination ?? benchmark.termination;
+  const checks = aggregateCheckRuns(checkRuns);
+  const checksPassed =
+    benchmarkPassed && primaryPresent
+      ? checkRuns.length === experimentContract.checks.length &&
+        checkRuns.every(({ result }) => result.exitCode === 0 && !result.timedOut)
+      : null;
+  const terminationFailed = Boolean(
+    benchmark.terminationFailed || checkRuns.some(({ result }) => result.terminationFailed),
+  );
+  const termination =
+    checkRuns.find(({ result }) => result.terminationFailed || result.timedOut)?.result
+      .termination ??
+    checkRuns.at(-1)?.result.termination ??
+    benchmark.termination;
   const metricError =
     benchmarkPassed && !primaryPresent
       ? `Benchmark completed but did not print primary metric METRIC ${state.config.metricName}=<number>.`
@@ -287,6 +309,11 @@ async function runExperimentWithProgressWriter(
     ok: passed,
     workDir,
     command,
+    executionAuthority: "accepted-contract",
+    experimentContractDigest: experimentContract.contractDigest,
+    stopPolicyStatus,
+    acceptedEvaluator: experimentContract.evaluator,
+    acceptedChecks: experimentContract.checks,
     commandExecutionBoundary: COMMAND_EXECUTION_BOUNDARY.mode,
     commandExecutionBoundaryNote: COMMAND_EXECUTION_BOUNDARY.note,
     timeoutSeconds,
@@ -305,7 +332,7 @@ async function runExperimentWithProgressWriter(
     startedAt: benchmark.startedAt,
     finishedAt: checks?.finishedAt || benchmark.finishedAt,
     lastOutputAt: checks?.lastOutputAt || benchmark.lastOutputAt,
-    processLifecycle: processLifecycleRecordsForRun(packetId, benchmark, checks),
+    processLifecycle: processLifecycleRecordsForRun(packetId, benchmark, checkRuns),
     progressSnapshot,
     exitCode: benchmark.exitCode,
     timedOut: benchmark.timedOut || Boolean(checks?.timedOut),
@@ -344,6 +371,17 @@ async function runExperimentWithProgressWriter(
           durationSeconds: checks.durationSeconds,
           passed: checksPassed,
           tailOutput: tailText(checks.output, 80, 16000),
+          runs: checkRuns.map(({ check, result }) => ({
+            id: check.id,
+            authority: check.authority,
+            executionDigest: check.execution.executionDigest,
+            exitCode: result.exitCode,
+            timedOut: result.timedOut,
+            terminationFailed: result.terminationFailed,
+            durationSeconds: result.durationSeconds,
+            passed: result.exitCode === 0 && !result.timedOut,
+            tailOutput: tailText(result.output, 80, 16000),
+          })),
         }
       : null,
     tailOutput: tailText(benchmark.output),
@@ -375,12 +413,65 @@ async function runExperimentWithProgressWriter(
 function processLifecycleRecordsForRun(
   packetId: string,
   benchmark: ShellRunResult,
-  checks: ShellRunResult | null,
+  checks: Array<{ check: { id: string }; result: ShellRunResult }>,
 ) {
   return [
     ...processLifecycleRecordsForStage(packetId, "benchmark", benchmark),
-    ...(checks ? processLifecycleRecordsForStage(packetId, "checks", checks) : []),
+    ...checks.flatMap(({ check, result }, index) =>
+      processLifecycleRecordsForStage(
+        packetId,
+        checks.length === 1 ? "checks" : `checks:${check.id || index + 1}`,
+        result,
+      ),
+    ),
   ];
+}
+
+function aggregateCheckRuns(runs: Array<{ result: ShellRunResult }>): ShellRunResult | null {
+  if (runs.length === 0) return null;
+  const results = runs.map(({ result }) => result);
+  const first = results[0];
+  const last = results.at(-1) ?? first;
+  const combinedOutput = results
+    .map((result) => result.output)
+    .filter(Boolean)
+    .join("\n");
+  const combinedFullOutput = results
+    .map((result) => result.fullOutput)
+    .filter(Boolean)
+    .join("\n");
+  const failed = results.find((result) => result.exitCode !== 0 || result.timedOut);
+  return {
+    command: results.map((result) => result.command).join(" && "),
+    durationSeconds: results.reduce((total, result) => total + result.durationSeconds, 0),
+    exitCode: failed?.exitCode ?? last.exitCode,
+    finishedAt: last.finishedAt,
+    fullOutput: combinedFullOutput,
+    fullOutputTruncated: results.some((result) => result.fullOutputTruncated),
+    lastOutputAt:
+      [...results].reverse().find((result) => result.lastOutputAt)?.lastOutputAt ?? null,
+    metricOutput: results
+      .map((result) => result.metricOutput)
+      .filter(Boolean)
+      .join("\n"),
+    metricOutputTruncated: results.some((result) => result.metricOutputTruncated),
+    output: combinedOutput,
+    outputTruncated: results.some((result) => result.outputTruncated),
+    parsedMetrics: Object.assign(
+      Object.create(null),
+      ...results.map((result) => result.parsedMetrics),
+    ),
+    retainedMetricOutput: results
+      .map((result) => result.retainedMetricOutput)
+      .filter(Boolean)
+      .join("\n"),
+    startedAt: first.startedAt,
+    termination:
+      results.find((result) => result.terminationFailed || result.timedOut)?.termination ??
+      last.termination,
+    terminationFailed: results.some((result) => result.terminationFailed),
+    timedOut: results.some((result) => result.timedOut),
+  };
 }
 
 function processLifecycleRecordsForStage(

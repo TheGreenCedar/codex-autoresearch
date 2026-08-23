@@ -1220,7 +1220,7 @@ export const commandTable = [
     handler: "newSegment",
     outputFields: ["ok", "workDir", "dryRun", "entry"],
     help: [
-      "node scripts/autoresearch.mjs new-segment --cwd <project> [--reason <text>] [--metric-name <name>] [--metric-unit <unit>] [--direction lower|higher] [--benchmark-command <cmd>] [--checks-command <cmd>] [--dry-run|--yes]",
+      "node scripts/autoresearch.mjs new-segment --cwd <project> [--reason <text>] [--metric-name <name>] [--metric-unit <unit>] [--direction lower|higher] [--benchmark-command <cmd>] [--checks-command <cmd>] [--packet-env-file <path>] [--packet-env-mode minimal|inherit] [--dry-run|--yes]",
     ],
     cliOptions: [
       {
@@ -1246,6 +1246,8 @@ export const commandTable = [
         direction: { type: "string", enum: ["lower", "higher"] },
         benchmark_command: { type: "string" },
         checks_command: { type: "string" },
+        packet_env_file: { type: "string" },
+        packet_env_mode: { type: "string", enum: ["inherit", "minimal"] },
         dry_run: { type: "boolean" },
         confirm: { type: "boolean" },
         allow_unsafe_command: { type: "boolean" },
