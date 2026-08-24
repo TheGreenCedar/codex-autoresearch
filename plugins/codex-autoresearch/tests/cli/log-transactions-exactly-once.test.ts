@@ -50,6 +50,7 @@ async function setupTransactionFixture(
     partialCleanupCandidates?: boolean;
     partialTrackedCleanupCandidates?: boolean;
     protectedArtifact?: boolean;
+    stagedAddedCandidate?: "ignored" | "ordinary";
     untrackedCandidate?: boolean;
   } = {},
 ) {
@@ -69,6 +70,9 @@ async function setupTransactionFixture(
     await mkdir(path.join(dir, "src", "z"), { recursive: true });
     await writeFile(path.join(dir, "src", "a.txt"), "tracked baseline a\n");
     await writeFile(path.join(dir, "src", "z", "blocked.txt"), "tracked baseline blocked\n");
+  }
+  if (options.stagedAddedCandidate === "ignored") {
+    await writeFile(path.join(dir, ".gitignore"), "src/*.generated\n");
   }
   await writeFile(
     path.join(dir, "contract", "evaluator.mjs"),
@@ -134,6 +138,16 @@ async function setupTransactionFixture(
   await writeFile(path.join(dir, "src", "score.txt"), `${options.candidateScore ?? "2"}\n`);
   if (options.untrackedCandidate) {
     await writeFile(path.join(dir, "src", "scratch.txt"), "candidate scratch\n");
+  }
+  if (options.stagedAddedCandidate) {
+    const addedPath =
+      options.stagedAddedCandidate === "ignored" ? "src/new.generated" : "src/new.txt";
+    await writeFile(path.join(dir, addedPath), "staged candidate addition\n");
+    await git(dir, [
+      "add",
+      ...(options.stagedAddedCandidate === "ignored" ? ["-f"] : []),
+      addedPath,
+    ]);
   }
   if (options.partialCleanupCandidates) {
     await mkdir(path.join(dir, "src", "z"), { recursive: true });
@@ -646,6 +660,37 @@ test("detached HEAD identity and update share one atomic ref transaction", async
   });
 });
 
+test("failed ref-lock acquisition preserves every foreign lock sentinel", async (t) => {
+  for (const fixture of [
+    { label: "symbolic intended ref", detach: false, lockPath: "refs/heads/main.lock" },
+    { label: "symbolic HEAD", detach: false, lockPath: "HEAD.lock" },
+    { label: "detached HEAD", detach: true, lockPath: "HEAD.lock" },
+  ] as const) {
+    await t.test(fixture.label, async () => {
+      await withTempDir(`foreign-${fixture.label.replaceAll(" ", "-")}-lock`, async (dir) => {
+        await setupTransactionFixture(dir, { detachBeforePacket: fixture.detach });
+        const parent = await git(dir, ["rev-parse", "HEAD"]);
+        const lockPath = path.resolve(
+          dir,
+          await git(dir, ["rev-parse", "--git-path", fixture.lockPath]),
+        );
+        const sentinel = `foreign writer owns ${fixture.label}\n`;
+        await writeFile(lockPath, sentinel, { flag: "wx" });
+        try {
+          await assert.rejects(
+            invokeLog(keepArgs(dir)),
+            /atomic.*lock|could not lock|active Git commands/i,
+          );
+          assert.equal(await readFile(lockPath, "utf8"), sentinel);
+          assert.equal(await git(dir, ["rev-parse", "HEAD"]), parent);
+        } finally {
+          await rm(lockPath, { force: true });
+        }
+      });
+    });
+  }
+});
+
 test("unsupported ref storage fails closed before the atomic symbolic-ref update", async (t) => {
   if (process.platform === "win32") {
     t.skip("the one-shot Git shim uses POSIX executable semantics");
@@ -781,6 +826,25 @@ test("partial tracked cleanup separately rejects staged drift behind a clean wor
       await chmod(blockedDirectory, 0o700).catch(() => {});
     }
   });
+});
+
+test("tracked cleanup removes staged additions after restoring their index entry", async (t) => {
+  for (const kind of ["ordinary", "ignored"] as const) {
+    await t.test(kind, async () => {
+      await withTempDir(`discard-staged-added-${kind}`, async (dir) => {
+        await setupTransactionFixture(dir, { stagedAddedCandidate: kind });
+        const addedPath = kind === "ignored" ? "src/new.generated" : "src/new.txt";
+        assert.equal(await git(dir, ["show", `:${addedPath}`]), "staged candidate addition");
+
+        const logged = await invokeLog(discardArgs(dir));
+
+        assert.equal(logged.ok, true);
+        await assert.rejects(access(path.join(dir, addedPath)), /ENOENT/);
+        assert.equal(await git(dir, ["status", "--short", "--", "src"]), "");
+        assert.equal(await git(dir, ["ls-files", "--", addedPath]), "");
+      });
+    });
+  }
 });
 
 test("non-keep retries converge after faults around ledger and independent cleanup stages", async (t) => {

@@ -796,6 +796,7 @@ interface CleanupTargetIdentity extends UnknownRecord {
   indexDigest: string;
   mode: number;
   size: number;
+  worktreeExpectedAbsent?: boolean;
 }
 
 type PreparedHeadState =
@@ -1078,6 +1079,15 @@ async function assertLogTransactionReceiptIntegrity(
       reject(`${label} target identities do not match their cleanup paths.`);
     }
   }
+  for (const target of receipt.cleanup.trackedTargets) {
+    if (
+      typeof target.worktreeExpectedAbsent !== "boolean" ||
+      target.worktreeExpectedAbsent !==
+        (await cleanupTargetExpectedAbsent(workDir, receipt.cleanup.headOid, target.path))
+    ) {
+      reject(`tracked cleanup target ${target.path} has a mismatched worktree postcondition.`);
+    }
+  }
   const expectedPacketPaths = receipt.packet.required ? await lastRunCandidatePaths(workDir) : [];
   if (
     JSON.stringify(uniqueSorted(receipt.cleanup.packetPaths)) !==
@@ -1293,7 +1303,11 @@ async function buildLogTransactionReceipt({
   const commitMessage = `${String(experiment.description || "")}\n\nResult: ${JSON.stringify(
     mutationPlan.resultData,
   )}\n`;
-  const trackedTargets = await cleanupTargetIdentities(workDir, mutationPlan.cleanup.trackedPaths);
+  const trackedTargets = await cleanupTargetIdentities(
+    workDir,
+    mutationPlan.cleanup.trackedPaths,
+    preGit.headOid,
+  );
   const untrackedTargets = await cleanupTargetIdentities(
     workDir,
     mutationPlan.cleanup.untrackedPaths,
@@ -1913,10 +1927,14 @@ async function advanceSymbolicHeadFilesAtomically(
   await fsp.mkdir(path.dirname(refPath), { recursive: true });
   let headLock: FileHandle | null = null;
   let refLock: FileHandle | null = null;
+  let headLockOwned = false;
+  let refLockOwned = false;
   let refInstalled = false;
   try {
     headLock = await fsp.open(headLockPath, "wx", headStat.mode & 0o777);
+    headLockOwned = true;
     refLock = await fsp.open(refLockPath, "wx", refStat ? refStat.mode & 0o777 : 0o666);
+    refLockOwned = true;
     const liveHead = (await fsp.readFile(headPath, "utf8")).trim();
     if (liveHead !== `ref: ${intendedRef}`) {
       throw new Error(
@@ -1949,8 +1967,8 @@ async function advanceSymbolicHeadFilesAtomically(
   } finally {
     if (refLock) await refLock.close().catch(() => {});
     if (headLock) await headLock.close().catch(() => {});
-    if (!refInstalled) await fsp.rm(refLockPath, { force: true }).catch(() => {});
-    await fsp.rm(headLockPath, { force: true }).catch(() => {});
+    if (refLockOwned && !refInstalled) await fsp.rm(refLockPath, { force: true }).catch(() => {});
+    if (headLockOwned) await fsp.rm(headLockPath, { force: true }).catch(() => {});
   }
 }
 
@@ -1987,9 +2005,11 @@ async function advanceDetachedHeadFileAtomically(
     throw new Error("Git detached HEAD must be a regular file before an atomic keep update.");
   }
   let handle: FileHandle | null = null;
+  let lockOwned = false;
   let installed = false;
   try {
     handle = await fsp.open(lockPath, "wx", headStat.mode & 0o777);
+    lockOwned = true;
     const live = (await fsp.readFile(headPath, "utf8")).trim();
     if (live !== oldOid || live.startsWith("ref:")) {
       throw new Error(
@@ -2011,7 +2031,7 @@ async function advanceDetachedHeadFileAtomically(
     throw error;
   } finally {
     if (handle) await handle.close().catch(() => {});
-    if (!installed) await fsp.rm(lockPath, { force: true }).catch(() => {});
+    if (lockOwned && !installed) await fsp.rm(lockPath, { force: true }).catch(() => {});
   }
 }
 
@@ -2901,7 +2921,7 @@ async function applyTrackedCleanup(workDir: string, receipt: LogTransactionRecei
   await assertCleanupGitIdentity(workDir, receipt);
   for (const target of receipt.cleanup.trackedTargets) {
     await assertCleanupGitIdentity(workDir, receipt);
-    let state = await trackedTargetCleanupState(workDir, receipt.cleanup.headOid, target.path);
+    let state = await trackedTargetCleanupState(workDir, receipt.cleanup.headOid, target);
     if (state.indexClean && state.worktreeClean) continue;
     let current = await cleanupTargetIdentity(workDir, target.path);
     if (!state.indexClean && current.indexDigest !== target.indexDigest) {
@@ -2917,7 +2937,7 @@ async function applyTrackedCleanup(workDir: string, receipt: LogTransactionRecei
     if (!state.indexClean) {
       await assertCleanupGitIdentity(workDir, receipt);
       await cleanupTrackedIndexPath(workDir, receipt.cleanup.headOid, target.path);
-      state = await trackedTargetCleanupState(workDir, receipt.cleanup.headOid, target.path);
+      state = await trackedTargetCleanupState(workDir, receipt.cleanup.headOid, target);
       if (!state.indexClean) {
         throw new Error(
           `Tracked index cleanup postcondition is not satisfied for ${target.path}; staged content changed.`,
@@ -2932,8 +2952,8 @@ async function applyTrackedCleanup(workDir: string, receipt: LogTransactionRecei
         );
       }
       await assertCleanupGitIdentity(workDir, receipt);
-      await cleanupTrackedWorktreePath(workDir, receipt.cleanup.headOid, target.path);
-      state = await trackedTargetCleanupState(workDir, receipt.cleanup.headOid, target.path);
+      await cleanupTrackedWorktreePath(workDir, receipt.cleanup.headOid, target);
+      state = await trackedTargetCleanupState(workDir, receipt.cleanup.headOid, target);
     }
     if (!state.indexClean || !state.worktreeClean) {
       throw new Error(
@@ -3007,7 +3027,7 @@ async function trackedCleanupPostconditionSatisfied(
   await assertPreparedHeadState(workDir, receipt.preGit.headState);
   if ((await gitHeadOrEmpty(workDir)) !== receipt.cleanup.headOid) return false;
   for (const target of receipt.cleanup.trackedTargets) {
-    const state = await trackedTargetCleanupState(workDir, receipt.cleanup.headOid, target.path);
+    const state = await trackedTargetCleanupState(workDir, receipt.cleanup.headOid, target);
     if (!state.indexClean || !state.worktreeClean) return false;
   }
   return true;
@@ -3016,19 +3036,22 @@ async function trackedCleanupPostconditionSatisfied(
 async function trackedTargetCleanupState(
   workDir: string,
   headOid: string,
-  relativePath: string,
+  target: CleanupTargetIdentity,
 ): Promise<{ indexClean: boolean; worktreeClean: boolean }> {
+  const relativePath = target.path;
   const [indexClean, worktreeClean] = await Promise.all([
     gitDiffClean(
       workDir,
       ["--literal-pathspecs", "diff", "--cached", "--quiet", headOid, "--", relativePath],
       `verify tracked index cleanup for ${relativePath}`,
     ),
-    gitDiffClean(
-      workDir,
-      ["--literal-pathspecs", "diff", "--quiet", headOid, "--", relativePath],
-      `verify tracked worktree cleanup for ${relativePath}`,
-    ),
+    target.worktreeExpectedAbsent
+      ? cleanupTargetPathAbsent(workDir, relativePath)
+      : gitDiffClean(
+          workDir,
+          ["--literal-pathspecs", "diff", "--quiet", headOid, "--", relativePath],
+          `verify tracked worktree cleanup for ${relativePath}`,
+        ),
   ]);
   return { indexClean, worktreeClean };
 }
@@ -3041,7 +3064,13 @@ async function gitDiffClean(workDir: string, args: string[], label: string): Pro
 }
 
 function cleanupTargetWorktreeDigest(target: CleanupTargetIdentity): string {
-  const { path: _path, digest: _digest, indexDigest: _indexDigest, ...worktreeState } = target;
+  const {
+    path: _path,
+    digest: _digest,
+    indexDigest: _indexDigest,
+    worktreeExpectedAbsent: _worktreeExpectedAbsent,
+    ...worktreeState
+  } = target;
   return sha256Json(worktreeState);
 }
 
@@ -3093,9 +3122,12 @@ async function untrackedTargetCleanupPostconditionSatisfied(
 async function cleanupTargetIdentities(
   workDir: string,
   paths: string[],
+  worktreeHeadOid?: string,
 ): Promise<CleanupTargetIdentity[]> {
   const identities = await Promise.all(
-    uniqueSorted(paths).map((relativePath) => cleanupTargetIdentity(workDir, relativePath)),
+    uniqueSorted(paths).map((relativePath) =>
+      cleanupTargetIdentity(workDir, relativePath, worktreeHeadOid),
+    ),
   );
   return identities.sort((left, right) => left.path.localeCompare(right.path));
 }
@@ -3103,11 +3135,22 @@ async function cleanupTargetIdentities(
 async function cleanupTargetIdentity(
   workDir: string,
   relativePath: string,
+  worktreeHeadOid?: string,
 ): Promise<CleanupTargetIdentity> {
   const target = resolvePathInsideRootSync(workDir, relativePath);
   if (!target.inside || !target.relativePath) {
     throw new Error(`Cleanup target escapes the working directory: ${relativePath}.`);
   }
+  const worktreePostcondition =
+    worktreeHeadOid === undefined
+      ? {}
+      : {
+          worktreeExpectedAbsent: await cleanupTargetExpectedAbsent(
+            workDir,
+            worktreeHeadOid,
+            target.relativePath,
+          ),
+        };
   const indexDigest = await cleanupTargetIndexDigest(workDir, target.relativePath);
   const stat = await fsp.lstat(target.absolutePath).catch((error) => {
     if (hasErrorCode(error, "ENOENT")) return null;
@@ -3115,7 +3158,13 @@ async function cleanupTargetIdentity(
   });
   if (!stat) {
     const state = { kind: "absent" as const, mode: 0, size: 0 };
-    return { path: target.relativePath, ...state, indexDigest, digest: sha256Json(state) };
+    return {
+      path: target.relativePath,
+      ...state,
+      ...worktreePostcondition,
+      indexDigest,
+      digest: sha256Json(state),
+    };
   }
   if (stat.isSymbolicLink()) {
     const link = await fsp.readlink(target.absolutePath);
@@ -3125,7 +3174,13 @@ async function cleanupTargetIdentity(
       size: Buffer.byteLength(link),
       link,
     };
-    return { path: target.relativePath, ...state, indexDigest, digest: sha256Json(state) };
+    return {
+      path: target.relativePath,
+      ...state,
+      ...worktreePostcondition,
+      indexDigest,
+      digest: sha256Json(state),
+    };
   }
   if (stat.isFile()) {
     const bytes = await fsp.readFile(target.absolutePath);
@@ -3135,7 +3190,13 @@ async function cleanupTargetIdentity(
       size: bytes.length,
       contentDigest: createHash("sha256").update(bytes).digest("hex"),
     };
-    return { path: target.relativePath, ...state, indexDigest, digest: sha256Json(state) };
+    return {
+      path: target.relativePath,
+      ...state,
+      ...worktreePostcondition,
+      indexDigest,
+      digest: sha256Json(state),
+    };
   }
   if (stat.isDirectory()) {
     const entries = await cleanupDirectoryEntries(target.absolutePath);
@@ -3145,14 +3206,55 @@ async function cleanupTargetIdentity(
       size: entries.reduce((total, entry) => total + entry.size, 0),
       entries,
     };
-    return { path: target.relativePath, ...state, indexDigest, digest: sha256Json(state) };
+    return {
+      path: target.relativePath,
+      ...state,
+      ...worktreePostcondition,
+      indexDigest,
+      digest: sha256Json(state),
+    };
   }
   const state = {
     kind: "other" as const,
     mode: stat.mode & 0o777,
     size: stat.size,
   };
-  return { path: target.relativePath, ...state, indexDigest, digest: sha256Json(state) };
+  return {
+    path: target.relativePath,
+    ...state,
+    ...worktreePostcondition,
+    indexDigest,
+    digest: sha256Json(state),
+  };
+}
+
+async function cleanupTargetExpectedAbsent(
+  workDir: string,
+  headOid: string,
+  relativePath: string,
+): Promise<boolean> {
+  if (!headOid) return true;
+  const entry = await runGit(
+    ["--literal-pathspecs", "ls-tree", "-z", headOid, "--", relativePath],
+    workDir,
+  );
+  if (entry.code !== 0 || entry.stdoutTruncated) {
+    throw new Error(
+      `Git could not bind tracked cleanup postcondition for ${relativePath}: ${gitOutput(entry, "unknown error")}`,
+    );
+  }
+  return entry.stdout.length === 0;
+}
+
+async function cleanupTargetPathAbsent(workDir: string, relativePath: string): Promise<boolean> {
+  const target = resolvePathInsideRootSync(workDir, relativePath);
+  if (!target.inside || !target.relativePath) {
+    throw new Error(`Cleanup target escapes the working directory: ${relativePath}.`);
+  }
+  return !(await fsp.lstat(target.absolutePath).catch((error) => {
+    if (hasErrorCode(error, "ENOENT")) return null;
+    throw error;
+  }));
 }
 
 async function cleanupTargetIndexDigest(workDir: string, relativePath: string): Promise<string> {
@@ -3227,9 +3329,18 @@ async function cleanupDirectoryEntries(
 async function cleanupTrackedWorktreePath(
   workDir: string,
   headOid: string,
-  relativePath: string,
+  target: CleanupTargetIdentity,
 ): Promise<void> {
   if (!(await insideGitRepo(workDir))) return;
+  const relativePath = target.path;
+  if (target.worktreeExpectedAbsent) {
+    const resolved = resolvePathInsideRootSync(workDir, relativePath);
+    if (!resolved.inside || !resolved.relativePath) {
+      throw new Error(`Cleanup target escapes the working directory: ${relativePath}.`);
+    }
+    await fsp.rm(resolved.absolutePath, { recursive: true, force: true });
+    return;
+  }
   const restore = await runGit(
     ["--literal-pathspecs", "restore", `--source=${headOid}`, "--worktree", "--", relativePath],
     workDir,
