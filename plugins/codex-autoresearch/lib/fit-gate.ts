@@ -9,6 +9,7 @@ export type ContractField =
   | "checks"
   | "benchmark_command"
   | "metric_name"
+  | "metric_unit"
   | "direction"
   | "checks_command"
   | "scope"
@@ -497,6 +498,9 @@ function contractConflicts(
   }
   if (requested.metricName && requested.metricName !== existing.metricName) {
     pairs.push(["metric_name", existing.metricName, requested.metricName]);
+  }
+  if (requested.metricUnit && requested.metricUnit !== existing.metricUnit) {
+    pairs.push(["metric_unit", existing.metricUnit, requested.metricUnit]);
   }
   if (requested.direction && requested.direction !== existing.direction) {
     pairs.push(["direction", existing.direction, requested.direction]);

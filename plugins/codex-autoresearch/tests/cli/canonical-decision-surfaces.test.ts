@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 
 import { quoteForShell } from "../helpers/process.js";
@@ -171,6 +171,125 @@ test("fresh packet surfaces select only an accepted log disposition", async () =
         `${fixture.name} evidence`,
       ]);
       assert.equal(logged.code, 0, logged.stderr);
+    });
+  }
+});
+
+test("fresh packets with malformed status authority fail closed on every decision surface", async () => {
+  const invalidCases = [
+    {
+      name: "missing",
+      mutate(decision: Record<string, unknown>) {
+        delete decision.allowedStatuses;
+      },
+    },
+    {
+      name: "non-array",
+      mutate(decision: Record<string, unknown>) {
+        decision.allowedStatuses = "keep";
+      },
+    },
+    {
+      name: "empty",
+      mutate(decision: Record<string, unknown>) {
+        decision.allowedStatuses = [];
+      },
+    },
+    {
+      name: "all-invalid",
+      mutate(decision: Record<string, unknown>) {
+        decision.allowedStatuses = ["approve"];
+      },
+    },
+    {
+      name: "mixed-invalid",
+      mutate(decision: Record<string, unknown>) {
+        decision.allowedStatuses = ["keep", "approve"];
+      },
+    },
+  ] as const;
+
+  for (const fixture of invalidCases) {
+    await withTempDir(`canonical-invalid-packet-${fixture.name}`, async (dir) => {
+      const setup = await setupFixture(dir, {
+        acceptedContract: true,
+        metricName: "seconds",
+        name: fixture.name,
+        packetBudget: 4,
+        scope: "src",
+      });
+      assert.equal(setup.code, 0, setup.stderr);
+      const next = await runCli(["next", "--cwd", dir]);
+      assert.equal(next.code, 0, next.stderr);
+      const packet = JSON.parse(next.stdout) as Record<string, unknown>;
+      const packetPath = String(packet.lastRunPath);
+      const storedPacket = JSON.parse(await readFile(packetPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      fixture.mutate(storedPacket.decision as Record<string, unknown>);
+      await writeFile(packetPath, `${JSON.stringify(storedPacket, null, 2)}\n`, "utf8");
+
+      const outputs = await Promise.all([
+        runCli(["state", "--cwd", dir, "--compact"]),
+        runCli(["doctor", "--cwd", dir]),
+        runCli(["recommend-next", "--cwd", dir, "--compact"]),
+        runCli(["export", "--cwd", dir, "--json-full"]),
+      ]);
+      for (const output of outputs) assert.equal(output.code, 0, output.stderr);
+      const [state, doctor, recommend, dashboard] = outputs.map((output) =>
+        JSON.parse(output.stdout),
+      );
+      const plans = [
+        state.decisionPlanProjection,
+        doctor.decisionPlanProjection,
+        recommend.decisionPlanProjection,
+        dashboard.viewModel.decisionPlanProjection,
+      ];
+      for (const plan of plans) {
+        assert.equal(plan.action.kind, "replace-packet", fixture.name);
+        assert.equal(plan.primaryBlockerCode, "packet-status-authority-invalid", fixture.name);
+        assert.equal(plan.capabilities["authorize-keep"], "blocked", fixture.name);
+        assert.ok(
+          plan.requiredEvidence.diagnosticCodes.includes("packet-keep-not-authorized"),
+          fixture.name,
+        );
+        assert.ok(
+          plan.requiredEvidence.diagnosticCodes.includes("packet-status-authority-invalid"),
+          fixture.name,
+        );
+      }
+      assert.deepEqual(
+        plans.map((plan) => plan.decisionId),
+        Array(plans.length).fill(plans[0].decisionId),
+      );
+      assert.match(state.decisionPlanProjection.action.command, /\bnext\b/);
+      assert.equal(dashboard.viewModel.decisionPlanProjection.action.command, "");
+
+      const log = await runCli([
+        "log",
+        "--cwd",
+        dir,
+        "--from-last",
+        "--status",
+        "keep",
+        "--description",
+        "Must not trust malformed packet authority",
+      ]);
+      assert.notEqual(log.code, 0, fixture.name);
+      const refusal = JSON.parse(log.stderr);
+      assert.equal(refusal.code, "mutation-precondition-blocked", fixture.name);
+      assert.equal(
+        refusal.preconditionDecision.capabilities["authorize-keep"],
+        "blocked",
+        fixture.name,
+      );
+      assert.ok(
+        refusal.preconditionDecision.requiredEvidence.diagnosticCodes.includes(
+          "packet-keep-not-authorized",
+        ),
+        fixture.name,
+      );
     });
   }
 });

@@ -252,6 +252,38 @@ test("prompt-plan reuses only a verified accepted session as an in-memory loop c
   });
 });
 
+test("prompt-plan matches named sessions only when the explicit metric unit agrees", async () => {
+  await withTempDir("fit-first-metric-unit", async (dir) => {
+    await writeAcceptedSession(dir);
+    const before = await directorySnapshot(dir);
+    const continuation = (metricUnit: string) =>
+      [
+        'Continue the active "Checkout performance" session for 5 repeated measured iterations.',
+        `Goal: ${completeLegacySession.goal}`,
+        "Benchmark: bash ./autoresearch.sh",
+        `Metric: ${completeLegacySession.metricName} (${metricUnit}), lower is better`,
+        "Checks: bash ./autoresearch.checks.sh",
+        `Scope: ${completeLegacySession.filesInScope.join(",")}`,
+      ].join("\n");
+
+    const conflicting = await promptPlan(dir, continuation("ms"));
+    const conflictFit = conflicting.fit as Record<string, unknown>;
+    assert.equal(conflictFit.disposition, "needs-user", JSON.stringify(conflictFit));
+    assert.equal(conflictFit.sessionRelation, "unrelated");
+    assert.deepEqual(conflictFit.missing, []);
+    assert.deepEqual(conflictFit.conflicts, [
+      { field: "metric_unit", existing: "s", requested: "ms" },
+    ]);
+    assert.deepEqual(await directorySnapshot(dir), before);
+
+    const matching = await promptPlan(dir, continuation("s"));
+    const matchingFit = matching.fit as Record<string, unknown>;
+    assert.equal(matchingFit.disposition, "run-loop", JSON.stringify(matchingFit));
+    assert.equal(matchingFit.sessionRelation, "matching");
+    assert.deepEqual(await directorySnapshot(dir), before);
+  });
+});
+
 test("prompt-plan refuses named sessions when goal or checkout authority is unproven", async () => {
   await withTempDir("fit-first-hostile-match", async (dir) => {
     await writeAcceptedSession(dir);

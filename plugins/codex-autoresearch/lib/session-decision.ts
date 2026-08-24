@@ -320,30 +320,46 @@ function diagnosticsFromSnapshot(
   if (packetFreshness) {
     const logDisposition =
       packetFreshness.fresh === true ? packetLogDisposition(snapshot.lastRunPacket) : null;
-    diagnostics.push(
-      decisionDiagnostic(packetFreshness.fresh === true ? "pending-packet" : "stale-packet", {
-        message: stringValue(packetFreshness.reason),
-        command:
-          packetFreshness.fresh === true && logDisposition
-            ? continuationLogCommand(snapshot.workDir, logDisposition.selected)
-            : commands.next,
-        ...(logDisposition
-          ? {
-              semantic: {
-                allowedStatuses: logDisposition.allowed,
-                selectedStatus: logDisposition.selected,
-              },
-            }
-          : {}),
-      }),
-    );
-    if (logDisposition && !logDisposition.allowed.includes("keep")) {
+    if (logDisposition?.valid === false) {
       diagnostics.push(
-        decisionDiagnostic("packet-keep-not-authorized", {
-          message: "The accepted packet evidence does not authorize a keep.",
-          semantic: { allowedStatuses: logDisposition.allowed },
+        decisionDiagnostic("packet-status-authority-invalid", {
+          message: logDisposition.reason,
+          command: commands.next,
+          semantic: { disposition: "invalid", reason: logDisposition.code },
         }),
       );
+      diagnostics.push(
+        decisionDiagnostic("packet-keep-not-authorized", {
+          message: "Malformed packet status authority cannot authorize a keep.",
+          semantic: { allowedStatuses: [], disposition: "invalid" },
+        }),
+      );
+    } else {
+      diagnostics.push(
+        decisionDiagnostic(packetFreshness.fresh === true ? "pending-packet" : "stale-packet", {
+          message: stringValue(packetFreshness.reason),
+          command:
+            packetFreshness.fresh === true && logDisposition?.valid === true
+              ? continuationLogCommand(snapshot.workDir, logDisposition.selected)
+              : commands.next,
+          ...(logDisposition?.valid === true
+            ? {
+                semantic: {
+                  allowedStatuses: logDisposition.allowed,
+                  selectedStatus: logDisposition.selected,
+                },
+              }
+            : {}),
+        }),
+      );
+      if (logDisposition?.valid === true && !logDisposition.allowed.includes("keep")) {
+        diagnostics.push(
+          decisionDiagnostic("packet-keep-not-authorized", {
+            message: "The accepted packet evidence does not authorize a keep.",
+            semantic: { allowedStatuses: logDisposition.allowed },
+          }),
+        );
+      }
     }
   }
   const process = snapshot.processProgress;
@@ -365,15 +381,50 @@ function diagnosticsFromSnapshot(
   return diagnostics;
 }
 
-function packetLogDisposition(packet: UnknownRecord | null): {
-  allowed: ContinuationLogStatus[];
-  selected: ContinuationLogStatus;
-} | null {
+type PacketLogDisposition =
+  | {
+      valid: true;
+      allowed: ContinuationLogStatus[];
+      selected: ContinuationLogStatus;
+    }
+  | {
+      valid: false;
+      code: "missing-status-authority" | "empty-status-authority" | "invalid-status-authority";
+      reason: string;
+    };
+
+function packetLogDisposition(packet: UnknownRecord | null): PacketLogDisposition {
   const decision = object(packet?.decision);
-  const allowed = Array.isArray(decision.allowedStatuses)
-    ? [...new Set(decision.allowedStatuses.map(String))].filter(isContinuationLogStatus)
-    : [];
-  if (allowed.length === 0) return null;
+  if (!Array.isArray(decision.allowedStatuses)) {
+    return {
+      valid: false,
+      code: "missing-status-authority",
+      reason:
+        "The fresh packet has no validated status authority. Inspect or replace the packet before logging.",
+    };
+  }
+  if (decision.allowedStatuses.length === 0) {
+    return {
+      valid: false,
+      code: "empty-status-authority",
+      reason:
+        "The fresh packet has an empty status authority. Inspect or replace the packet before logging.",
+    };
+  }
+  if (
+    !decision.allowedStatuses.every(
+      (status): status is ContinuationLogStatus =>
+        typeof status === "string" && isContinuationLogStatus(status),
+    )
+  ) {
+    return {
+      valid: false,
+      code: "invalid-status-authority",
+      reason:
+        "The fresh packet has an invalid status authority. Inspect or replace the packet before logging.",
+    };
+  }
+  const allowed = [...new Set(decision.allowedStatuses)];
   const preferred = [
     decision.safeSuggestedStatus,
     decision.suggestedStatus,
@@ -384,7 +435,7 @@ function packetLogDisposition(packet: UnknownRecord | null): {
       (status): status is ContinuationLogStatus =>
         isContinuationLogStatus(status) && allowed.includes(status),
     );
-  return { allowed, selected: preferred ?? allowed[0] };
+  return { valid: true, allowed, selected: preferred ?? allowed[0] };
 }
 
 function isContinuationLogStatus(value: string): value is ContinuationLogStatus {

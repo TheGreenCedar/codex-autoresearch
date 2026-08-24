@@ -84,6 +84,7 @@ export type DecisionDiagnosticCode =
   | "packet-budget-exhausted"
   | "packet-diagnostic"
   | "packet-keep-not-authorized"
+  | "packet-status-authority-invalid"
   | "pending-log-transaction"
   | "pending-log-transaction-inconsistent"
   | "pending-packet"
@@ -178,6 +179,7 @@ export const decisionDiagnosticRegistry = {
   "evaluator-drift": blockedPolicy(15, "direct-work", "transition-segment", PACKET_AND_KEEP),
   "active-process": blockedPolicy(16, "recovery", "inspect-process", PACKET_ONLY),
   "pending-packet": blockedPolicy(17, "packet", "log-decision", PACKET_ONLY),
+  "packet-status-authority-invalid": blockedPolicy(17, "packet", "replace-packet", PACKET_AND_KEEP),
   "packet-keep-not-authorized": {
     priority: 18,
     phase: "packet",
