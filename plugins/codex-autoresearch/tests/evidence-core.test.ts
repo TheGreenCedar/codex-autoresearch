@@ -31,6 +31,7 @@ import {
 import { buildCheapFinalizationPressure } from "../lib/session-read-model.js";
 import {
   authoritativeWindowsIdentityVerification,
+  minimalProcessEnvironment,
   parseMetricLines,
   runProcess,
   runShell,
@@ -164,6 +165,28 @@ test("runner minimal env mode keeps explicit env without inheriting unrelated pa
       delete process.env[parentKey];
     }
   });
+});
+
+test("runner minimal environment retains Windows command resolution without leaking secrets", () => {
+  assert.deepEqual(
+    minimalProcessEnvironment({
+      Path: "C:\\Windows\\System32",
+      PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      SystemRoot: "C:\\Windows",
+      TEMP: "C:\\Temp",
+      TMP: "C:\\Temp",
+      PRIVATE_TOKEN: "must-not-leak",
+    }),
+    {
+      Path: "C:\\Windows\\System32",
+      PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      SystemRoot: "C:\\Windows",
+      TEMP: "C:\\Temp",
+      TMP: "C:\\Temp",
+    },
+  );
 });
 
 test("runner proves a stubborn child and grandchild are gone before timeout resolves", async () => {

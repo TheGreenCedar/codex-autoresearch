@@ -189,7 +189,7 @@ export function findDecisionCompilerBoundaryOffenders(
     if (trackedPath.endsWith("/lib/cli/source-hygiene.ts")) continue;
 
     const retiredSymbol = RETIRED_DECISION_AUTHORITY_SYMBOLS.find((symbol) =>
-      identifierPattern(symbol).test(sourceFile.content),
+      containsIdentifier(sourceFile.content, symbol),
     );
     if (retiredSymbol) {
       offenders.set(trackedPath, {
@@ -201,9 +201,10 @@ export function findDecisionCompilerBoundaryOffenders(
 
     if (
       basename === "finalize-preview.ts" &&
-      /\bsessionDecisionCapsule\s*(?:\?\.)?\s*(?:enforcement|nextExperiment)\b/.test(
-        sourceFile.content,
-      )
+      hasPropertyAccess(sourceFile.content, "sessionDecisionCapsule", [
+        "enforcement",
+        "nextExperiment",
+      ])
     ) {
       offenders.set(trackedPath, {
         path: trackedPath,
@@ -215,9 +216,11 @@ export function findDecisionCompilerBoundaryOffenders(
 
     if (
       basename === "session-decision.ts" &&
-      /\bfinalization\s*(?:\?\.)?\s*\.\s*(?:actionCode|nextAction|suggestedCommand)\b/.test(
-        sourceFile.content,
-      )
+      hasPropertyAccess(sourceFile.content, "finalization", [
+        "actionCode",
+        "nextAction",
+        "suggestedCommand",
+      ])
     ) {
       offenders.set(trackedPath, {
         path: trackedPath,
@@ -229,10 +232,10 @@ export function findDecisionCompilerBoundaryOffenders(
 
     if (basename === "decision-compiler.ts") {
       const forbiddenImport = DECISION_COMPILER_FORBIDDEN_IMPORTS.find((specifier) =>
-        importSpecifierPattern(specifier).test(sourceFile.content),
+        importsSpecifier(sourceFile.content, specifier),
       );
       const forbiddenInput = DECISION_COMPILER_FORBIDDEN_INPUTS.find((identifier) =>
-        identifierPattern(identifier).test(sourceFile.content),
+        containsIdentifier(sourceFile.content, identifier),
       );
       if (forbiddenImport || forbiddenInput) {
         offenders.set(trackedPath, {
@@ -246,8 +249,8 @@ export function findDecisionCompilerBoundaryOffenders(
 
     if (
       basename === "coherent-session-snapshot.ts" &&
-      /(?:from\s+|import\s*\()\s*["'][^"']*(?:decision-compiler|session-decision|decision-projection)[^"']*["']/.test(
-        sourceFile.content,
+      ["decision-compiler", "session-decision", "decision-projection"].some((specifier) =>
+        importsSpecifier(sourceFile.content, specifier),
       )
     ) {
       offenders.set(trackedPath, {
@@ -262,15 +265,119 @@ export function findDecisionCompilerBoundaryOffenders(
 }
 
 function isProductionTypeScript(trackedPath: string): boolean {
-  return /(?:^|\/)plugins\/codex-autoresearch\/(?:lib|scripts)\/.+\.ts$/.test(trackedPath);
+  if (!trackedPath.endsWith(".ts")) return false;
+  return ["plugins/codex-autoresearch/lib/", "plugins/codex-autoresearch/scripts/"].some(
+    (prefix) => trackedPath.startsWith(prefix) && trackedPath.length > prefix.length + 3,
+  );
 }
 
-function identifierPattern(identifier: string): RegExp {
-  return new RegExp(`\\b${identifier}\\b`);
+function containsIdentifier(source: string, identifier: string): boolean {
+  let offset = 0;
+  while (offset < source.length) {
+    const index = source.indexOf(identifier, offset);
+    if (index < 0) return false;
+    const before = index > 0 ? source[index - 1] : "";
+    const after = source[index + identifier.length] || "";
+    if (!isIdentifierCharacter(before) && !isIdentifierCharacter(after)) return true;
+    offset = index + identifier.length;
+  }
+  return false;
 }
 
-function importSpecifierPattern(specifier: string): RegExp {
-  return new RegExp(`(?:from\\s+|import\\s*\\()\\s*["'][^"']*${specifier}[^"']*["']`);
+function hasPropertyAccess(source: string, root: string, properties: readonly string[]): boolean {
+  let offset = 0;
+  while (offset < source.length) {
+    const index = source.indexOf(root, offset);
+    if (index < 0) return false;
+    const before = index > 0 ? source[index - 1] : "";
+    if (isIdentifierCharacter(before)) {
+      offset = index + root.length;
+      continue;
+    }
+    let cursor = skipWhitespace(source, index + root.length);
+    if (source.startsWith("?.", cursor)) cursor += 2;
+    else if (source[cursor] === ".") cursor += 1;
+    else {
+      offset = index + root.length;
+      continue;
+    }
+    cursor = skipWhitespace(source, cursor);
+    if (
+      properties.some(
+        (property) =>
+          source.startsWith(property, cursor) &&
+          !isIdentifierCharacter(source[cursor + property.length] || ""),
+      )
+    ) {
+      return true;
+    }
+    offset = index + root.length;
+  }
+  return false;
+}
+
+function importsSpecifier(source: string, specifier: string): boolean {
+  let cursor = 0;
+  while (cursor < source.length) {
+    const quote = source[cursor];
+    if (quote !== '"' && quote !== "'") {
+      cursor += 1;
+      continue;
+    }
+    const start = cursor;
+    cursor += 1;
+    let value = "";
+    while (cursor < source.length && source[cursor] !== quote) {
+      if (source[cursor] === "\\" && cursor + 1 < source.length) {
+        value += source[cursor] + source[cursor + 1];
+        cursor += 2;
+      } else {
+        value += source[cursor];
+        cursor += 1;
+      }
+    }
+    if (cursor >= source.length) return false;
+    if (value.includes(specifier) && isImportStringLiteral(source, start)) return true;
+    cursor += 1;
+  }
+  return false;
+}
+
+function isImportStringLiteral(source: string, quoteIndex: number): boolean {
+  let cursor = quoteIndex - 1;
+  while (cursor >= 0 && isWhitespace(source[cursor])) cursor -= 1;
+  if (cursor >= 0 && source[cursor] === "(") {
+    cursor -= 1;
+    while (cursor >= 0 && isWhitespace(source[cursor])) cursor -= 1;
+    const end = cursor + 1;
+    while (cursor >= 0 && isIdentifierCharacter(source[cursor])) cursor -= 1;
+    if (source.slice(cursor + 1, end) === "import") return true;
+  }
+  const end = cursor + 1;
+  while (cursor >= 0 && isIdentifierCharacter(source[cursor])) cursor -= 1;
+  return source.slice(cursor + 1, end) === "from";
+}
+
+function skipWhitespace(source: string, start: number): number {
+  let cursor = start;
+  while (cursor < source.length && isWhitespace(source[cursor])) cursor += 1;
+  return cursor;
+}
+
+function isWhitespace(value: string): boolean {
+  return value === " " || value === "\t" || value === "\n" || value === "\r";
+}
+
+function isIdentifierCharacter(value: string): boolean {
+  if (!value) return false;
+  const code = value.charCodeAt(0);
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    code === 95 ||
+    code === 36 ||
+    (code >= 97 && code <= 122)
+  );
 }
 
 function sourceHygieneReason(trackedPath: string, packageRoot: string): string {

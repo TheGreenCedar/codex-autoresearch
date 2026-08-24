@@ -1,4 +1,3 @@
-import { countsTowardPacketBudget } from "./benchmark/budget-contract.js";
 import {
   loadCoherentSessionSnapshot,
   CoherentSnapshotSourceError,
@@ -11,7 +10,11 @@ import {
   type DecisionDiagnostic,
   type DecisionPlan,
 } from "./decision-compiler.js";
-import { continuationCommands } from "./commands/continuation.js";
+import {
+  continuationCommands,
+  continuationLogCommand,
+  type ContinuationLogStatus,
+} from "./commands/continuation.js";
 import { analyzeLedgerHealth } from "./ledger-health.js";
 import { lastRunPacketFreshnessFromFacts } from "./last-run-store.js";
 import {
@@ -29,7 +32,11 @@ import { decisionGuidance } from "./decision-guidance.js";
 import { currentQualityGapSummary } from "./research-gaps.js";
 import { buildCheapFinalizationPressure } from "./session-read-model.js";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
-import { contractDerivationError, deriveExperimentContract } from "./experiment-contract.js";
+import {
+  contractDerivationError,
+  contractStopStatus,
+  deriveExperimentContract,
+} from "./experiment-contract.js";
 import {
   blockedFinalizationDecisionFact,
   isFinalizationDecisionFact,
@@ -207,7 +214,7 @@ export async function collectSessionDecisionFacts(
     finalization = collectedFinalization.finalization;
     finalizationDecisionFact = collectedFinalization.decisionFact;
   }
-  const legacyContractDiagnostic = await legacyContractDecisionDiagnostic(snapshot);
+  const contractDiagnostics = await contractDecisionDiagnostics(snapshot);
   const diagnostics = [
     ...decisionDiagnosticsForCollectedFacts({
       guidance,
@@ -217,7 +224,7 @@ export async function collectSessionDecisionFacts(
       warningDetails,
       hasFreshPacketAuthority: packetFreshness?.fresh === true,
     }),
-    ...(legacyContractDiagnostic ? [legacyContractDiagnostic] : []),
+    ...contractDiagnostics,
     ...(overrides.diagnostics || []),
   ];
   return {
@@ -311,12 +318,33 @@ function diagnosticsFromSnapshot(
     );
   }
   if (packetFreshness) {
+    const logDisposition =
+      packetFreshness.fresh === true ? packetLogDisposition(snapshot.lastRunPacket) : null;
     diagnostics.push(
       decisionDiagnostic(packetFreshness.fresh === true ? "pending-packet" : "stale-packet", {
         message: stringValue(packetFreshness.reason),
-        command: packetFreshness.fresh === true ? commands.keepLast : commands.next,
+        command:
+          packetFreshness.fresh === true && logDisposition
+            ? continuationLogCommand(snapshot.workDir, logDisposition.selected)
+            : commands.next,
+        ...(logDisposition
+          ? {
+              semantic: {
+                allowedStatuses: logDisposition.allowed,
+                selectedStatus: logDisposition.selected,
+              },
+            }
+          : {}),
       }),
     );
+    if (logDisposition && !logDisposition.allowed.includes("keep")) {
+      diagnostics.push(
+        decisionDiagnostic("packet-keep-not-authorized", {
+          message: "The accepted packet evidence does not authorize a keep.",
+          semantic: { allowedStatuses: logDisposition.allowed },
+        }),
+      );
+    }
   }
   const process = snapshot.processProgress;
   if (process?.exitState === "termination_failed" || process?.terminationFailed === true) {
@@ -334,54 +362,88 @@ function diagnosticsFromSnapshot(
       }),
     );
   }
-  const contract = acceptedContract(snapshot);
-  const stopPolicy = object(contract?.stopPolicy);
-  const packetPolicy = object(stopPolicy.packets);
-  const packetCeiling = finiteInteger(packetPolicy.limit ?? stopPolicy.packets);
-  if (
-    packetCeiling != null &&
-    snapshot.records.filter((record) => record.run != null && countsTowardPacketBudget(record))
-      .length >= packetCeiling
-  ) {
-    diagnostics.push(
-      decisionDiagnostic("packet-budget-exhausted", {
-        message: `The accepted packet ceiling (${packetCeiling}) is exhausted.`,
-        command: commands.stateCompact,
-        semantic: { packetCeiling },
-      }),
-    );
-  }
   return diagnostics;
 }
 
-async function legacyContractDecisionDiagnostic(
+function packetLogDisposition(packet: UnknownRecord | null): {
+  allowed: ContinuationLogStatus[];
+  selected: ContinuationLogStatus;
+} | null {
+  const decision = object(packet?.decision);
+  const allowed = Array.isArray(decision.allowedStatuses)
+    ? [...new Set(decision.allowedStatuses.map(String))].filter(isContinuationLogStatus)
+    : [];
+  if (allowed.length === 0) return null;
+  const preferred = [
+    decision.safeSuggestedStatus,
+    decision.suggestedStatus,
+    decision.rawSuggestedStatus,
+  ]
+    .map(String)
+    .find(
+      (status): status is ContinuationLogStatus =>
+        isContinuationLogStatus(status) && allowed.includes(status),
+    );
+  return { allowed, selected: preferred ?? allowed[0] };
+}
+
+function isContinuationLogStatus(value: string): value is ContinuationLogStatus {
+  return ["keep", "discard", "crash", "checks_failed", "measure"].includes(value);
+}
+
+async function contractDecisionDiagnostics(
   snapshot: CoherentSessionSnapshot,
-): Promise<DecisionDiagnostic | null> {
-  if (snapshot.semanticFacts.contractDigest) return null;
+): Promise<DecisionDiagnostic[]> {
   const derivation = await deriveExperimentContract({
     workDir: snapshot.workDir,
     config: snapshot.config,
     entries: snapshot.records,
     packet: snapshot.lastRunPacket,
   });
-  if (derivation.status === "derived") {
-    return decisionDiagnostic("legacy-contract-acceptance-required", {
-      message:
-        "Accept the complete legacy experiment contract exactly once before running this packet.",
-      command: continuationCommands(snapshot.workDir).next,
-      semantic: { contractDigest: derivation.contract.contractDigest },
+  if (derivation.status === "accepted") {
+    const state = stateFromSessionRecords(snapshot.workDir, snapshot.records);
+    const resourceStatus = contractStopStatus(derivation.contract, {
+      acceptedAt: derivation.event.timestamp,
+      currentRuns: state.current,
     });
+    if (resourceStatus.status === "allowed") return [];
+    return [
+      decisionDiagnostic(
+        resourceStatus.dimension === "packets" ? "packet-budget-exhausted" : "resource-exhausted",
+        {
+          message: resourceStatus.message,
+          command: continuationCommands(snapshot.workDir).stateCompact,
+          semantic: {
+            dimension: resourceStatus.dimension,
+            limit: resourceStatus.limit,
+            used: resourceStatus.used,
+          },
+        },
+      ),
+    ];
+  }
+  if (derivation.status === "derived") {
+    return [
+      decisionDiagnostic("legacy-contract-acceptance-required", {
+        message:
+          "Accept the complete legacy experiment contract exactly once before running this packet.",
+        command: continuationCommands(snapshot.workDir).next,
+        semantic: { contractDigest: derivation.contract.contractDigest },
+      }),
+    ];
   }
   if (derivation.status === "invalid" && derivation.missing.length === 0) {
-    return decisionDiagnostic("legacy-contract-conflict", {
-      message: contractDerivationError(derivation).message,
-      command: continuationCommands(snapshot.workDir).stateCompact,
-      semantic: {
-        conflicts: derivation.conflicts.map(({ field, sources }) => ({ field, sources })),
-      },
-    });
+    return [
+      decisionDiagnostic("legacy-contract-conflict", {
+        message: contractDerivationError(derivation).message,
+        command: continuationCommands(snapshot.workDir).stateCompact,
+        semantic: {
+          conflicts: derivation.conflicts.map(({ field, sources }) => ({ field, sources })),
+        },
+      }),
+    ];
   }
-  return null;
+  return [];
 }
 
 export function finalizationDecisionDiagnostics(
@@ -407,18 +469,6 @@ export function finalizationDecisionDiagnostics(
     ? "finalization-claim-blocked"
     : "finalization-blocked";
   return [decisionDiagnostic(code)];
-}
-
-function acceptedContract(snapshot: CoherentSessionSnapshot): UnknownRecord | null {
-  const event = [...snapshot.records]
-    .reverse()
-    .find(
-      (record) =>
-        record.type === "experiment-contract-accepted" &&
-        isUnknownRecord(record.contract) &&
-        record.contract.contractDigest === snapshot.semanticFacts.contractDigest,
-    );
-  return objectOrNull(event?.contract);
 }
 
 async function collectFinalizationFacts({
@@ -598,11 +648,6 @@ function objectOrNull(value: unknown): UnknownRecord | null {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function finiteInteger(value: unknown): number | null {
-  const number = Number(value);
-  return Number.isSafeInteger(number) && number >= 0 ? number : null;
 }
 
 function finiteNumber(value: unknown): number | null {

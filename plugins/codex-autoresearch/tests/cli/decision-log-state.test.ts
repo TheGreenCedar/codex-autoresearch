@@ -280,6 +280,15 @@ test("typed failure layer preconditions reach the real ledger and pause repeated
     assert.equal(pausedPlan.failures.consecutive, 2);
     assert.equal(pausedPlan.primaryBlockerCode, "same-layer-failure-pause");
     assert.equal(pausedPlan.capabilities["run-packet"], "blocked");
+    const blockedNext = await runCli(["next", "--cwd", dir]);
+    assert.equal(blockedNext.code, 1, blockedNext.stdout);
+    const blockedPayload = JSON.parse(blockedNext.stderr);
+    assert.equal(blockedPayload.code, "mutation-precondition-blocked");
+    assert.equal(
+      blockedPayload.preconditionDecision.primaryBlockerCode,
+      "same-layer-failure-pause",
+    );
+    assert.doesNotMatch(blockedNext.stderr, /new-segment/);
   });
 });
 

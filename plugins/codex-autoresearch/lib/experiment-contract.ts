@@ -2927,13 +2927,11 @@ export function contractStopStatus(
     0,
     Math.floor((nowMilliseconds - acceptedAtMilliseconds) / 1000),
   );
-  const consecutiveFailures = countTrailingRuns(input.currentRuns, (run) =>
-    ["crash", "checks_failed"].includes(String(run.status || "")),
-  );
-  const consecutiveNoLearningPackets = countTrailingRuns(
-    input.currentRuns,
-    (run) => !["baseline", "keep", "measure"].includes(String(run.status || "")),
-  );
+  // Learning and repeated-failure guards are compiled from typed evidence axes and
+  // precondition identities by DecisionPlan. This helper owns only plugin-metered
+  // resource ceilings, so it cannot become a second stop authority.
+  const consecutiveFailures = 0;
+  const consecutiveNoLearningPackets = 0;
   const ceilings: Array<{
     dimension: ContractStopDimension;
     limit: number;
@@ -2958,18 +2956,6 @@ export function contractStopStatus(
       used: pluginWallClockSeconds,
       label: "plugin wall-clock",
     },
-    {
-      dimension: "repeatedFailures",
-      limit: contract.stopPolicy.repeatedFailures.limit,
-      used: consecutiveFailures,
-      label: "repeated-failure",
-    },
-    {
-      dimension: "noLearningPackets",
-      limit: contract.stopPolicy.noLearningPackets.limit,
-      used: consecutiveNoLearningPackets,
-      label: "no-learning packet",
-    },
   ];
   const exhausted = ceilings.find((ceiling) => ceiling.used >= ceiling.limit);
   if (exhausted) {
@@ -2978,7 +2964,7 @@ export function contractStopStatus(
       dimension: exhausted.dimension,
       limit: exhausted.limit,
       used: exhausted.used,
-      message: `Accepted ${exhausted.label} ceiling reached (${exhausted.used}/${exhausted.limit}). Start a new segment.`,
+      message: `Accepted ${exhausted.label} ceiling reached (${exhausted.used}/${exhausted.limit}). Recompile the canonical session decision before any further packet.`,
     };
   }
   return {
@@ -2991,17 +2977,6 @@ export function contractStopStatus(
       consecutiveFailures,
     },
   };
-}
-
-function countTrailingRuns(
-  runs: UnknownRecord[],
-  predicate: (run: UnknownRecord) => boolean,
-): number {
-  let count = 0;
-  for (let index = runs.length - 1; index >= 0 && predicate(runs[index]); index -= 1) {
-    count += 1;
-  }
-  return count;
 }
 
 function noiseModel(value: unknown): NoiseModel {

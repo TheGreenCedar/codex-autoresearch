@@ -83,6 +83,7 @@ export type DecisionDiagnosticCode =
   | "no-learning-pause"
   | "packet-budget-exhausted"
   | "packet-diagnostic"
+  | "packet-keep-not-authorized"
   | "pending-log-transaction"
   | "pending-log-transaction-inconsistent"
   | "pending-packet"
@@ -177,8 +178,17 @@ export const decisionDiagnosticRegistry = {
   "evaluator-drift": blockedPolicy(15, "direct-work", "transition-segment", PACKET_AND_KEEP),
   "active-process": blockedPolicy(16, "recovery", "inspect-process", PACKET_ONLY),
   "pending-packet": blockedPolicy(17, "packet", "log-decision", PACKET_ONLY),
-  "stale-packet": {
+  "packet-keep-not-authorized": {
     priority: 18,
+    phase: "packet",
+    actionKind: "log-decision",
+    blocked: KEEP_ONLY,
+    recoveryOnly: [],
+    primaryBlocker: false,
+    loop: "blocked",
+  },
+  "stale-packet": {
+    priority: 19,
     phase: "packet",
     actionKind: "replace-packet",
     blocked: [],
@@ -186,7 +196,7 @@ export const decisionDiagnosticRegistry = {
     primaryBlocker: true,
     loop: "blocked",
   },
-  "packet-diagnostic": blockedPolicy(19, "packet", "inspect-packet", PACKET_ONLY),
+  "packet-diagnostic": blockedPolicy(20, "packet", "inspect-packet", PACKET_ONLY),
   "setup-required": blockedPolicy(20, "setup", "setup", PACKET_AND_KEEP),
   "benchmark-required": blockedPolicy(21, "setup", "configure-benchmark", PACKET_AND_KEEP),
   "checks-required": blockedPolicy(22, "setup", "configure-checks", PACKET_AND_KEEP),
@@ -809,10 +819,7 @@ function commandSemanticIdentity(diagnostic: DecisionDiagnostic | null | undefin
   if (!diagnostic) return "";
   if (nonEmptyString(diagnostic.actionSemanticId)) return diagnostic.actionSemanticId.trim();
   if (!nonEmptyString(diagnostic.command)) return "";
-  const tokens = diagnostic.command
-    .match(/"(?:\\.|[^"])*"|'[^']*'|\S+/g)
-    ?.map((token) => token.replace(/^['"]|['"]$/g, ""))
-    .filter(Boolean) || [diagnostic.command.trim()];
+  const tokens = tokenizeCommand(diagnostic.command);
   const launcherIndex = tokens.findIndex((token) =>
     /(?:^|[\\/])(?:autoresearch|finalize-autoresearch)\.mjs$/i.test(token),
   );
@@ -851,6 +858,42 @@ function commandSemanticIdentity(diagnostic: DecisionDiagnostic | null | undefin
     `${left.flag}\0${left.value || ""}`.localeCompare(`${right.flag}\0${right.value || ""}`),
   );
   return canonicalJson({ command, parameters, positional });
+}
+
+function tokenizeCommand(command: string): string[] {
+  const tokens: string[] = [];
+  let token = "";
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index];
+    if (quote) {
+      if (character === quote) {
+        quote = null;
+      } else if (quote === '"' && character === "\\" && index + 1 < command.length) {
+        token += character + command[index + 1];
+        index += 1;
+      } else {
+        token += character;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (isCommandWhitespace(character)) {
+      if (token) {
+        tokens.push(token);
+        token = "";
+      }
+    } else {
+      token += character;
+    }
+  }
+  if (token) tokens.push(token);
+  return tokens.length > 0 ? tokens : [command.trim()].filter(Boolean);
+}
+
+function isCommandWhitespace(value: string): boolean {
+  return value === " " || value === "\t" || value === "\n" || value === "\r";
 }
 
 function normalizeCommandSemanticValue(value: string): string {

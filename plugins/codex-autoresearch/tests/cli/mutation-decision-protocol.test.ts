@@ -565,6 +565,7 @@ test("locked protocol enforces the concrete command capability before mutation",
     const cases = [
       {
         command: "log",
+        commandArgs: { status: "keep" },
         diagnostic: decisionDiagnostic("quality-evidence-required"),
         capability: "authorize-keep",
       },
@@ -595,6 +596,7 @@ test("locked protocol enforces the concrete command capability before mutation",
         await assert.rejects(
           runCommandDecisionProtocol({
             command: item.command,
+            ...("commandArgs" in item ? { commandArgs: item.commandArgs } : {}),
             requestedCwd: dir,
             expectedWorkDir: dir,
             loadDecision: async () => ({ ok: true as const, attempts: 1, snapshot, plan }),

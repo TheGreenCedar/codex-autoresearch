@@ -10,6 +10,23 @@ type ContinuationCommandOptions = {
   workDir: string;
 };
 
+const LOG_STATUS_DESCRIPTIONS = {
+  keep: "Describe the kept change",
+  discard: "Describe the discarded change",
+  crash: "Describe the evaluator failure",
+  checks_failed: "Describe the accepted-check failure",
+  measure: "Baseline or diagnostic measurement",
+} as const;
+
+export type ContinuationLogStatus = keyof typeof LOG_STATUS_DESCRIPTIONS;
+
+export function continuationLogCommand(workDir: string, status: ContinuationLogStatus): string {
+  const script = quoteShellArg(
+    path.join(resolvePackageRoot(import.meta.url), "scripts", "autoresearch.mjs"),
+  );
+  return `node ${script} log --cwd ${quoteShellArg(workDir)} --from-last --status ${status} --description ${quoteShellArg(LOG_STATUS_DESCRIPTIONS[status])}`;
+}
+
 export function continuationCommands(workDir: string) {
   return buildContinuationCommands({
     researchSlug: activeQualityGapSlugCandidatesSync(workDir)[0]?.slug || "research",
@@ -35,9 +52,9 @@ export function buildContinuationCommands({
     doctorExplain: `node ${script} doctor --cwd ${cwd} --explain`,
     next: `node ${script} next --cwd ${cwd} --compact`,
     nextFull: `node ${script} next --cwd ${cwd}`,
-    keepLast: `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
-    measureLast: `node ${script} log --cwd ${cwd} --from-last --status measure --description "Baseline measurement"`,
-    discardLast: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
+    keepLast: continuationLogCommand(workDir, "keep"),
+    measureLast: continuationLogCommand(workDir, "measure"),
+    discardLast: continuationLogCommand(workDir, "discard"),
     ledgerDoctor: `node ${script} ledger-doctor --cwd ${cwd} --json`,
     processRecover: `node ${script} process-recover --cwd ${cwd}`,
     partialResults: `node ${script} partial-results --cwd ${cwd} --from-last`,

@@ -151,6 +151,24 @@ test("decision identity includes typed command semantics and rejects conflicting
   }
 });
 
+test(
+  "decision command identity handles hostile unmatched quoting in linear time",
+  { timeout: 1_000 },
+  () => {
+    const snapshot = snapshotFixture();
+    const hostile = `node scripts/autoresearch.mjs partial-results --from-last --description "${"\\!".repeat(50_000)}`;
+    const plan = compileDecisionPlan(snapshot, [
+      decisionDiagnostic("packet-diagnostic", {
+        command: hostile,
+        semantic: { stage: "hostile-command" },
+      }),
+    ]);
+
+    assert.equal(plan.action.kind, "inspect-packet");
+    assert.notEqual(plan.action.commandSemanticId, "");
+  },
+);
+
 test("decision identity retains normalized value-bearing action parameters", () => {
   const snapshot = snapshotFixture();
   const keep = decisionDiagnostic("packet-diagnostic", {

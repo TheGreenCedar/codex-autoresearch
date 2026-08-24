@@ -159,6 +159,38 @@ test("source hygiene keeps canonical decisions downstream-only and retired autho
   assert.match(offenders[5].reason, /projection|nextAction/i);
 });
 
+test("decision-boundary hygiene scans hostile source text without backtracking", () => {
+  const whitespace = "\t".repeat(50_000);
+  const repeatedSpecifier = "session-decision".repeat(10_000);
+  const offenders = findDecisionCompilerBoundaryOffenders([
+    {
+      path: "plugins/codex-autoresearch/lib/finalize-preview.ts",
+      content: `const blocked = sessionDecisionCapsule${whitespace}?.${whitespace}enforcement;`,
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/session-decision.ts",
+      content: `const action = finalization${whitespace}.${whitespace}nextAction;`,
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/coherent-session-snapshot.ts",
+      content: `const module = import${whitespace}("./${repeatedSpecifier}.js");`,
+    },
+    {
+      path: `plugins/codex-autoresearch/lib/${"nested/".repeat(10_000)}safe.ts`,
+      content: "export const safe = true;",
+    },
+  ]);
+
+  assert.deepEqual(
+    offenders.map((offender) => offender.path),
+    [
+      "plugins/codex-autoresearch/lib/coherent-session-snapshot.ts",
+      "plugins/codex-autoresearch/lib/finalize-preview.ts",
+      "plugins/codex-autoresearch/lib/session-decision.ts",
+    ],
+  );
+});
+
 test("public finalization fixtures cannot overwrite planner groups and self-sign the result", () => {
   const fixtureSources = [
     path.join(pluginRoot, "tests", "finalize", "helpers.ts"),

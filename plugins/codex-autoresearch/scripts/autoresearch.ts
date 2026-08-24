@@ -15,7 +15,13 @@ import {
   projectResolvedDecision,
 } from "../lib/decision-projection.js";
 import { loadCanonicalSessionDecision } from "../lib/session-decision.js";
-import { adaptLegacySessionMetadata, classifyFit } from "../lib/fit-gate.js";
+import {
+  adaptAcceptedSessionMetadata,
+  adaptLegacySessionMetadata,
+  classifyFit,
+  requestsNamedSessionContinuation,
+  withFitCompatibilityConflicts,
+} from "../lib/fit-gate.js";
 import { stripDashboardGuidanceCommandFields } from "../lib/dashboard-command-safety.js";
 import { dashboardSafeGuidanceText } from "../lib/dashboard-transport.js";
 import { DASHBOARD_LEDGER_MAX_ENTRIES, type DashboardLedgerFold } from "../lib/dashboard-ledger.js";
@@ -983,7 +989,39 @@ async function promptPlan(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const prompt = String(args.prompt || args.goal || args.request || "").trim();
   if (!prompt) throw new Error("prompt-plan requires --prompt <text>.");
-  const fit = classifyFit({ prompt, session: adaptLegacySessionMetadata(config) });
+  const directFit = classifyFit({ prompt, session: null });
+  if (directFit.disposition === "continue-direct") {
+    return {
+      ok: true,
+      workDir,
+      kind: "codex-autoresearch-prompt-plan",
+      prompt,
+      fit: directFit,
+      directEvidence: directFit.nextAction.capsule,
+      nextAction: directFit.nextAction,
+    };
+  }
+  const records = loadSessionRecords(workDir);
+  const sessionConfig = records.length
+    ? { ...stateFromSessionRecords(workDir, records).config, ...config }
+    : config;
+  let session = adaptLegacySessionMetadata(sessionConfig);
+  if (session && requestsNamedSessionContinuation(prompt, session.name)) {
+    const derivation = await deriveExperimentContract({ workDir, config });
+    if (derivation.status === "accepted") {
+      session = adaptAcceptedSessionMetadata(sessionConfig, derivation.contract);
+    } else if (derivation.status === "invalid") {
+      session = withFitCompatibilityConflicts(
+        session,
+        derivation.conflicts.map(({ field, sources, message }) => ({
+          field,
+          sources,
+          message,
+        })),
+      );
+    }
+  }
+  const fit = classifyFit({ prompt, session });
   if (fit.disposition === "continue-direct") {
     return {
       ok: true,

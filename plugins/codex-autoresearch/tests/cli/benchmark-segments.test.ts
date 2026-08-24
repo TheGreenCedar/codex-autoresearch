@@ -102,12 +102,13 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
     assert.equal(compact.code, 0, compact.stderr);
     const compactPayload = JSON.parse(compact.stdout);
     const plan = compactPayload.decisionPlanProjection;
-    assert.equal(plan.action.kind, "repair-scaffold");
-    assert.equal(plan.primaryBlockerCode, "scaffold-invalid");
+    assert.equal(plan.action.kind, "repair-contract-conflict");
+    assert.equal(plan.primaryBlockerCode, "legacy-contract-conflict");
     assert.equal(plan.capabilities["run-packet"], "blocked");
     assert.equal(plan.capabilities["authorize-keep"], "blocked");
     assert.equal(plan.loopDisposition.kind, "blocked");
     assert.ok(plan.requiredEvidence.diagnosticCodes.includes("scaffold-invalid"));
+    assert.ok(plan.requiredEvidence.diagnosticCodes.includes("legacy-contract-conflict"));
   });
 });
 
@@ -558,7 +559,10 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     await git(dir, ["config", "user.name", "Codex Test"]);
     await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
     await setupFixture(dir, { name: "segment" });
-    await writeCompleteContractConfig(dir, { commitPaths: ["src", "tracked.txt"] });
+    await writeCompleteContractConfig(dir, {
+      commitPaths: ["src", "tracked.txt"],
+      editableScope: ["src", "tracked.txt"],
+    });
     const measurement = await runCli([
       "log",
       "--cwd",

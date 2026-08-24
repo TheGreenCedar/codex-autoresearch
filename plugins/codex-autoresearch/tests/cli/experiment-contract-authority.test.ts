@@ -7,6 +7,92 @@ import { quoteForShell } from "../helpers/process.js";
 import { git, runCli, setupFixture, withTempDir } from "../helpers/cli-test-context.js";
 import { createExecutionSpec, createExperimentContract } from "../../lib/experiment-contract.js";
 
+test("an interrupted segment transition never inherits old contract pauses", async () => {
+  await withTempDir("segment-contract-interruption", async (dir) => {
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=2')"`;
+    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const setup = await setupFixture(dir, {
+      acceptedContract: true,
+      benchmarkCommand: benchmark,
+      checksCommand: checks,
+      direction: "higher",
+      goal: "Keep segment authority local to its accepted epoch.",
+      metricName: "score",
+      name: "segment interruption",
+      packetBudget: 8,
+      scope: "src",
+    });
+    assert.equal(setup.code, 0, setup.stderr);
+
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const initialRecords = (await readFile(ledgerPath, "utf8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line));
+    const accepted = initialRecords.find(
+      (record) => record.type === "experiment-contract-accepted",
+    );
+    assert.ok(accepted);
+    const oldCandidate = (run: number) => ({
+      run,
+      segment: 0,
+      status: "discard",
+      metric: 2,
+      runPurpose: "candidate",
+      evaluationAuthority: "accepted-contract",
+      candidateOrigin: { kind: "working-tree" },
+      experimentContractDigest: accepted.contract.contractDigest,
+      preconditionEpoch: accepted.eventId,
+      learning: { kind: "none", changedBelief: null, evidence: [] },
+    });
+    const interruptedConfig = {
+      type: "config",
+      name: "segment interruption",
+      metricName: "score",
+      bestDirection: "higher",
+      segmentReason: "simulated interruption before contract acceptance",
+      timestamp: "2026-08-24T12:00:00.000Z",
+    };
+    await writeFile(
+      ledgerPath,
+      `${[...initialRecords, oldCandidate(1), oldCandidate(2), interruptedConfig]
+        .map((record) => JSON.stringify(record))
+        .join("\n")}\n`,
+    );
+    const beforeRead = await readFile(ledgerPath, "utf8");
+
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
+    assert.equal(state.code, 0, state.stderr);
+    const plan = JSON.parse(state.stdout).decisionPlan;
+    assert.equal(plan.contractDigest, "");
+    assert.equal(plan.primaryBlockerCode, "legacy-contract-acceptance-required");
+    assert.equal(plan.requiredEvidence.diagnosticCodes.includes("no-learning-pause"), false);
+    assert.equal(
+      await readFile(ledgerPath, "utf8"),
+      beforeRead,
+      "read-only state must not migrate",
+    );
+
+    const next = await runCli(["next", "--cwd", dir]);
+    assert.equal(next.code, 0, next.stderr);
+    const resultingRecords = (await readFile(ledgerPath, "utf8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line));
+    const acceptanceEvents = resultingRecords.filter(
+      (record) => record.type === "experiment-contract-accepted",
+    );
+    assert.equal(acceptanceEvents.length, 2);
+    assert.equal(acceptanceEvents.at(-1).segment, 1);
+    assert.equal(
+      resultingRecords.filter((record) => record.type === "config").length,
+      initialRecords.filter((record) => record.type === "config").length + 1,
+      "acceptance recovery must not create another segment",
+    );
+  });
+});
+
 async function setupKeepPolicyFixture(
   dir: string,
   input: {

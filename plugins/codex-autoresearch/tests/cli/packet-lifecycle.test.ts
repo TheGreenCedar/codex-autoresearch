@@ -580,7 +580,7 @@ test("last-run packets are rejected when config changes before logging", async (
       "Old metric packet",
     ]);
     assert.notEqual(stale.code, 0);
-    assert.match(stale.stderr, /session config changed/);
+    assertStalePacketCapabilityRefusal(stale.stderr);
   });
 });
 
@@ -834,7 +834,14 @@ test("log from last packet rejects keep after failed checks", async () => {
       "Should not keep failed checks",
     ]);
     assert.notEqual(log.code, 0);
-    assert.match(log.stderr, /Cannot log status 'keep'/);
+    const refusal = JSON.parse(log.stderr);
+    assert.equal(refusal.code, "mutation-precondition-blocked");
+    assert.equal(refusal.preconditionDecision.capabilities["authorize-keep"], "blocked");
+    assert.ok(
+      refusal.preconditionDecision.requiredEvidence.diagnosticCodes.includes(
+        "packet-keep-not-authorized",
+      ),
+    );
 
     const jsonl = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
     assert.doesNotMatch(jsonl, /Should not keep failed checks/);

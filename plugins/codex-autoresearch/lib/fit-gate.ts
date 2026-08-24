@@ -1,6 +1,12 @@
+import type { ExperimentContract as AcceptedExperimentContract } from "./experiment-contract.js";
+
 export type SessionRelation = "none" | "matching" | "unrelated" | "replacement-requested";
 
 export type ContractField =
+  | "goal"
+  | "repository"
+  | "evaluator"
+  | "checks"
   | "benchmark_command"
   | "metric_name"
   | "direction"
@@ -24,9 +30,11 @@ export interface ExperimentContractCandidate {
 export type ExperimentContract = ExperimentContractCandidate;
 
 export interface ContractConflict {
-  field: ContractField;
-  existing: string | string[] | number;
-  requested: string | string[] | number;
+  field: ContractField | string;
+  existing?: string | string[] | number;
+  requested?: string | string[] | number;
+  sources?: string[];
+  message?: string;
 }
 
 export interface DirectEvidenceCapsule {
@@ -81,6 +89,16 @@ export type FitDecision =
 export interface LegacySessionMetadata {
   status: "complete" | "incomplete";
   name: string;
+  compatibility: {
+    status: "verified";
+    contractDigest: string;
+    repositoryIdentity: string;
+    worktreeIdentity: string;
+    evaluatorExecutionDigest: string;
+    checkExecutionDigests: string[];
+    scopeDigest: string;
+  } | null;
+  compatibilityConflicts: ContractConflict[];
   contract:
     | (Omit<ExperimentContractCandidate, "maxIterations"> & { maxIterations?: number })
     | null;
@@ -128,6 +146,8 @@ export function adaptLegacySessionMetadata(
   return {
     status: complete ? "complete" : "incomplete",
     name,
+    compatibility: null,
+    compatibilityConflicts: [],
     contract: complete
       ? {
           goal,
@@ -142,6 +162,70 @@ export function adaptLegacySessionMetadata(
         }
       : null,
   };
+}
+
+export function adaptAcceptedSessionMetadata(
+  config: Record<string, unknown>,
+  accepted: AcceptedExperimentContract,
+): LegacySessionMetadata {
+  const direction =
+    accepted.metric.kind === "minimize"
+      ? "lower"
+      : accepted.metric.kind === "maximize"
+        ? "higher"
+        : "";
+  const authoritativeChecks = accepted.checks.filter(
+    (check) => check.authority === "authoritative",
+  );
+  const maxIterations = positiveInteger(
+    config.maxIterations ?? config.max_iterations ?? accepted.stopPolicy.packets.limit,
+  );
+  const complete = Boolean(direction && authoritativeChecks.length > 0 && maxIterations);
+  return {
+    status: complete ? "complete" : "incomplete",
+    name: text(config.name) || "Autoresearch",
+    compatibility: {
+      status: "verified",
+      contractDigest: accepted.contractDigest,
+      repositoryIdentity: accepted.repository.repositoryIdentity,
+      worktreeIdentity: accepted.repository.worktreeIdentity,
+      evaluatorExecutionDigest: accepted.evaluator.execution.executionDigest,
+      checkExecutionDigests: authoritativeChecks
+        .map((check) => check.execution.executionDigest)
+        .sort(),
+      scopeDigest: JSON.stringify({
+        editable: [...accepted.scope.editable].sort(),
+        protected: [...accepted.scope.protected].sort(),
+      }),
+    },
+    compatibilityConflicts: [],
+    contract: complete
+      ? {
+          goal: accepted.goal.objective,
+          benchmarkCommand: executableCommandText(accepted.evaluator.execution.command),
+          metricName: accepted.metric.metricName,
+          metricUnit: accepted.metric.unit,
+          direction: direction as ExperimentContractCandidate["direction"],
+          checksCommand: authoritativeChecks
+            .map((check) => executableCommandText(check.execution.command))
+            .join(" && "),
+          filesInScope: accepted.scope.editable,
+          commitPaths: accepted.scope.editable,
+          maxIterations: maxIterations as number,
+        }
+      : null,
+  };
+}
+
+export function withFitCompatibilityConflicts(
+  session: LegacySessionMetadata,
+  conflicts: ContractConflict[],
+): LegacySessionMetadata {
+  return { ...session, compatibility: null, compatibilityConflicts: conflicts };
+}
+
+export function requestsNamedSessionContinuation(prompt: string, name: string): boolean {
+  return explicitlyNamesSession(prompt, name);
 }
 
 export function classifyFit({ prompt, session }: FitInput): FitDecision {
@@ -167,13 +251,20 @@ export function classifyFit({ prompt, session }: FitInput): FitDecision {
   }
 
   if (session?.status === "complete" && session.contract) {
-    const conflicts = contractConflicts(session.contract, request);
+    const conflicts = [
+      ...session.compatibilityConflicts,
+      ...contractConflicts(
+        session.contract,
+        request,
+        explicitlyNamesSession(prompt, session.name) ? continuationGoal(prompt, session.name) : "",
+      ),
+    ];
     if (conflicts.length) return clarificationDecision("unrelated", missing, conflicts);
     return clarificationDecision("unrelated", missing, []);
   }
 
   if (session?.status === "incomplete") {
-    return clarificationDecision("unrelated", missing, []);
+    return clarificationDecision("unrelated", missing, session.compatibilityConflicts);
   }
 
   return clarificationDecision("none", missing, []);
@@ -251,7 +342,9 @@ function relationForDirectRequest(
   session: LegacySessionMetadata | null,
 ): "none" | "matching" | "unrelated" {
   if (!session) return "none";
-  return session.status === "complete" && explicitlyNamesSession(prompt, session.name)
+  return session.status === "complete" &&
+    session.compatibility?.status === "verified" &&
+    explicitlyNamesSession(prompt, session.name)
     ? "matching"
     : "unrelated";
 }
@@ -262,7 +355,12 @@ function matchingLegacySession(
   session: LegacySessionMetadata | null,
 ): LegacySessionMetadata | null {
   if (session?.status !== "complete" || !session.contract) return null;
-  const conflicts = contractConflicts(session.contract, request);
+  if (session.compatibility?.status !== "verified") return null;
+  const conflicts = contractConflicts(
+    session.contract,
+    request,
+    continuationGoal(prompt, session.name),
+  );
   if (explicitlyNamesSession(prompt, session.name)) return conflicts.length === 0 ? session : null;
   return null;
 }
@@ -387,9 +485,13 @@ function completeLegacyContract(
 function contractConflicts(
   existing: LegacySessionMetadata["contract"],
   requested: PromptContract,
+  requestedGoal = "",
 ): ContractConflict[] {
   if (!existing) return [];
   const pairs: Array<[ContractField, string | string[] | number, string | string[] | number]> = [];
+  if (requestedGoal && normalizeGoal(requestedGoal) !== normalizeGoal(existing.goal)) {
+    pairs.push(["goal", existing.goal, requestedGoal]);
+  }
   if (requested.benchmarkCommand && requested.benchmarkCommand !== existing.benchmarkCommand) {
     pairs.push(["benchmark_command", existing.benchmarkCommand, requested.benchmarkCommand]);
   }
@@ -420,6 +522,42 @@ function contractConflicts(
     existing: current,
     requested: requestedValue,
   }));
+}
+
+function continuationGoal(prompt: string, sessionName: string): string {
+  const explicitGoal = prompt.match(/^Goal:\s*(.+)$/im)?.[1]?.trim();
+  if (explicitGoal) return explicitGoal;
+  const prose = prompt
+    .split(/\r?\n/)
+    .filter((line) => !/^(?:Goal|Benchmark|Metric|Checks|Scope):/i.test(line))
+    .join(" ");
+  const index = prose.toLowerCase().indexOf(sessionName.toLowerCase());
+  if (index < 0) return "";
+  return prose
+    .slice(index + sessionName.length)
+    .replace(/^["']?\s*(?:autoresearch\s+)?session\b/i, "")
+    .replace(
+      /\b(?:for\s+)?\d{1,4}\s+(?:repeated\s+)?(?:measured\s+)?(?:optimization\s+)?(?:iterations?|runs?|packets?)\b/gi,
+      " ",
+    )
+    .replace(/[.;,:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeGoal(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function executableCommandText(
+  command: AcceptedExperimentContract["evaluator"]["execution"]["command"],
+): string {
+  return command.kind === "shell"
+    ? command.script
+    : [command.executable, ...command.args].join(" ");
 }
 
 function iterationCount(prompt: string): number | null {

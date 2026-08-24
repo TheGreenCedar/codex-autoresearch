@@ -172,7 +172,7 @@ test("partial-results refuses to record or clear a packet after trust configurat
     assert.equal(record.code, 1);
     const refusal = JSON.parse(record.stderr);
     assert.equal(refusal.code, "mutation-precondition-blocked");
-    assert.equal(refusal.preconditionDecision.primaryBlockerCode, "stale-packet");
+    assert.equal(refusal.preconditionDecision.primaryBlockerCode, "legacy-contract-conflict");
     assert.equal(refusal.preconditionDecision.capabilities["run-packet"], "recovery-only");
     assert.equal(refusal.mutation, undefined);
     assert.equal(await readFile(path.join(dir, "autoresearch.jsonl"), "utf8"), ledgerBefore);

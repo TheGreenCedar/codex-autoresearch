@@ -930,8 +930,7 @@ export const commandTable = [
     cliCommand: "log",
     actionPolicy: "git_mutation",
     decisionProtocol: "session-mutation",
-    resolveDecisionCapability: (args) =>
-      !args.status || args.status === "keep" ? "authorize-keep" : null,
+    resolveDecisionCapability: (args) => (args.status === "keep" ? "authorize-keep" : null),
     recoveryForDiagnostics: ["pending-log-transaction", "pending-log-transaction-inconsistent"],
     category: "happy_path",
     audience: "default",

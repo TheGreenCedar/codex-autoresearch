@@ -17,6 +17,7 @@ import {
 } from "./pending-log-transaction-store.js";
 import { progressStateSpec } from "./active-progress-store.js";
 import {
+  activeSessionSegment,
   ledgerRecordIssue,
   parseJsonlRecord,
   type LedgerRecordIssue,
@@ -697,9 +698,13 @@ function parseObject(bytes: Uint8Array | null, label: string): UnknownRecord | n
 }
 
 function semanticFactsFromRecords(records: SessionRecord[]): SnapshotSemanticFacts {
+  const activeSegment = activeSessionSegment(records);
   const accepted = [...records]
     .reverse()
-    .find((record) => record.type === "experiment-contract-accepted");
+    .find(
+      (record) =>
+        record.type === "experiment-contract-accepted" && Number(record.segment) === activeSegment,
+    );
   const contract = isUnknownRecord(accepted?.contract) ? accepted.contract : null;
   const evaluator = isUnknownRecord(contract?.evaluator) ? contract.evaluator : null;
   const execution = isUnknownRecord(evaluator?.execution) ? evaluator.execution : null;

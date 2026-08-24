@@ -439,10 +439,12 @@ function shellEnvironment(options: ShellRunOptions): NodeJS.ProcessEnv {
   return options.env ? { ...base, ...options.env } : base;
 }
 
-function minimalProcessEnvironment(): NodeJS.ProcessEnv {
-  const allowed = new Set(["path", "systemroot", "temp", "tmp"]);
+export function minimalProcessEnvironment(
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const allowed = new Set(["comspec", "path", "pathext", "systemroot", "temp", "tmp"]);
   const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
+  for (const [key, value] of Object.entries(source)) {
     if (allowed.has(key.toLowerCase()) && value != null) env[key] = value;
   }
   return env;

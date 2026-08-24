@@ -19,6 +19,7 @@ import {
   isPromotionalStatus,
 } from "./run-status.js";
 import {
+  sessionSegmentTimeline,
   loadSessionRecords,
   readJsonl,
   refreshSessionReadCacheForLedgerStamp,
@@ -296,7 +297,8 @@ export function stateFromSessionRecords(workDir: string, entries: LooseObject[])
   let previousConfigEntry: LooseObject | null = null;
   let metricSemanticsWarning: LooseObject | null = null;
   const results: RunRecord[] = [];
-  for (const entry of entries) {
+  const segmentTimeline = sessionSegmentTimeline(entries);
+  for (const [index, entry] of entries.entries()) {
     if (entry.type === "config") {
       const previousConfig = config;
       const previousEntry = activeConfigEntry;
@@ -304,7 +306,7 @@ export function stateFromSessionRecords(workDir: string, entries: LooseObject[])
       const priorSegmentHadRuns = results.some(
         (run) => (run.segment ?? priorSegment) === priorSegment,
       );
-      if (results.length > 0) segment += 1;
+      segment = segmentTimeline[index];
       config = {
         name: entry.name || config.name,
         goal: entry.goal !== undefined ? String(entry.goal || "").trim() : config.goal,

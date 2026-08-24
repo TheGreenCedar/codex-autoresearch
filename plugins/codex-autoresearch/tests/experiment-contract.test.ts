@@ -1351,7 +1351,8 @@ test("the accepted stop policy mechanically enforces every plugin-owned ceiling"
         dimension: "packets",
         limit: 1,
         used: 1,
-        message: "Accepted packet ceiling reached (1/1). Start a new segment.",
+        message:
+          "Accepted packet ceiling reached (1/1). Recompile the canonical session decision before any further packet.",
       },
     );
     assert.deepEqual(
@@ -1378,7 +1379,8 @@ test("the accepted stop policy mechanically enforces every plugin-owned ceiling"
         dimension: "packets",
         limit: 1,
         used: 1,
-        message: "Accepted packet ceiling reached (1/1). Start a new segment.",
+        message:
+          "Accepted packet ceiling reached (1/1). Recompile the canonical session decision before any further packet.",
       },
     );
 
@@ -1399,22 +1401,51 @@ test("the accepted stop policy mechanically enforces every plugin-owned ceiling"
       "evaluatorRuns",
     );
 
-    assert.equal(
-      contractStopStatus(derivation.contract, {
-        acceptedAt,
-        currentRuns: [{ status: "discard" }, { status: "discard" }],
-        now,
-      }).dimension,
-      "noLearningPackets",
-    );
-    assert.equal(
-      contractStopStatus(derivation.contract, {
-        acceptedAt,
-        currentRuns: [{ status: "crash" }, { status: "checks_failed" }],
-        now,
-      }).dimension,
-      "repeatedFailures",
-    );
+    for (const currentRuns of [
+      [
+        {
+          status: "discard",
+          runPurpose: "diagnostic",
+          evaluationAuthority: "manual",
+          candidateOrigin: { kind: "none" },
+        },
+        {
+          status: "discard",
+          runPurpose: "diagnostic",
+          evaluationAuthority: "manual",
+          candidateOrigin: { kind: "none" },
+        },
+      ],
+      [
+        {
+          status: "crash",
+          runPurpose: "diagnostic",
+          evaluationAuthority: "manual",
+          candidateOrigin: { kind: "none" },
+        },
+        {
+          status: "checks_failed",
+          runPurpose: "diagnostic",
+          evaluationAuthority: "manual",
+          candidateOrigin: { kind: "none" },
+        },
+      ],
+    ]) {
+      assert.deepEqual(
+        contractStopStatus(derivation.contract, { acceptedAt, currentRuns, now }),
+        {
+          status: "allowed",
+          usage: {
+            packets: 0,
+            evaluatorRuns: 0,
+            pluginWallClockSeconds: 30,
+            consecutiveNoLearningPackets: 0,
+            consecutiveFailures: 0,
+          },
+        },
+        "learning and failure stops belong only to the canonical DecisionPlan",
+      );
+    }
     assert.equal(
       contractStopStatus(derivation.contract, {
         acceptedAt,

@@ -32,6 +32,56 @@ async function writeLegacySession(dir: string) {
   );
 }
 
+async function writeAcceptedSession(dir: string) {
+  await mkdir(path.join(dir, "src", "checkout"), { recursive: true });
+  await writeFile(path.join(dir, "evaluator.mjs"), 'console.log("METRIC seconds=1");\n', "utf8");
+  await writeFile(path.join(dir, "checks.mjs"), "process.exit(0);\n", "utf8");
+  const setup = await runCli([
+    "setup",
+    "--cwd",
+    dir,
+    "--name",
+    completeLegacySession.name,
+    "--goal",
+    completeLegacySession.goal,
+    "--metric-name",
+    completeLegacySession.metricName,
+    "--metric-unit",
+    completeLegacySession.metricUnit,
+    "--direction",
+    "lower",
+    "--benchmark-command",
+    "node evaluator.mjs",
+    "--checks-command",
+    "node checks.mjs",
+    "--scope",
+    "src/checkout",
+    "--commit-paths",
+    "src/checkout",
+    "--protected-benchmark-paths",
+    "evaluator.mjs,checks.mjs",
+    "--max-iterations",
+    "5",
+    "--packet-budget",
+    "5",
+  ]);
+  assert.equal(setup.code, 0, setup.stderr);
+  const configPath = path.join(dir, "autoresearch.config.json");
+  const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+  config.checksAuthoritative = true;
+  config.checkImplementationPaths = ["checks.mjs"];
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  const accepted = await runCli([
+    "new-segment",
+    "--cwd",
+    dir,
+    "--reason",
+    "Accept the fit-routing fixture contract",
+    "--yes",
+  ]);
+  assert.equal(accepted.code, 0, accepted.stderr);
+}
+
 async function directorySnapshot(dir: string): Promise<Record<string, string>> {
   const entries: Record<string, string> = {};
 
@@ -172,9 +222,9 @@ test("prompt-plan treats an uncounted repeated measured loop as incomplete", asy
   });
 });
 
-test("prompt-plan reuses only a complete matching legacy session as an in-memory loop candidate", async () => {
+test("prompt-plan reuses only a verified accepted session as an in-memory loop candidate", async () => {
   await withTempDir("fit-first-matching", async (dir) => {
-    await writeLegacySession(dir);
+    await writeAcceptedSession(dir);
     const before = await directorySnapshot(dir);
 
     const payload = await promptPlan(
@@ -183,21 +233,100 @@ test("prompt-plan reuses only a complete matching legacy session as an in-memory
     );
 
     const fit = payload.fit as Record<string, unknown>;
-    assert.equal(fit.disposition, "run-loop");
+    assert.equal(fit.disposition, "run-loop", JSON.stringify(fit));
     assert.equal(fit.mode, "full-loop");
     assert.equal(fit.sessionRelation, "matching");
     assert.deepEqual(fit.contract, {
       goal: completeLegacySession.goal,
-      benchmarkCommand: completeLegacySession.benchmarkCommand,
+      benchmarkCommand: "bash ./autoresearch.sh",
       metricName: completeLegacySession.metricName,
       metricUnit: completeLegacySession.metricUnit,
       direction: "lower",
-      checksCommand: completeLegacySession.checksCommand,
+      checksCommand: "bash ./autoresearch.checks.sh",
       filesInScope: completeLegacySession.filesInScope,
-      commitPaths: completeLegacySession.commitPaths,
+      commitPaths: completeLegacySession.filesInScope,
       maxIterations: 5,
     });
     assert.equal("setup" in payload, false);
+    assert.deepEqual(await directorySnapshot(dir), before);
+  });
+});
+
+test("prompt-plan refuses named sessions when goal or checkout authority is unproven", async () => {
+  await withTempDir("fit-first-hostile-match", async (dir) => {
+    await writeAcceptedSession(dir);
+    const before = await directorySnapshot(dir);
+    const incompatibleGoal = await promptPlan(
+      dir,
+      'Continue the active "Checkout performance" session for 5 repeated measured iterations to optimize API throughput.',
+    );
+    const goalFit = incompatibleGoal.fit as Record<string, unknown>;
+    assert.equal(goalFit.disposition, "needs-user");
+    assert.equal(goalFit.sessionRelation, "unrelated");
+    assert.equal(
+      (goalFit.conflicts as Array<Record<string, unknown>>).some(
+        (conflict) => conflict.field === "goal",
+      ),
+      true,
+      JSON.stringify(goalFit),
+    );
+    assert.deepEqual(await directorySnapshot(dir), before);
+
+    await writeFile(path.join(dir, "evaluator.mjs"), 'console.log("METRIC seconds=9");\n');
+    const drifted = await promptPlan(
+      dir,
+      'Continue the active "Checkout performance" session for 5 repeated measured iterations.',
+    );
+    const driftFit = drifted.fit as Record<string, unknown>;
+    assert.equal(driftFit.disposition, "needs-user");
+    assert.equal(
+      (driftFit.conflicts as Array<Record<string, unknown>>).some((conflict) =>
+        String(conflict.field).includes("protected"),
+      ),
+      true,
+      JSON.stringify(driftFit),
+    );
+  });
+});
+
+test("prompt-plan cannot match a copied accepted session in another checkout", async () => {
+  await withTempDir("fit-first-origin", async (origin) => {
+    await writeAcceptedSession(origin);
+    await withTempDir("fit-first-copy", async (copy) => {
+      await mkdir(path.join(copy, "src", "checkout"), { recursive: true });
+      for (const file of [
+        "autoresearch.config.json",
+        "autoresearch.jsonl",
+        "evaluator.mjs",
+        "checks.mjs",
+      ]) {
+        await writeFile(path.join(copy, file), await readFile(path.join(origin, file)));
+      }
+      const before = await directorySnapshot(copy);
+      const payload = await promptPlan(
+        copy,
+        'Continue the active "Checkout performance" session for 5 repeated measured iterations.',
+      );
+      const fit = payload.fit as Record<string, unknown>;
+      assert.equal(fit.disposition, "needs-user");
+      assert.equal(fit.sessionRelation, "unrelated");
+      assert.equal((fit.conflicts as unknown[]).length > 0, true, JSON.stringify(fit));
+      assert.deepEqual(await directorySnapshot(copy), before);
+    });
+  });
+});
+
+test("prompt-plan treats complete legacy metadata without accepted identity as unproven", async () => {
+  await withTempDir("fit-first-unverified-legacy", async (dir) => {
+    await writeLegacySession(dir);
+    const before = await directorySnapshot(dir);
+    const payload = await promptPlan(
+      dir,
+      'Continue the active "Checkout performance" session for 5 repeated measured iterations.',
+    );
+    const fit = payload.fit as Record<string, unknown>;
+    assert.equal(fit.disposition, "needs-user");
+    assert.equal(fit.sessionRelation, "unrelated");
     assert.deepEqual(await directorySnapshot(dir), before);
   });
 });
@@ -295,6 +424,6 @@ test("prompt-plan never treats incomplete session metadata as matching", async (
     );
     const fit = payload.fit as Record<string, unknown>;
     assert.equal(fit.disposition, "continue-direct");
-    assert.equal(fit.sessionRelation, "unrelated");
+    assert.equal(fit.sessionRelation, "none");
   });
 });

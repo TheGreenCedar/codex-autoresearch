@@ -51,6 +51,21 @@ export interface SessionReadCache {
   invalidateOnLedgerChange?: boolean;
 }
 
+export function sessionSegmentTimeline(records: readonly UnknownRecord[]): number[] {
+  let segment = 0;
+  let observedRun = false;
+  return records.map((record) => {
+    if (record.type === "config" && observedRun) segment += 1;
+    const current = segment;
+    if (record.run != null) observedRun = true;
+    return current;
+  });
+}
+
+export function activeSessionSegment(records: readonly UnknownRecord[]): number {
+  return sessionSegmentTimeline(records).at(-1) ?? 0;
+}
+
 export function createSessionReadCache(
   options: { invalidateOnLedgerChange?: boolean } = {},
 ): SessionReadCache {

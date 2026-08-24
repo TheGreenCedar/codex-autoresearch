@@ -276,7 +276,14 @@ test("metricless failed last-run packets log cleanly and preserve packet on inva
       "Wrong failed status",
     ]);
     assert.notEqual(invalid.code, 0);
-    assert.match(invalid.stderr, /Cannot log status 'keep'/);
+    const refusal = JSON.parse(invalid.stderr);
+    assert.equal(refusal.code, "mutation-precondition-blocked");
+    assert.equal(refusal.preconditionDecision.capabilities["authorize-keep"], "blocked");
+    assert.ok(
+      refusal.preconditionDecision.requiredEvidence.diagnosticCodes.includes(
+        "packet-keep-not-authorized",
+      ),
+    );
     await access(path.join(dir, "autoresearch.last-run.json"));
 
     const logged = await runCli([

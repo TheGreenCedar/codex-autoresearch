@@ -414,7 +414,7 @@ async function setupProtectedBenchmarkSession(
 
 function assertEvaluatorDriftDecision(payload, message) {
   const plan = payload.decisionPlanProjection;
-  assert.equal(plan.primaryBlockerCode, "dirty-source");
+  assert.equal(plan.primaryBlockerCode, "legacy-contract-conflict");
   assert.equal(plan.requiredEvidence.diagnosticCodes.includes("evaluator-drift"), true);
   assert.equal(plan.capabilities["run-packet"], "blocked");
   assert.equal(plan.capabilities["authorize-keep"], "blocked");

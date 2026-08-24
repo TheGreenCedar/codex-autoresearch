@@ -346,25 +346,41 @@ function recoveryCoversCapabilityRestrictions(
   return (
     restrictingDiagnostics.length > 0 &&
     restrictingDiagnostics.every(
-      (code) =>
-        recoveryCodes.has(code) || receiptOwnedLedgerRecoveryCovers(command, snapshot, code),
+      (code) => recoveryCodes.has(code) || receiptOwnedLogRecoveryCovers(command, snapshot, code),
     )
   );
 }
 
-function receiptOwnedLedgerRecoveryCovers(
+function receiptOwnedLogRecoveryCovers(
   command: string,
   snapshot: CoherentSessionSnapshot,
   diagnosticCode: string,
 ): boolean {
-  if (command !== "log" || diagnosticCode !== "ledger-integrity") return false;
+  if (command !== "log") return false;
   const pending = snapshot.pendingTransaction;
   const relation = pending?.ledgerRelation;
-  return Boolean(
+  const ownsLedgerSuffix = Boolean(
     pending?.consistent &&
     pending.transactionId &&
-    relation?.kind === "receipt-owned-torn-suffix" &&
+    (relation?.kind === "absent" ||
+      relation?.kind === "complete" ||
+      relation?.kind === "receipt-owned-torn-suffix") &&
     relation.transactionId === pending.transactionId,
+  );
+  if (!ownsLedgerSuffix) return false;
+  if (diagnosticCode === "ledger-integrity") {
+    return relation?.kind === "receipt-owned-torn-suffix";
+  }
+  if (diagnosticCode !== "legacy-contract-conflict") return false;
+  const receipt = pending?.receipt;
+  const transaction =
+    receipt && typeof receipt.transaction === "object" && receipt.transaction !== null
+      ? (receipt.transaction as Record<string, unknown>)
+      : null;
+  return (
+    transaction?.kind === "keep" &&
+    Array.isArray(receipt?.completedStages) &&
+    receipt.completedStages.includes("commit-applied-or-verified")
   );
 }
 

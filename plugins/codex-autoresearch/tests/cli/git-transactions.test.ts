@@ -770,8 +770,9 @@ test("logged packets do not leave .git autoresearch runtime dirs as stale artifa
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
     await git(dir, ["config", "user.name", "Codex Test"]);
-    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
-    await git(dir, ["add", "tracked.txt"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "src/tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "runtime dir" });
@@ -947,7 +948,7 @@ test("dashboard export decision envelope carries dirty source drift", async () =
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "dirty dashboard", acceptedContract: true });
-    await writeFile(path.join(dir, "tracked.txt"), "changed\n", "utf8");
+    await writeFile(path.join(dir, "src", "tracked.txt"), "changed\n", "utf8");
 
     const exported = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exported.code, 0, exported.stderr);

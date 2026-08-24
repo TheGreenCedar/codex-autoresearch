@@ -243,7 +243,7 @@ testWithTempRoot(
     assert.notEqual(preview.code, 0);
     const refusal = JSON.parse(preview.stderr);
     assert.equal(refusal.code, "mutation-precondition-blocked");
-    assert.equal(refusal.preconditionDecision.primaryBlockerCode, "current-tree-finalization");
+    assert.equal(refusal.preconditionDecision.primaryBlockerCode, "legacy-contract-conflict");
     assert.equal(refusal.preconditionDecision.capabilities.finalize, "recovery-only");
     assert.equal(refusal.mutation, undefined);
     await assert.rejects(fsp.access(output));

@@ -174,6 +174,40 @@ test("coherent snapshot parses the bytes captured inside the accepted attempt", 
   assert.equal(io.sourceReads(), 1);
 });
 
+test("coherent snapshot never carries accepted authority across a segment boundary", async () => {
+  const records = [
+    { type: "config", name: "old", metricName: "seconds" },
+    {
+      type: "experiment-contract-accepted",
+      segment: 0,
+      eventId: "old-epoch",
+      contract: {
+        contractDigest: "old-contract",
+        evaluator: { id: "old-evaluator", execution: { executionDigest: "old-execution" } },
+        checks: [{ id: "old-check", execution: { executionDigest: "old-check-execution" } }],
+      },
+    },
+    { run: 1, segment: 0, status: "discard" },
+    { run: 2, segment: 0, status: "discard" },
+    { type: "config", name: "new", metricName: "seconds" },
+  ];
+  const sources = {
+    ...BASE_SOURCES,
+    ledger: Buffer.from(`${records.map((record) => JSON.stringify(record)).join("\n")}\n`),
+  };
+  const result = await loadCoherentSessionSnapshot({
+    requestedCwd: "/worktree",
+    io: sequenceIo([BASE_VECTOR, BASE_VECTOR], [sources]),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.snapshot.semanticFacts.contractDigest, "");
+  assert.equal(result.snapshot.semanticFacts.evaluatorIdentity, "");
+  assert.deepEqual(result.snapshot.semanticFacts.acceptedCheckIdentities, []);
+  assert.equal(result.snapshot.semanticFacts.preconditionEpoch, "");
+});
+
 test("derived fact collection runs inside each A/load/B attempt and retains the accepted attempt", async () => {
   const changed = structuredClone(BASE_VECTOR);
   changed.config.hash = "config-b";
