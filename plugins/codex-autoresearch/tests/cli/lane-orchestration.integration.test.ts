@@ -6,6 +6,22 @@ import { quoteForShell } from "../helpers/process.js";
 
 import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
+async function logAcceptedBaseline(dir: string) {
+  const packet = await runCli(["next", "--cwd", dir, "--compact"]);
+  assert.equal(packet.code, 0, packet.stderr);
+  const logged = await runCli([
+    "log",
+    "--cwd",
+    dir,
+    "--from-last",
+    "--status",
+    "measure",
+    "--description",
+    "Accepted baseline measurement.",
+  ]);
+  assert.equal(logged.code, 0, logged.stderr);
+}
+
 test("research-fanout records generic parallel lanes without creating a bespoke metric", async () => {
   await withTempDir("research-fanout", async (dir) => {
     await setupFixture(dir, { name: "fanout", metricName: "quality_gap" });
@@ -589,18 +605,12 @@ test("lane-runner treats the source of a hostile rename as dirty outside write s
 
 test("lane-runner ignores completed lane results from older segments", async () => {
   await withTempDir("lane-runner-segment-results", async (dir) => {
-    await setupFixture(dir, { name: "first segment", metricName: "quality_gap" });
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "7",
-      "--status",
-      "measure",
-      "--description",
-      "First segment measurement.",
-    ]);
+    await setupFixture(dir, {
+      name: "first segment",
+      metricName: "quality_gap",
+      acceptedContract: true,
+    });
+    await logAcceptedBaseline(dir);
     await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
     const first = await runCli([
       "lane-runner",
@@ -616,7 +626,15 @@ test("lane-runner ignores completed lane results from older segments", async () 
     ]);
     assert.equal(first.code, 0, first.stderr);
 
-    await runCli(["new-segment", "--cwd", dir, "--reason", "New lane decision round.", "--yes"]);
+    const nextSegment = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "New lane decision round.",
+      "--yes",
+    ]);
+    assert.equal(nextSegment.code, 0, nextSegment.stderr);
     const second = await runCli([
       "lane-runner",
       "--cwd",
@@ -671,24 +689,18 @@ test("lane-runner synthesizes completed lane results into one next action", asyn
 
 test("fanout plans are scoped to the active segment", async () => {
   await withTempDir("fanout-segment-scope", async (dir) => {
-    await setupFixture(dir, { name: "fanout scope", metricName: "quality_gap" });
+    await setupFixture(dir, {
+      name: "fanout scope",
+      metricName: "quality_gap",
+      acceptedContract: true,
+    });
+    await logAcceptedBaseline(dir);
     const fanout = await runCli(["research-fanout", "--cwd", dir, "--lanes", "4", "--yes"]);
     assert.equal(fanout.code, 0, fanout.stderr);
     const plan = JSON.parse(fanout.stdout).fanoutPlan;
     assert.ok(plan.id);
 
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "4",
-      "--status",
-      "measure",
-      "--description",
-      "Segment zero measurement",
-    ]);
-    await runCli([
+    const nextSegment = await runCli([
       "new-segment",
       "--cwd",
       dir,
@@ -696,6 +708,7 @@ test("fanout plans are scoped to the active segment", async () => {
       "fresh segment for fanout scope",
       "--yes",
     ]);
+    assert.equal(nextSegment.code, 0, nextSegment.stderr);
 
     const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
@@ -730,20 +743,22 @@ test("read-only lane-runner refuses non-Git commands before execution", async ()
 
 test("completed lane results count as watchdog progress signals", async () => {
   await withTempDir("watchdog-lane-result", async (dir) => {
-    await setupFixture(dir, { name: "lane watchdog" });
+    await setupFixture(dir, { name: "lane watchdog", acceptedContract: true });
     await runCli(["research-fanout", "--cwd", dir, "--lanes", "2", "--yes"]);
     const oldMs = Date.now() - 10 * 60 * 60 * 1000;
-    await runCli([
+    const packet = await runCli(["next", "--cwd", dir, "--compact"]);
+    assert.equal(packet.code, 0, packet.stderr);
+    const logged = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "10",
+      "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Old baseline",
     ]);
+    assert.equal(logged.code, 0, logged.stderr);
     const ledgerPath = path.join(dir, "autoresearch.jsonl");
     const lines = (await readFile(ledgerPath, "utf8"))
       .trim()

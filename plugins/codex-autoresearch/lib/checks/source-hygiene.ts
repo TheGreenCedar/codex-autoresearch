@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { parseNulPathList } from "../git-paths.js";
 import {
+  findDecisionCompilerBoundaryOffenders,
   findLooseObjectCompatibilityOffenders,
   findSourceHygieneOffenders,
   formatSourceHygieneOffenders,
@@ -78,7 +79,9 @@ async function reportSourceHygieneResult(
     ...findSourceHygieneOffenders(trackedPaths, {
       packageRoot: PACKAGE_ROOT_RELATIVE,
     }),
-    ...(await sourceHygienePolicyOffenders({ sourceFiles: options.sourceFiles })),
+    ...(await sourceHygienePolicyOffenders({
+      sourceFiles: options.sourceFiles,
+    })),
   ].sort((left, right) => left.path.localeCompare(right.path));
   if (offenders.length) {
     console.log("fail source-hygiene");
@@ -150,6 +153,7 @@ async function sourceHygienePolicyOffenders(
 
   const sourceFiles = options.sourceFiles ?? (await readSourceHygieneSourceFiles());
   offenders.push(...findLooseObjectCompatibilityOffenders(sourceFiles));
+  offenders.push(...findDecisionCompilerBoundaryOffenders(sourceFiles));
 
   return offenders;
 }

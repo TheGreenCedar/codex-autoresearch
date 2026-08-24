@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import {
+  findDecisionCompilerBoundaryOffenders,
   findLooseObjectCompatibilityOffenders,
   findSourceHygieneOffenders,
   formatSourceHygieneOffenders,
@@ -103,6 +104,59 @@ test("source hygiene forbids new local LooseObject any aliases outside allowlist
       reason: "new local LooseObject compatibility alias; use UnknownRecord from lib/types/json.js",
     },
   ]);
+});
+
+test("source hygiene keeps canonical decisions downstream-only and retired authorities deleted", () => {
+  const offenders = findDecisionCompilerBoundaryOffenders([
+    {
+      path: "plugins/codex-autoresearch/lib/decision-compiler.ts",
+      content:
+        'import { projectResolvedDecision } from "./decision-projection.js";\nconst resolvedDecision = {};\n',
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/coherent-session-snapshot.ts",
+      content: 'import type { DecisionPlan } from "./decision-compiler.js";\n',
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/decision-authority.ts",
+      content: "export function selectDecisionAuthority() {}\n",
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/session-core.ts",
+      content: "export function buildDecisionEnvelope() {}\n",
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/session-decision.ts",
+      content: "const reason = finalization.nextAction;\n",
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/finalize-preview.ts",
+      content:
+        "const blocked = sessionDecisionCapsule?.enforcement?.blocksFinalization === true;\n",
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/decision-projection.ts",
+      content: 'import type { DecisionPlan } from "./decision-compiler.js";\n',
+    },
+  ]);
+
+  assert.deepEqual(
+    offenders.map((offender) => offender.path),
+    [
+      "plugins/codex-autoresearch/lib/coherent-session-snapshot.ts",
+      "plugins/codex-autoresearch/lib/decision-authority.ts",
+      "plugins/codex-autoresearch/lib/decision-compiler.ts",
+      "plugins/codex-autoresearch/lib/finalize-preview.ts",
+      "plugins/codex-autoresearch/lib/session-core.ts",
+      "plugins/codex-autoresearch/lib/session-decision.ts",
+    ],
+  );
+  assert.match(offenders[0].reason, /cycle/i);
+  assert.match(offenders[1].reason, /retired/i);
+  assert.match(offenders[2].reason, /projection|compiler input/i);
+  assert.match(offenders[3].reason, /capsule|display/i);
+  assert.match(offenders[4].reason, /retired/i);
+  assert.match(offenders[5].reason, /projection|nextAction/i);
 });
 
 test("plugin metadata keeps the public product boundary", () => {

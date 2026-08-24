@@ -35,6 +35,7 @@ export type CommandCategory =
 export type CommandAudience = "default" | "advanced" | "maintainer";
 export type CliOptionKind = "boolean" | "list" | "string";
 export type SessionLockPolicy = "action" | "always" | "none";
+export type DecisionProtocolPolicy = "session-mutation";
 export interface CommandCliOption {
   aliases?: readonly string[];
   key: string;
@@ -60,6 +61,7 @@ export interface CommandDefinition {
   dashboardRequiresDryRun?: boolean;
   defaultHelp?: boolean;
   description: string;
+  decisionProtocol?: DecisionProtocolPolicy;
   handler: string;
   help: readonly string[];
   inputSchema: JsonSchema;
@@ -306,6 +308,7 @@ export const commandTable = [
       "nextStep",
       "commands",
       "operatorChecklist",
+      "decisionPlanProjection",
       "resolvedDecision",
       "sessionDecisionCapsule",
       "runtimeProvenance",
@@ -392,6 +395,7 @@ export const commandTable = [
     name: "session_forensics",
     cliCommand: "session-forensics",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "diagnostic",
     audience: "advanced",
     handler: "sessionForensics",
@@ -470,6 +474,7 @@ export const commandTable = [
     name: "setup_session",
     cliCommand: "setup",
     actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
     category: "happy_path",
     audience: "default",
     handler: "setupSession",
@@ -530,6 +535,7 @@ export const commandTable = [
     name: "setup_research_session",
     cliCommand: "research-setup",
     actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
     category: "advanced",
     audience: "advanced",
     handler: "setupResearchSession",
@@ -551,6 +557,7 @@ export const commandTable = [
     name: "start_research_loop",
     cliCommand: "research-start",
     actionPolicy: "process_start",
+    decisionProtocol: "session-mutation",
     category: "happy_path",
     audience: "default",
     handler: "researchStart",
@@ -583,6 +590,7 @@ export const commandTable = [
     name: "research_fanout",
     cliCommand: "research-fanout",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "advanced",
     audience: "advanced",
     handler: "researchFanout",
@@ -611,6 +619,7 @@ export const commandTable = [
     name: "lane_runner",
     cliCommand: "lane-runner",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "advanced",
     audience: "advanced",
     handler: "laneRunner",
@@ -661,6 +670,7 @@ export const commandTable = [
     name: "configure_session",
     cliCommand: "config",
     actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
     category: "advanced",
     audience: "advanced",
     handler: "configureSession",
@@ -761,6 +771,7 @@ export const commandTable = [
     name: "next_experiment",
     cliCommand: "next",
     actionPolicy: "process_start",
+    decisionProtocol: "session-mutation",
     category: "happy_path",
     audience: "default",
     handler: "nextExperiment",
@@ -778,9 +789,9 @@ export const commandTable = [
       "refused",
       "code",
       "blockingAction",
-      "decisionEnvelope",
+      "decisionPlanProjection",
+      "resolvedDecision",
       "sessionDecisionCapsule",
-      "loopContract",
       "nextAction",
       "clearingCondition",
       "commandHint",
@@ -805,6 +816,7 @@ export const commandTable = [
     name: "partial_results",
     cliCommand: "partial-results",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "diagnostic",
     audience: "advanced",
     handler: "partialResultsCommand",
@@ -841,6 +853,7 @@ export const commandTable = [
     name: "log_experiment",
     cliCommand: "log",
     actionPolicy: "git_mutation",
+    decisionProtocol: "session-mutation",
     category: "happy_path",
     audience: "default",
     handler: "logExperiment",
@@ -894,6 +907,8 @@ export const commandTable = [
       "best",
       "warnings",
       "memory",
+      "decisionPlan",
+      "decisionPlanProjection",
       "resolvedDecision",
       "sessionDecisionCapsule",
       "runtimeProvenance",
@@ -930,6 +945,7 @@ export const commandTable = [
     name: "ledger_doctor",
     cliCommand: "ledger-doctor",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "diagnostic",
     audience: "default",
     handler: "ledgerDoctor",
@@ -991,6 +1007,7 @@ export const commandTable = [
     name: "gap_candidates",
     cliCommand: "gap-candidates",
     actionPolicy: "preview",
+    decisionProtocol: "session-mutation",
     category: "diagnostic",
     audience: "advanced",
     handler: "gapCandidates",
@@ -1025,6 +1042,7 @@ export const commandTable = [
     name: "decide_quality_gap",
     cliCommand: "gap-decide",
     actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
     category: "happy_path",
     audience: "default",
     handler: "recordQualityGapDecision",
@@ -1074,6 +1092,7 @@ export const commandTable = [
     name: "finalize_current_tree",
     cliCommand: "finalize-current-tree",
     actionPolicy: "artifact_write",
+    decisionProtocol: "session-mutation",
     category: "dangerous",
     audience: "advanced",
     handler: "finalizeCurrentTree",
@@ -1127,6 +1146,7 @@ export const commandTable = [
     name: "benchmark_inspect",
     cliCommand: "benchmark-inspect",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "diagnostic",
     audience: "advanced",
     handler: "benchmarkInspect",
@@ -1155,6 +1175,7 @@ export const commandTable = [
     name: "benchmark_lint",
     cliCommand: "benchmark-lint",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "diagnostic",
     audience: "default",
     handler: "benchmarkLint",
@@ -1186,6 +1207,7 @@ export const commandTable = [
     name: "checks_inspect",
     cliCommand: "checks-inspect",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "diagnostic",
     audience: "advanced",
     handler: "checksInspect",
@@ -1215,6 +1237,7 @@ export const commandTable = [
     name: "new_segment",
     cliCommand: "new-segment",
     actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
     category: "advanced",
     audience: "advanced",
     handler: "newSegment",
@@ -1259,6 +1282,7 @@ export const commandTable = [
     name: "promote_gate",
     cliCommand: "promote-gate",
     actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
     category: "advanced",
     audience: "advanced",
     handler: "promoteGate",
@@ -1371,6 +1395,7 @@ export const commandTable = [
     name: "doctor_session",
     cliCommand: "doctor",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "happy_path",
     audience: "default",
     handler: "doctorSession",
@@ -1391,6 +1416,7 @@ export const commandTable = [
       "runtimeAuthority",
       "gateQuality",
       "preflight",
+      "decisionPlan",
       "resolvedDecision",
       "commandExecutionBoundary",
       "commandAuthority",
@@ -1437,6 +1463,7 @@ export const commandTable = [
     name: "clear_session",
     cliCommand: "clear",
     actionPolicy: "destructive",
+    decisionProtocol: "session-mutation",
     category: "dangerous",
     audience: "maintainer",
     handler: "clearSession",
@@ -1483,6 +1510,16 @@ export function commandRequiresSessionMutationLock(
   if (definition.sessionLock === "always") return true;
   const policy = definition.resolveActionPolicy?.(args) || definition.actionPolicy;
   return actionPolicyRequiresSessionLock(policy);
+}
+
+export function commandUsesSessionDecisionProtocol(
+  command: string,
+  args: Readonly<Record<string, unknown>> = {},
+): boolean {
+  return (
+    commandDefinitionForCli(command)?.decisionProtocol === "session-mutation" &&
+    commandRequiresSessionMutationLock(command, args)
+  );
 }
 
 export function actionPolicyRequiresSessionLock(policy: ActionPolicy): boolean {

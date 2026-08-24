@@ -95,7 +95,7 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
       assert.equal(canonicalOperateDecision.audit, false);
       assert.equal(canonicalOperateDecision.visible, true);
       assert.equal(canonicalOperateDecision.status, "Blocked");
-      assert.equal(canonicalOperateDecision.blocker, "Promotion proof is missing.");
+      assert.equal(canonicalOperateDecision.blocker, "quality-evidence-required");
       await captureScreenshot(client, page.sessionId, decisionDesktopScreenshotPath);
       await client.send(
         "Emulation.setDeviceMetricsOverride",

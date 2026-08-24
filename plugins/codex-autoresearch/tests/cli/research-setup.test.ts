@@ -113,7 +113,13 @@ test("research-start creates a quality-gap session and can skip baseline logging
     assert.equal(payload.baselineLogged, false);
     const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
     assert.equal(config.metricName, "quality_gap");
-    assert.match(config.benchmarkCommand, /autoresearch\.(ps1|sh)/);
+    assert.equal(config.benchmarkCommand, undefined);
+    assert.equal(
+      await pathExists(
+        path.join(dir, process.platform === "win32" ? "autoresearch.ps1" : "autoresearch.sh"),
+      ),
+      true,
+    );
     assert.equal(
       await pathExists(
         path.join(dir, "autoresearch.research", "language-support", "quality-gaps.md"),
@@ -213,6 +219,16 @@ test("research-start default baseline logging keeps benchmark command authority 
       "language-support",
       "--goal",
       "Improve language support in CodeStory",
+      "--checks-command",
+      `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
+      "--files-in-scope",
+      "autoresearch.research",
+      "--commit-paths",
+      "autoresearch.research",
+      "--max-iterations",
+      "6",
+      "--packet-budget",
+      "6",
       "--json-full",
       "--json",
     ]);
@@ -225,17 +241,20 @@ test("research-start default baseline logging keeps benchmark command authority 
     const baselineCommand = payload.baselinePacket?.run?.command;
     const baselineIdentityCommand =
       payload.baselinePacket?.packetEvidence?.commandIdentity?.command;
-    assert.equal(config.benchmarkCommand, baselineCommand);
-    assert.equal(config.benchmarkCommand, baselineIdentityCommand);
-    assert.match(config.benchmarkCommand, /autoresearch\.(ps1|sh)/);
+    assert.equal(config.benchmarkCommand, undefined);
+    assert.equal(baselineCommand, baselineIdentityCommand);
+    assert.match(baselineCommand, /autoresearch\.(ps1|sh)/);
 
     const ledger = (await readFile(path.join(dir, "autoresearch.jsonl"), "utf8"))
       .trim()
       .split(/\r?\n/)
       .map((line) => JSON.parse(line));
     const measureEntry = ledger.find((entry) => entry.status === "measure");
+    const acceptedContract = ledger.find((entry) => entry.type === "experiment-contract-accepted");
     assert.ok(measureEntry);
-    assert.equal(measureEntry.benchmarkContract?.command, config.benchmarkCommand);
+    assert.ok(acceptedContract);
+    assert.equal(acceptedContract.contract.evaluator.execution.command.kind, "argv");
+    assert.equal(measureEntry.benchmarkContract?.command, baselineCommand);
   });
 });
 

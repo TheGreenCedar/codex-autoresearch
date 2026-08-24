@@ -15,6 +15,35 @@ export interface SourceFileSnapshot {
 const LOOSE_OBJECT_DECLARATION_PATTERN =
   /\b(?:export\s+)?type\s+LooseObject\s*=\s*Record\s*<\s*string\s*,\s*any\s*>\s*;/;
 
+const RETIRED_DECISION_AUTHORITY_FILES = new Set([
+  "decision-authority.ts",
+  "loop-governance.ts",
+  "operator-readout.ts",
+]);
+const RETIRED_DECISION_AUTHORITY_SYMBOLS = [
+  "acceptedCurrentTreeFinalizationIssue",
+  "buildDecisionEnvelope",
+  "buildLoopContractStatus",
+  "canonicalNextActionForLoop",
+  "loopContinuation",
+  "selectDecisionAuthority",
+] as const;
+const DECISION_COMPILER_FORBIDDEN_INPUTS = [
+  "canonicalNextAction",
+  "dashboard",
+  "decisionEnvelope",
+  "loopContract",
+  "resolvedDecision",
+] as const;
+const DECISION_COMPILER_FORBIDDEN_IMPORTS = [
+  "action-metadata",
+  "dashboard-view-model",
+  "decision-projection",
+  "session-decision",
+  "session-read-model",
+  "terminal-report",
+] as const;
+
 const LOOSE_OBJECT_COMPATIBILITY_ALLOWLIST = new Set(
   [
     "plugins/codex-autoresearch/lib/cli-handlers.ts",
@@ -137,6 +166,111 @@ export function findLooseObjectCompatibilityOffenders(
   }
 
   return [...offenders.values()].sort((left, right) => left.path.localeCompare(right.path));
+}
+
+export function findDecisionCompilerBoundaryOffenders(
+  sourceFiles: Iterable<SourceFileSnapshot>,
+): SourceHygieneOffender[] {
+  const offenders = new Map<string, SourceHygieneOffender>();
+
+  for (const sourceFile of sourceFiles) {
+    const trackedPath = normalizeTrackedPath(sourceFile.path);
+    if (!isProductionTypeScript(trackedPath)) continue;
+    const basename = trackedPath.split("/").at(-1) || "";
+
+    if (RETIRED_DECISION_AUTHORITY_FILES.has(basename)) {
+      offenders.set(trackedPath, {
+        path: trackedPath,
+        reason: `retired decision authority module must stay deleted: ${basename}`,
+      });
+      continue;
+    }
+
+    if (trackedPath.endsWith("/lib/cli/source-hygiene.ts")) continue;
+
+    const retiredSymbol = RETIRED_DECISION_AUTHORITY_SYMBOLS.find((symbol) =>
+      identifierPattern(symbol).test(sourceFile.content),
+    );
+    if (retiredSymbol) {
+      offenders.set(trackedPath, {
+        path: trackedPath,
+        reason: `retired decision authority symbol must not regain production callers: ${retiredSymbol}`,
+      });
+      continue;
+    }
+
+    if (
+      basename === "finalize-preview.ts" &&
+      /\bsessionDecisionCapsule\s*(?:\?\.)?\s*(?:enforcement|nextExperiment)\b/.test(
+        sourceFile.content,
+      )
+    ) {
+      offenders.set(trackedPath, {
+        path: trackedPath,
+        reason:
+          "legacy session decision capsules may remain display facts but cannot control finalization policy",
+      });
+      continue;
+    }
+
+    if (
+      basename === "session-decision.ts" &&
+      /\bfinalization\s*(?:\?\.)?\s*\.\s*(?:actionCode|nextAction|suggestedCommand)\b/.test(
+        sourceFile.content,
+      )
+    ) {
+      offenders.set(trackedPath, {
+        path: trackedPath,
+        reason:
+          "finalization projections such as nextAction cannot supply canonical compiler diagnostics",
+      });
+      continue;
+    }
+
+    if (basename === "decision-compiler.ts") {
+      const forbiddenImport = DECISION_COMPILER_FORBIDDEN_IMPORTS.find((specifier) =>
+        importSpecifierPattern(specifier).test(sourceFile.content),
+      );
+      const forbiddenInput = DECISION_COMPILER_FORBIDDEN_INPUTS.find((identifier) =>
+        identifierPattern(identifier).test(sourceFile.content),
+      );
+      if (forbiddenImport || forbiddenInput) {
+        offenders.set(trackedPath, {
+          path: trackedPath,
+          reason:
+            "canonical compiler inputs must remain snapshot facts and typed diagnostics, never downstream or legacy projections",
+        });
+      }
+      continue;
+    }
+
+    if (
+      basename === "coherent-session-snapshot.ts" &&
+      /(?:from\s+|import\s*\()\s*["'][^"']*(?:decision-compiler|session-decision|decision-projection)[^"']*["']/.test(
+        sourceFile.content,
+      )
+    ) {
+      offenders.set(trackedPath, {
+        path: trackedPath,
+        reason:
+          "coherent snapshot capture must stay below the compiler to prevent an authority cycle",
+      });
+    }
+  }
+
+  return [...offenders.values()].sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function isProductionTypeScript(trackedPath: string): boolean {
+  return /(?:^|\/)plugins\/codex-autoresearch\/(?:lib|scripts)\/.+\.ts$/.test(trackedPath);
+}
+
+function identifierPattern(identifier: string): RegExp {
+  return new RegExp(`\\b${identifier}\\b`);
+}
+
+function importSpecifierPattern(specifier: string): RegExp {
+  return new RegExp(`(?:from\\s+|import\\s*\\()\\s*["'][^"']*${specifier}[^"']*["']`);
 }
 
 function sourceHygieneReason(trackedPath: string, packageRoot: string): string {

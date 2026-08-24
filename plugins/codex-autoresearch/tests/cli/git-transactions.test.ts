@@ -713,9 +713,9 @@ test("keep logs report structured git index lock recovery", async () => {
       "tracked.txt",
     ]);
     assert.notEqual(blocked.code, 0);
-    assert.match(blocked.stderr, /Git index lock blocked git add/);
-    assert.match(blocked.stderr, /Live git process check/);
-    assert.match(blocked.stderr, /has not staged or committed anything/);
+    assert.match(blocked.stderr, /Git index tree could not be captured/);
+    assert.match(blocked.stderr, /index\.lock.*File exists/s);
+    assert.doesNotMatch(blocked.stderr, /Git index lock blocked git add/);
   });
 });
 
@@ -899,16 +899,17 @@ test("dashboard export decision envelope carries dirty source drift", async () =
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await setupFixture(dir, { name: "dirty dashboard" });
+    await setupFixture(dir, { name: "dirty dashboard", acceptedContract: true });
     await writeFile(path.join(dir, "tracked.txt"), "changed\n", "utf8");
 
     const exported = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exported.code, 0, exported.stderr);
     const payload = JSON.parse(exported.stdout);
-    assert.equal(payload.viewModel.decisionEnvelope.dirtySourceDrift.dirty, true);
+    assert.equal(payload.viewModel.decisionPlanProjection.primaryBlockerCode, "dirty-source");
+    assert.equal(payload.viewModel.decisionPlanProjection.capabilities["run-packet"], "allowed");
     assert.ok(
-      payload.viewModel.decisionEnvelope.dirtySourceDrift.warnings.some(
-        (warning) => warning.code === "git_dirty",
+      payload.viewModel.decisionPlanProjection.requiredEvidence.diagnosticCodes.includes(
+        "dirty-source",
       ),
     );
   });

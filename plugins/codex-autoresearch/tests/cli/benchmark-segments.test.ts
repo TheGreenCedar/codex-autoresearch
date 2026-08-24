@@ -20,6 +20,7 @@ async function writeCompleteContractConfig(dir: string, overrides: Record<string
         benchmarkCommand: contractEvaluatorCommand,
         checksCommand: contractChecksCommand,
         commitPaths: ["src"],
+        editableScope: ["src"],
         maxIterations: 5,
         ...overrides,
       },
@@ -42,12 +43,17 @@ async function appendLegacyLedgerRows(dir: string, rows: Record<string, unknown>
 
 test("state and doctor surface scaffold health and evidence labels", async () => {
   await withTempDir("truth-layer-state", async (dir) => {
-    await setupFixture(dir, { name: "truth layer", metricName: "score", direction: "higher" });
-    await writeFile(
-      path.join(dir, "autoresearch.config.json"),
-      JSON.stringify({ commitPaths: ["src/missing.ts"] }, null, 2),
-      "utf8",
-    );
+    await setupFixture(dir, {
+      name: "truth layer",
+      metricName: "score",
+      direction: "higher",
+      completeContract: true,
+    });
+    await writeCompleteContractConfig(dir, {
+      benchmarkCommand: `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')"`,
+      commitPaths: ["src/missing.ts"],
+      editableScope: ["src/missing.ts"],
+    });
     await writeFile(
       path.join(dir, "autoresearch.ps1"),
       "& powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1\n",
@@ -87,8 +93,13 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
     const compact = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(compact.code, 0, compact.stderr);
     const compactPayload = JSON.parse(compact.stdout);
-    assert.equal(compactPayload.resolvedDecision.canonicalNextAction.kind, "safety-blocker");
-    assert.ok(compactPayload.resolvedDecision.loopContract.blockers.length > 0);
+    const plan = compactPayload.decisionPlanProjection;
+    assert.equal(plan.action.kind, "repair-scaffold");
+    assert.equal(plan.primaryBlockerCode, "scaffold-invalid");
+    assert.equal(plan.capabilities["run-packet"], "blocked");
+    assert.equal(plan.capabilities["authorize-keep"], "blocked");
+    assert.equal(plan.loopDisposition.kind, "blocked");
+    assert.ok(plan.requiredEvidence.diagnosticCodes.includes("scaffold-invalid"));
   });
 });
 
@@ -577,14 +588,15 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     const dirtyCompact = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(dirtyCompact.code, 0, dirtyCompact.stderr);
     const dirtyCompactPayload = JSON.parse(dirtyCompact.stdout);
-    assert.equal(dirtyCompactPayload.resolvedDecision.status, "ready");
     assert.equal(dirtyCompactPayload.sourceCleanliness.status, "source-dirty");
     assert.equal(dirtyCompactPayload.sourceCleanliness.cleanupCommand, "");
-    assert.ok(
-      dirtyCompactPayload.resolvedDecision.loopContract.blockers.some((blocker) =>
-        JSON.stringify(blocker).includes("Git worktree is dirty"),
-      ),
-    );
+    const plan = dirtyCompactPayload.decisionPlanProjection;
+    assert.equal(plan.action.kind, "review-dirty-source");
+    assert.equal(plan.primaryBlockerCode, "dirty-source");
+    assert.equal(plan.capabilities["run-packet"], "allowed");
+    assert.equal(plan.capabilities["authorize-keep"], "blocked");
+    assert.equal(plan.loopDisposition.kind, "continue");
+    assert.ok(plan.requiredEvidence.diagnosticCodes.includes("dirty-source"));
     const dirtyDoctor = await runCli(["doctor", "--cwd", dir, "--json-full"]);
     assert.equal(dirtyDoctor.code, 0, dirtyDoctor.stderr);
     assert.equal(JSON.parse(dirtyDoctor.stdout).git.clean, false);
@@ -593,28 +605,10 @@ test("new segment does not treat its own ledger append as dirty source drift", a
 
 test("state and recommend-next share watchdog canonical next-action parity", async () => {
   await withTempDir("watchdog-cli-parity", async (dir) => {
-    await setupFixture(dir, { name: "watchdog parity" });
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "10",
-      "--status",
-      "keep",
-      "--description",
-      "Baseline",
-    ]);
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "10",
-      "--status",
-      "discard",
-      "--description",
-      "No movement",
+    await setupFixture(dir, { name: "watchdog parity", acceptedContract: true });
+    await appendLegacyLedgerRows(dir, [
+      { run: 1, metric: 10, status: "keep", description: "Baseline" },
+      { run: 2, metric: 10, status: "discard", description: "No movement" },
     ]);
 
     const ledgerPath = path.join(dir, "autoresearch.jsonl");
@@ -632,34 +626,28 @@ test("state and recommend-next share watchdog canonical next-action parity", asy
       "utf8",
     );
 
-    await writeFile(
-      path.join(dir, "autoresearch.config.json"),
-      JSON.stringify({ maxIterations: 100 }, null, 2),
-      "utf8",
-    );
-
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.watchdogSummary?.stale, true);
-    assert.equal(statePayload.resolvedDecision?.canonicalNextAction?.kind, "watchdog");
     assert.equal(statePayload.limitReached, false);
+    const statePlan = statePayload.decisionPlanProjection;
+    assert.notEqual(statePlan.action.kind, "watchdog");
+    assert.equal(statePlan.capabilities["run-packet"], "allowed");
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
-    assert.equal(recommendPayload.resolvedDecision?.canonicalNextAction?.kind, "watchdog");
-    assert.equal(
-      recommendPayload.resolvedDecision?.canonicalNextAction?.kind,
-      statePayload.resolvedDecision?.canonicalNextAction?.kind,
-    );
-    assert.equal(
-      recommendPayload.resolvedDecision?.nextAction,
-      statePayload.resolvedDecision?.nextAction,
-    );
-    assert.match(
-      String(statePayload.resolvedDecision?.nextAction || ""),
-      /Intervene|finalize|rescope/i,
+    const recommendPlan = recommendPayload.decisionPlanProjection;
+    assert.equal(recommendPlan.decisionId, statePlan.decisionId);
+    assert.equal(recommendPlan.action.kind, statePlan.action.kind);
+    assert.equal(recommendPlan.primaryBlockerCode, statePlan.primaryBlockerCode);
+    assert.deepEqual(recommendPlan.capabilities, statePlan.capabilities);
+    assert.deepEqual(recommendPlan.loopDisposition, statePlan.loopDisposition);
+    assert.deepEqual(recommendPlan.parentDisposition, statePlan.parentDisposition);
+    assert.deepEqual(
+      recommendPlan.requiredEvidence.diagnosticCodes,
+      statePlan.requiredEvidence.diagnosticCodes,
     );
   });
 });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -8,7 +8,12 @@ import { buildDashboardViewModel } from "../lib/dashboard-view-model.js";
 import { evaluateGateQuality } from "../lib/gate-quality.js";
 import { appendJsonl } from "../lib/session-core.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
-import { createCliRunner, withTempDir, createSetupFixture } from "./helpers/process.js";
+import {
+  createCliRunner,
+  withTempDir,
+  createSetupFixture,
+  quoteForShell,
+} from "./helpers/process.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
 const cli = path.join(pluginRoot, "scripts", "autoresearch.mjs");
@@ -66,6 +71,11 @@ test("blocking secondary metric constraint keeps primary evidence but blocks pro
     await configureSecondaryConstraint(dir, "blocking", true);
 
     await writeMemoryMetrics(dir, "baseline-metrics.json", 100);
+    await logConstraintMeasurement(dir, {
+      metric: "2",
+      metricsFile: "baseline-metrics.json",
+      description: "Reference measurement",
+    });
     const baseline = await logConstraintKeep(dir, {
       metric: "1",
       metricsFile: "baseline-metrics.json",
@@ -124,6 +134,11 @@ test("secondary metric constraint mode changes reclassify existing constraints",
     await configureSecondaryConstraint(dir, "advisory", true);
 
     await writeMemoryMetrics(dir, "baseline-metrics.json", 100);
+    await logConstraintMeasurement(dir, {
+      metric: "2",
+      metricsFile: "baseline-metrics.json",
+      description: "Reference measurement",
+    });
     await logConstraintKeep(dir, {
       metric: "1",
       metricsFile: "baseline-metrics.json",
@@ -218,8 +233,34 @@ test("retrieval performance goals warn when no quality gate is configured", () =
 });
 
 async function initConstraintLoop(dir, name) {
-  const init = await setupFixture(dir, { name: name });
+  await mkdir(path.join(dir, "src"), { recursive: true });
+  await mkdir(path.join(dir, "contract"), { recursive: true });
+  await writeFile(path.join(dir, "src", "primary-metric.txt"), "2\n");
+  await writeFile(path.join(dir, "src", "candidate-revision.txt"), "baseline\n");
+  await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n");
+  const benchmarkCommand = `${quoteForShell(process.execPath)} -e "const fs=require('node:fs');console.log('METRIC seconds='+fs.readFileSync('src/primary-metric.txt','utf8').trim())"`;
+  const init = await setupFixture(dir, {
+    name: name,
+    acceptedContract: true,
+    benchmarkCommand,
+    checksCommand: `${quoteForShell(process.execPath)} contract/checks.mjs`,
+  });
   assert.equal(init.code, 0, init.stderr);
+  const configPath = path.join(dir, "autoresearch.config.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  config.checkImplementationPaths = ["contract/checks.mjs"];
+  config.checksAuthoritative = true;
+  config.noiseModel = { kind: "deterministic" };
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  const segment = await runCli([
+    "new-segment",
+    "--cwd",
+    dir,
+    "--reason",
+    "Accept authoritative constraint fixture",
+    "--yes",
+  ]);
+  assert.equal(segment.code, 0, segment.stderr);
 }
 
 async function configureSecondaryConstraint(dir, mode, includeConstraint) {
@@ -237,16 +278,45 @@ async function writeMemoryMetrics(dir, fileName, memoryMb) {
 }
 
 async function logConstraintKeep(dir, { metric, metricsFile, description }) {
+  await writeFile(path.join(dir, "src", "primary-metric.txt"), `${metric}\n`);
+  await writeFile(path.join(dir, "src", "candidate-revision.txt"), `${description}\n`);
+  const packet = await runCli(["next", "--cwd", dir]);
+  assert.equal(packet.code, 0, packet.stderr);
+  const packetPayload = JSON.parse(packet.stdout);
+  assert.equal(
+    packetPayload.decision.allowedStatuses.includes("keep"),
+    true,
+    JSON.stringify(packetPayload.run.contractKeepEligibility),
+  );
   const result = await runCli([
     "log",
     "--cwd",
     dir,
-    "--metric",
-    metric,
+    "--from-last",
     "--metrics-file",
     metricsFile,
     "--status",
     "keep",
+    "--description",
+    description,
+  ]);
+  assert.equal(result.code, 0, result.stderr);
+  return result;
+}
+
+async function logConstraintMeasurement(dir, { metric, metricsFile, description }) {
+  await writeFile(path.join(dir, "src", "primary-metric.txt"), `${metric}\n`);
+  const packet = await runCli(["next", "--cwd", dir]);
+  assert.equal(packet.code, 0, packet.stderr);
+  const result = await runCli([
+    "log",
+    "--cwd",
+    dir,
+    "--from-last",
+    "--metrics-file",
+    metricsFile,
+    "--status",
+    "measure",
     "--description",
     description,
   ]);

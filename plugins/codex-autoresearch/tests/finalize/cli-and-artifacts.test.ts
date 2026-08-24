@@ -160,7 +160,7 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
-  "finalizer surfaces corrupt autoresearch.jsonl with an actionable error",
+  "finalizer fails before mutation when the canonical precondition finds a corrupt ledger",
   "autoresearch-bad-jsonl-",
   async (root) => {
     const repo = path.join(root, "repo");
@@ -200,7 +200,11 @@ testWithTempRoot(
       true,
     );
     assert.notEqual(result.code, 0);
-    assert.match(`${result.stdout}\n${result.stderr}`, /Corrupt autoresearch\.jsonl at line 2/);
-    assert.match(`${result.stdout}\n${result.stderr}`, /Fix autoresearch\.jsonl/i);
+    assert.match(
+      `${result.stdout}\n${result.stderr}`,
+      /canonical precondition permits recovery only/i,
+    );
+    assert.match(`${result.stdout}\n${result.stderr}`, /not the typed recovery command/i);
+    await assert.rejects(fsp.access(output));
   },
 );

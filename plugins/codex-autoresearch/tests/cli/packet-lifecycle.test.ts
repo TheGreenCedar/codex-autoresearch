@@ -13,21 +13,23 @@ import {
 } from "../helpers/cli-test-context.js";
 
 async function setupFixture(dir: string, options: Parameters<typeof setupSessionFixture>[1] = {}) {
-  const result = await setupSessionFixture(dir, options);
+  const result = await setupSessionFixture(dir, {
+    benchmarkCommand: `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`,
+    completeContract: true,
+    packetBudget: 100,
+    ...options,
+  });
   await mkdir(path.join(dir, "src"), { recursive: true });
-  const checksFile =
-    process.platform === "win32" ? "autoresearch.checks.ps1" : "autoresearch.checks.sh";
+  const configPath = path.join(dir, "autoresearch.config.json");
+  const existingConfig = JSON.parse(await readFile(configPath, "utf8"));
   await writeFile(
-    path.join(dir, checksFile),
-    process.platform === "win32" ? "exit 0\n" : "#!/usr/bin/env bash\nexit 0\n",
-  );
-  await writeFile(
-    path.join(dir, "autoresearch.config.json"),
+    configPath,
     `${JSON.stringify(
       {
+        ...existingConfig,
         checksAuthoritative: true,
         commitPaths: ["src"],
-        maxIterations: 100,
+        maxIterations: options.packetBudget ?? 100,
         noiseModel: { kind: "deterministic" },
       },
       null,
@@ -89,12 +91,12 @@ test("config persists operator settings and extends iteration limits", async () 
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.settings.autonomyMode, "owner-autonomous");
     assert.equal(statePayload.limit.remainingIterations, 4);
-    assert.match(statePayload.commands[0].command, /autoresearch\.mjs/);
-    assert.match(statePayload.commands[0].command, /--cwd/);
-    const commandRail = statePayload.commands
-      .map((command) => `${command.label}: ${command.command}`)
+    const commandTexts = Object.values(statePayload.commands)
+      .map((command: any) => command.command)
       .join("\n");
-    const commandTexts = statePayload.commands.map((command) => command.command).join("\n");
+    assert.match(commandTexts, /autoresearch\.mjs/);
+    assert.match(commandTexts, /--cwd/);
+    const commandRail = commandTexts;
     assert.match(commandRail, /\bfinalize-preview\b/);
     assert.match(commandRail, /\bnew-segment\b.*--dry-run/);
     assert.doesNotMatch(commandTexts, /\bfinalize-current-tree\b/);
@@ -106,18 +108,10 @@ test("config persists operator settings and extends iteration limits", async () 
 
 test("next writes a reusable last-run packet and log can consume it", async () => {
   await withTempDir("last-run", async (dir) => {
-    await setupFixture(dir, { name: "last run" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3'); console.log('METRIC cache_hits=8')"`;
+    await setupFixture(dir, { name: "last run", benchmarkCommand: command });
 
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
     assert.equal(packet.decision.metric, 3);
@@ -131,7 +125,7 @@ test("next writes a reusable last-run packet and log can consume it", async () =
     assert.match(packet.packetEvidence.packetId, /^packet-/);
     assert.equal(
       packet.packetEvidence.commandIdentity.command,
-      redactCommandDisplay(command, { workDir: dir }),
+      redactCommandDisplay(packet.run.command, { workDir: dir }),
     );
     assert.equal(packet.packetEvidence.exitStatus, 0);
     assert.equal(packet.packetEvidence.metrics.seconds, 3);
@@ -182,7 +176,6 @@ test("next writes a reusable last-run packet and log can consume it", async () =
 
 test("next refuses to overwrite an unlogged fresh last-run packet", async () => {
   await withTempDir("fresh-last-run-next-refusal", async (dir) => {
-    await setupFixture(dir, { name: "fresh last run" });
     const sideEffectFile = path.join(dir, "packet-runs.txt");
     const sideEffectScript = path.join(dir, "packet.mjs");
     await writeFile(
@@ -196,37 +189,24 @@ test("next refuses to overwrite an unlogged fresh last-run packet", async () => 
       "utf8",
     );
     const firstCommand = `${quoteForShell(process.execPath)} ${quoteForShell(sideEffectScript)}`;
-    const first = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      firstCommand,
-      "--checks-policy",
-      "manual",
-    ]);
+    await setupFixture(dir, { name: "fresh last run", benchmarkCommand: firstCommand });
+    const first = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(first.code, 0, first.stderr);
     const firstPayload = JSON.parse(first.stdout);
     const packetPath = firstPayload.lastRunPath;
     const before = JSON.parse(await readFile(packetPath, "utf8"));
     assert.equal(before.decision.metric, 3);
     assert.equal(await readFile(sideEffectFile, "utf8"), "ran\n");
-    const second = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      firstCommand,
-      "--checks-policy",
-      "manual",
-    ]);
+    const second = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(second.code, 0, second.stderr);
     const refused = JSON.parse(second.stdout);
     assert.equal(refused.ok, false);
     assert.equal(refused.refused, true);
-    assert.equal(refused.code, "next_blocked_by_loop_contract");
+    assert.equal(refused.code, "next_blocked_by_decision_plan");
     assert.equal(refused.blockingAction.kind, "log-decision");
-    assert.equal(refused.loopContract.canRunNextPacket, false);
+    assert.equal(refused.resultingDecision.action.kind, "log-decision");
+    assert.equal(refused.resultingDecision.capabilities["run-packet"], "blocked");
+    assert.equal(refused.resultingDecision.loopDisposition.canRunPacket, false);
     assert.equal(refused.run, null);
     assert.equal(refused.decision, null);
     assert.match(refused.commandHint, /\blog\b/);
@@ -240,7 +220,6 @@ test("next refuses to overwrite an unlogged fresh last-run packet", async () => 
 
 test("next parses metrics from the full benchmark output before display truncation", async () => {
   await withTempDir("full-output-metric", async (dir) => {
-    await setupFixture(dir, { name: "full output" });
     const script = path.join(dir, "noisy-benchmark.mjs");
     await writeFile(
       script,
@@ -251,16 +230,10 @@ test("next parses metrics from the full benchmark output before display truncati
       ].join("\n"),
       "utf8",
     );
+    const command = `${quoteForShell(process.execPath)} ${quoteForShell(script)}`;
+    await setupFixture(dir, { name: "full output", benchmarkCommand: command });
 
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
     assert.equal(packet.decision.metric, 7);
@@ -271,7 +244,12 @@ test("next parses metrics from the full benchmark output before display truncati
 
 test("successful last-run packets require explicit status and suggest discard for regressions", async () => {
   await withTempDir("last-run-suggest-discard", async (dir) => {
-    await setupFixture(dir, { name: "suggest discard", direction: "lower" });
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=4')"`;
+    await setupFixture(dir, {
+      name: "suggest discard",
+      direction: "lower",
+      benchmarkCommand: command,
+    });
     const baseline = await runCli([
       "log",
       "--cwd",
@@ -284,17 +262,7 @@ test("successful last-run packets require explicit status and suggest discard fo
       "Baseline",
     ]);
     assert.equal(baseline.code, 0, baseline.stderr);
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=4')"`;
-
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
     assert.equal(packet.decision.suggestedStatus, "discard");
@@ -329,16 +297,7 @@ test("successful last-run packets require explicit status and suggest discard fo
 test("stale last-run packets are rejected when history advances", async () => {
   await withTempDir("stale-last-run", async (dir) => {
     await setupFixture(dir, { name: "stale packet" });
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
 
     const directLog = await runCli([
@@ -384,16 +343,7 @@ test("stale last-run packets are rejected when scoped git evidence changes", asy
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
 
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
 
     await writeFile(path.join(dir, "tracked.txt"), "changed after next\n", "utf8");
@@ -426,16 +376,7 @@ test("stale last-run packets are rejected when dirty file contents change withou
     await git(dir, ["commit", "-m", "session"]);
     await writeFile(path.join(dir, "tracked.txt"), "dirty before packet\n", "utf8");
 
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
 
     await writeFile(path.join(dir, "tracked.txt"), "dirty after packet\n", "utf8");
@@ -469,15 +410,7 @@ test("dirty fingerprints preserve hostile Git filenames", async () => {
     await git(dir, ["commit", "-m", "session"]);
     await writeFile(path.join(dir, file), "dirty before packet\n", "utf8");
 
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
     const lastRun = JSON.parse(await readFile(packet.lastRunPath, "utf8"));
@@ -515,16 +448,7 @@ test("stale last-run packets are rejected when untracked directory contents chan
     await mkdir(path.join(dir, "scratch"), { recursive: true });
     await writeFile(path.join(dir, "scratch", "thing.txt"), "before packet\n", "utf8");
 
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
 
     await writeFile(path.join(dir, "scratch", "thing.txt"), "after packet\n", "utf8");
@@ -563,16 +487,7 @@ test("next refuses runs when dirty fingerprints would be truncated", async () =>
       await writeFile(path.join(scratch, `file-${String(index).padStart(3, "0")}.txt`), "x\n");
     }
 
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.notEqual(next.code, 0);
     assert.match(next.stderr, /repository\.treePolicy.*entry limit/i);
     await assert.rejects(access(path.join(dir, "autoresearch.last-run.json")));
@@ -596,26 +511,12 @@ test("next rejects entry-limited candidate authority even when the repository is
     await setupFixture(dir, { name: "large clean scope" });
     const configured = await runCli(["config", "--cwd", dir, "--commit-paths", "src"]);
     assert.equal(configured.code, 0, configured.stderr);
-    await git(dir, [
-      "add",
-      "autoresearch.config.json",
-      "autoresearch.jsonl",
-      process.platform === "win32" ? "autoresearch.checks.ps1" : "autoresearch.checks.sh",
-    ]);
+    await git(dir, ["add", "--all"]);
     await git(dir, ["commit", "-m", "session config"]);
     const status = await git(dir, ["status", "--short"]);
     assert.equal(status, "");
 
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.notEqual(next.code, 0);
     assert.match(next.stderr, /candidate fingerprint.*entry limit/i);
     await assert.rejects(access(path.join(dir, "autoresearch.last-run.json")));
@@ -630,21 +531,17 @@ test("next blocks when dirty fingerprint bytes exceed the total budget", async (
     await writeFile(path.join(dir, "tracked.txt"), "base\n");
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
-    const initialized = await setupFixture(dir, { name: "oversized fingerprint" });
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const initialized = await setupFixture(dir, {
+      name: "oversized fingerprint",
+      benchmarkCommand: command,
+    });
     assert.equal(initialized.code, 0, initialized.stderr);
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
     await writeFile(path.join(dir, "oversized.bin"), Buffer.alloc(16 * 1024 * 1024 + 1));
 
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
     const payload = JSON.parse(next.stdout);
     assert.equal(payload.code, "next_blocked_by_truncated_fingerprints");
@@ -655,16 +552,7 @@ test("next blocks when dirty fingerprint bytes exceed the total budget", async (
 test("last-run packets are rejected when config changes before logging", async () => {
   await withTempDir("config-stale-last-run", async (dir) => {
     await setupFixture(dir, { name: "first config" });
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
 
     const secondConfig = await setupFixture(dir, {
@@ -692,24 +580,16 @@ test("last-run packets are rejected when config changes before logging", async (
 test("last-run freshness hashes execution policy and commit scope", async () => {
   await withTempDir("trust-config-stale-last-run", async (dir) => {
     await setupFixture(dir, { name: "trust config" });
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
+    const acceptedCommand = packet.run.command;
     assert.match(packet.history.trustConfig.hash, /^[a-f0-9]{64}$/);
     assert.deepEqual(
       packet.history.trustConfig.fields,
       [...packet.history.trustConfig.fields].sort(),
     );
-    assert.equal(JSON.stringify(packet.history.trustConfig).includes(command), false);
+    assert.equal(JSON.stringify(packet.history.trustConfig).includes(acceptedCommand), false);
 
     const configured = await runCli([
       "config",
@@ -748,18 +628,10 @@ test("last-run freshness hashes execution policy and commit scope", async () => 
 test("packet command tampering is stale in dashboard and next preflight", async () => {
   await withTempDir("command-stale-last-run", async (dir) => {
     await setupFixture(dir, { name: "command trust" });
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const first = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const first = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(first.code, 0, first.stderr);
     const packet = JSON.parse(first.stdout);
+    const acceptedCommand = packet.run.command;
     packet.run.command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=999')"`;
     await writeFile(packet.lastRunPath, `${JSON.stringify(packet, null, 2)}\n`, "utf8");
 
@@ -768,22 +640,17 @@ test("packet command tampering is stale in dashboard and next preflight", async 
     const dashboardPayload = JSON.parse(dashboard.stdout);
     assert.equal(dashboardPayload.viewModel.lastRun.freshness.fresh, false);
     assert.match(dashboardPayload.viewModel.lastRun.freshness.reason, /execution, checks, scope/);
-    assert.equal(dashboardPayload.viewModel.nextBestAction.kind, "stale-packet");
+    assert.equal(dashboardPayload.viewModel.nextBestAction.kind, "log-decision");
 
-    const replacement = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const replacement = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(replacement.code, 0, replacement.stderr);
-    assert.equal(
-      JSON.parse(replacement.stdout).run.command,
-      redactCommandDisplay(command, { workDir: dir }),
-    );
+    const replacementPayload = JSON.parse(replacement.stdout);
+    assert.equal(replacementPayload.ok, false);
+    assert.equal(replacementPayload.run, null);
+    assert.equal(replacementPayload.code, "next_blocked_by_decision_plan");
+    assert.equal(replacementPayload.resultingDecision.action.kind, "log-decision");
+    assert.equal(replacementPayload.resultingDecision.capabilities["run-packet"], "blocked");
+    assert.equal(acceptedCommand, packet.history.command);
   });
 });
 
@@ -791,16 +658,7 @@ test("oversized benchmark contract files block packet freshness", async () => {
   await withTempDir("oversized-contract-last-run", async (dir) => {
     await setupFixture(dir, { name: "contract budget" });
     await writeFile(path.join(dir, "Cargo.toml"), Buffer.alloc(16 * 1024 * 1024 + 1, 0x20));
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
     assert.equal(packet.history.benchmarkContract.fingerprintByteBudgetExceeded, true);
@@ -833,15 +691,13 @@ test("owner-autonomous runs return continuation instead of handing control back"
       "--checks-policy",
       "manual",
     ]);
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-
-    const next = await runCli(["next", "--cwd", dir, "--command", command]);
+    const next = await runCli(["next", "--cwd", dir]);
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
-    assert.equal(packet.continuation.stage, "needs-log-decision");
-    assert.equal(packet.continuation.requiresLogDecision, true);
-    assert.equal(packet.continuation.shouldAskUser, false);
-    assert.equal(packet.continuation.forbidFinalAnswer, true);
+    assert.equal(packet.resultingDecision.action.kind, "log-decision");
+    assert.equal(packet.resultingDecision.capabilities["run-packet"], "blocked");
+    assert.equal(packet.resultingDecision.loopDisposition.kind, "blocked");
+    assert.equal(packet.resultingDecision.parentDisposition.kind, "hand-back");
 
     const log = await runCli([
       "log",
@@ -855,28 +711,23 @@ test("owner-autonomous runs return continuation instead of handing control back"
     ]);
     assert.equal(log.code, 0, log.stderr);
     const payload = JSON.parse(log.stdout);
-    assert.equal(payload.continuation.stage, "logged");
-    assert.equal(payload.continuation.shouldContinue, true);
-    assert.equal(payload.continuation.shouldAskUser, false);
-    assert.equal(payload.continuation.forbidFinalAnswer, true);
-    assert.match(payload.continuation.nextAction, /without asking the user/);
-    assert.match(payload.continuation.commands.next, / next /);
+    assert.equal(payload.resultingDecision.action.kind, "run-packet");
+    assert.equal(payload.resultingDecision.capabilities["run-packet"], "allowed");
+    assert.equal(payload.resultingDecision.loopDisposition.shouldContinue, true);
+    assert.equal(payload.resultingDecision.parentDisposition.mayAnswer, true);
   });
 });
 
 test("guarded sessions with active budgets keep continuation non-final", async () => {
   await withTempDir("guarded-active-budget", async (dir) => {
-    await setupFixture(dir, { name: "budget" });
-    await runCli(["config", "--cwd", dir, "--checks-policy", "manual", "--max-iterations", "3"]);
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-
-    const next = await runCli(["next", "--cwd", dir, "--command", command, "--compact"]);
+    await setupFixture(dir, { name: "budget", packetBudget: 3 });
+    await runCli(["config", "--cwd", dir, "--checks-policy", "manual"]);
+    const next = await runCli(["next", "--cwd", dir, "--compact"]);
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
-    assert.equal(packet.continuation.stage, "needs-log-decision");
-    assert.equal(packet.continuation.activeBudget, true);
-    assert.equal(packet.continuation.shouldContinue, true);
-    assert.equal(packet.continuation.forbidFinalAnswer, true);
+    assert.equal(packet.resultingDecision.action.kind, "log-decision");
+    assert.equal(packet.resultingDecision.capabilities["run-packet"], "blocked");
+    assert.equal(packet.resultingDecision.loopDisposition.shouldContinue, false);
     assert.match(packet.report.tried, /seconds=3/);
     assert.equal(packet.doctor, undefined);
     assert.match(packet.fullPacket, /lastRunPath/);
@@ -893,32 +744,26 @@ test("guarded sessions with active budgets keep continuation non-final", async (
     ]);
     assert.equal(log.code, 0, log.stderr);
     const payload = JSON.parse(log.stdout);
-    assert.equal(payload.continuation.stage, "logged");
-    assert.equal(payload.continuation.activeBudget, true);
-    assert.equal(payload.continuation.shouldContinue, true);
-    assert.equal(payload.continuation.forbidFinalAnswer, true);
-    assert.match(payload.continuation.finalAnswerPolicy, /Do not stop/);
+    assert.equal(payload.resultingDecision.capabilities["run-packet"], "allowed");
+    assert.equal(payload.resultingDecision.loopDisposition.shouldContinue, true);
+    assert.equal(payload.resultingDecision.parentDisposition.mayAnswer, true);
 
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.activeBudget, true);
     assert.equal(statePayload.shouldContinue, true);
-    assert.equal(statePayload.canRunNextPacket, false);
-    assert.equal(statePayload.forbidFinalAnswer, true);
     assert.match(statePayload.commands.next, /--compact/);
-    assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "preflight");
-    assert.match(statePayload.report.next, /benchmark command/i);
-    assert.equal(
-      statePayload.report.next,
-      statePayload.resolvedDecision.canonicalNextAction.reason,
-    );
+    assert.equal(statePayload.decisionPlanProjection.action.kind, "direct-work");
+    assert.equal(statePayload.decisionPlanProjection.capabilities["run-packet"], "allowed");
+    assert.equal(statePayload.decisionPlanProjection.capabilities.finalize, "blocked");
+    assert.equal(statePayload.decisionPlanProjection.loopDisposition.shouldContinue, true);
   });
 });
 
 test("continuation stops cleanly at the configured iteration limit", async () => {
   await withTempDir("continuation-limit", async (dir) => {
-    await setupFixture(dir, { name: "continuation limit" });
+    await setupFixture(dir, { name: "continuation limit", packetBudget: 1 });
     await runCli([
       "config",
       "--cwd",
@@ -927,12 +772,8 @@ test("continuation stops cleanly at the configured iteration limit", async () =>
       "owner-autonomous",
       "--checks-policy",
       "manual",
-      "--max-iterations",
-      "1",
     ]);
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-
-    const next = await runCli(["next", "--cwd", dir, "--command", command]);
+    const next = await runCli(["next", "--cwd", dir]);
     assert.equal(next.code, 0, next.stderr);
     const log = await runCli([
       "log",
@@ -947,24 +788,21 @@ test("continuation stops cleanly at the configured iteration limit", async () =>
     assert.equal(log.code, 0, log.stderr);
     const payload = JSON.parse(log.stdout);
     assert.equal(payload.limit.limitReached, true);
-    assert.equal(payload.continuation.shouldContinue, false);
-    assert.match(payload.continuation.stopReason, /maxIterations reached/);
-    assert.match(payload.continuation.commands.extendLimit, /--extend 10/);
+    assert.equal(payload.resultingDecision.capabilities["run-packet"], "blocked");
+    assert.equal(payload.resultingDecision.loopDisposition.shouldContinue, false);
+    assert.ok(
+      payload.resultingDecision.requiredEvidence.diagnosticCodes.includes(
+        "packet-budget-exhausted",
+      ),
+    );
   });
 });
 
 test("log from last packet rejects keep after failed checks", async () => {
   await withTempDir("last-run-check-failure", async (dir) => {
-    await setupFixture(dir, { name: "last run checks" });
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const checksFile =
-      process.platform === "win32" ? "autoresearch.checks.ps1" : "autoresearch.checks.sh";
-    await writeFile(
-      path.join(dir, checksFile),
-      process.platform === "win32" ? "exit 1\n" : "#!/usr/bin/env bash\nexit 1\n",
-    );
-
-    const next = await runCli(["next", "--cwd", dir, "--command", command]);
+    const checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
+    await setupFixture(dir, { name: "last run checks", checksCommand });
+    const next = await runCli(["next", "--cwd", dir]);
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
     assert.deepEqual(packet.decision.allowedStatuses, ["checks_failed"]);

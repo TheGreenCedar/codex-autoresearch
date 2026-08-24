@@ -5,7 +5,6 @@ import test from "node:test";
 import {
   buildCompactRecommendNextResponse,
   buildRecommendNextResponse,
-  selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
 import { clearPendingLogTransactionWithWarning } from "../lib/commands/log.js";
 import { buildCompactStateResponse } from "../lib/commands/state.js";
@@ -17,10 +16,18 @@ import { boolOption, numberOption, parseCliArgs, parseJsonOption } from "../lib/
 import {
   actionPolicyRequiresSessionLock,
   commandRequiresSessionMutationLock,
+  commandUsesSessionDecisionProtocol,
   commandTable,
   compatibilityErrorForCli,
 } from "../lib/command-table.js";
 import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
+import {
+  compileDecisionPlan,
+  decisionDiagnostic,
+  type DecisionDiagnosticCode,
+} from "../lib/decision-compiler.js";
+import { projectCompactDecisionPlan } from "../lib/decision-projection.js";
+import type { CoherentSessionSnapshot } from "../lib/coherent-session-snapshot.js";
 import {
   assertRunResourcePreflight,
   buildActiveRunPacketId,
@@ -129,7 +136,15 @@ test("command table derives schemas, registry, handlers, help, and compatibility
   assert.deepEqual(toolSchemas.map((schema) => schema.name).sort(), tableToolNames);
   assert.deepEqual(
     toolSchemas.map((schema) => [schema.name, Object.keys(schema.outputSchema.properties)]),
-    commandTable.map((command) => [command.name, [...command.outputFields]]),
+    commandTable.map((command) => [
+      command.name,
+      [
+        ...command.outputFields,
+        ...(command.decisionProtocol === "session-mutation"
+          ? ["preconditionDecision", "mutation", "resultingDecision"]
+          : []),
+      ],
+    ]),
   );
   for (const command of commandTable) {
     const help = renderCliHelp({ command: command.cliCommand });
@@ -193,12 +208,21 @@ test("table lock policy covers every mutating and conditional command", () => {
         true,
         `${command.cliCommand} should lock by default`,
       );
+      assert.equal(command.decisionProtocol, "session-mutation");
+      assert.equal(commandUsesSessionDecisionProtocol(command.cliCommand), true);
     }
     if (command.sessionLock === "none") {
       assert.equal(commandRequiresSessionMutationLock(command.cliCommand), false);
+      assert.notEqual(command.decisionProtocol, "session-mutation");
+      assert.equal(commandUsesSessionDecisionProtocol(command.cliCommand), false);
     }
     if (command.inputSchema.properties?.dry_run) {
-      assert.equal(commandRequiresSessionMutationLock(command.cliCommand, { dryRun: true }), false);
+      assert.equal(
+        commandRequiresSessionMutationLock(command.cliCommand, {
+          dryRun: true,
+        }),
+        false,
+      );
     }
   }
   for (const [command, args] of Object.entries(conditionalArgs)) {
@@ -208,6 +232,14 @@ test("table lock policy covers every mutating and conditional command", () => {
       definition.sessionLock === "none" ? false : true,
       `${command} conditional lock policy drifted`,
     );
+    assert.equal(
+      commandUsesSessionDecisionProtocol(command, args),
+      definition.sessionLock === "none" ? false : true,
+      `${command} conditional mutation protocol drifted`,
+    );
+    if (definition.sessionLock !== "none") {
+      assert.equal(definition.decisionProtocol, "session-mutation");
+    }
   }
   assert.equal(commandRequiresSessionMutationLock("guide", { startDashboard: true }), false);
 });
@@ -357,28 +389,39 @@ if (process.platform === "win32") {
   });
 }
 
-test("recommend-next response preserves stable fields and optional governance fields", () => {
+test("recommend-next response projects one canonical DecisionPlan and preserves fact fields", () => {
+  const decisionPlan = decisionPlanFixture({
+    code: "runtime-integrity",
+    message: "Inspect runtime drift.",
+    command: "node scripts/autoresearch.mjs doctor --cwd .",
+  });
   const response = buildRecommendNextResponse({
     workDir: "/tmp/project",
-    action: { kind: "runtime-provenance" },
-    nextAction: "Inspect runtime drift.",
-    commands: { primary: "node scripts/autoresearch.mjs doctor --cwd ." },
-    operatorChecklist: { command: "node scripts/autoresearch.mjs doctor --cwd ." },
+    decisionPlan,
+    commands: { state: "node scripts/autoresearch.mjs state --cwd ." },
+    operatorChecklist: {
+      command: "node scripts/autoresearch.mjs doctor --cwd .",
+    },
     runtimeProvenance: { drifted: true },
-    loopContract: { nextActionKind: "runtime-provenance" },
     laneLifecycle: { staleLanes: ["scout"] },
     packetDiagnostics: { unresolved: true },
   });
 
   assert.equal(response.ok, true);
   assert.equal(response.workDir, "/tmp/project");
-  assert.deepEqual(response.blockers, []);
-  assert.equal(response.nextAction, "Inspect runtime drift.");
+  assert.equal((response.action as Record<string, unknown>).kind, decisionPlan.action.kind);
+  assert.equal(response.nextAction, decisionPlan.action.reason);
+  assert.deepEqual(response.blockers, ["runtime-integrity"]);
+  assert.equal(response.commands.primary, decisionPlan.action.command);
+  assert.equal(
+    (response.decisionPlanProjection as Record<string, unknown>).decisionId,
+    decisionPlan.decisionId,
+  );
+  assert.equal(response.resolvedDecision?.decisionId, decisionPlan.decisionId);
   assert.deepEqual(response.operatorChecklist, {
     command: "node scripts/autoresearch.mjs doctor --cwd .",
   });
   assert.deepEqual(response.runtimeProvenance, { drifted: true });
-  assert.deepEqual(response.loopContract, { nextActionKind: "runtime-provenance" });
   assert.deepEqual(response.laneLifecycle, { staleLanes: ["scout"] });
   assert.deepEqual(response.packetDiagnostics, { unresolved: true });
 });
@@ -391,260 +434,49 @@ test("compatibility handlers fail with their exact migration error", async () =>
   );
 });
 
-test("recommend-next authority prefers dashboard runtime drift over compact source-only state", () => {
-  const authority = selectRecommendNextRuntimeAuthority({
-    viewModel: {
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "runtime-provenance",
-          reason: "Inspect installed runtime drift before continuing.",
-        },
-        loopContract: {
-          ok: false,
-          blockers: [{ kind: "runtime-provenance" }],
-        },
-        runtimeProvenance: {
-          status: "drift-detected",
-          drifted: true,
-        },
-      },
-      processHygiene: {
-        runtimeDrift: {
-          status: "checked",
-          drifted: false,
-        },
-      },
-    },
-    compact: {
-      canonicalNextAction: {
-        kind: "next-packet",
-        reason: "Run the next packet.",
-      },
-      runtimeProvenance: {
-        status: "unavailable",
-        driftConfidence: "source-only",
-        drifted: false,
-      },
-      loopContract: {
-        ok: true,
-      },
-    },
+test("compact recommend-next consumes the canonical decision-plan projection", () => {
+  const decisionPlan = decisionPlanFixture({
+    code: "finalization-claim-blocked",
+    message: "Current branch tree is not covered.",
+    command: "node scripts/autoresearch.mjs finalize-preview --cwd /tmp/project",
   });
-
-  assert.equal((authority.canonicalNextAction as any).kind, "runtime-provenance");
-  assert.deepEqual(authority.runtimeProvenance, {
-    status: "drift-detected",
-    drifted: true,
-  });
-  assert.deepEqual(authority.loopContract, {
-    ok: false,
-    blockers: [{ kind: "runtime-provenance" }],
-  });
-});
-
-test("recommend-next authority keeps unavailable runtime probes non-blocking", () => {
-  const authority = selectRecommendNextRuntimeAuthority({
-    viewModel: {
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "next-packet",
-          reason: "Run the next packet.",
-        },
-        loopContract: {
-          ok: true,
-          blockers: [],
-        },
-        runtimeProvenance: {
-          status: "unavailable",
-          driftConfidence: "unavailable",
-          drifted: false,
-        },
-      },
-    },
-    compact: {
-      canonicalNextAction: {
-        kind: "runtime-provenance",
-        reason: "Inspect runtime drift.",
-      },
-    },
-  });
-
-  assert.equal((authority.canonicalNextAction as any).kind, "next-packet");
-  assert.deepEqual(authority.loopContract, {
-    ok: true,
-    blockers: [],
-  });
-  assert.deepEqual(authority.runtimeProvenance, {
-    status: "unavailable",
-    driftConfidence: "unavailable",
-    drifted: false,
-  });
-});
-
-test("recommend-next authority uses full envelope when dashboard-only blockers exist", () => {
-  const authority = selectRecommendNextRuntimeAuthority({
-    viewModel: {
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "finalization",
-          reason: "Preview finalization before another packet.",
-        },
-        loopContract: {
-          ok: true,
-          canRunNextPacket: false,
-          blockers: [],
-          warnings: [{ kind: "finalization" }],
-        },
-        finalizationReadiness: {
-          available: true,
-          ready: true,
-        },
-      },
-    },
-    compact: {
-      resolvedDecision: {
-        version: 1,
-        status: "ready",
-        strongestBlocker: null,
-        nextAction: "Run the next packet.",
-        command: "node scripts/autoresearch.mjs next --cwd . --compact",
-        canonicalNextAction: {
-          kind: "next-packet",
-          reason: "Run the next packet.",
-        },
-        loopContract: {
-          ok: true,
-          canRunNextPacket: true,
-          blockers: [],
-          warnings: [],
-        },
-        runtimeProvenance: null,
-        runtimeAuthority: null,
-        finalizationPressure: null,
-      },
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "next-packet",
-          reason: "Run the next packet.",
-        },
-        loopContract: {
-          ok: true,
-          canRunNextPacket: true,
-          blockers: [],
-          warnings: [],
-        },
-      },
-    },
-  });
-
-  assert.equal((authority.canonicalNextAction as any).kind, "finalization");
-  assert.deepEqual(authority.loopContract, {
-    ok: true,
-    canRunNextPacket: false,
-    blockers: [],
-    warnings: [{ kind: "finalization" }],
-  });
-});
-
-test("compact recommend-next preserves finalization readiness as canonical authority", () => {
+  const decisionPlanProjection = projectCompactDecisionPlan(decisionPlan);
   const response = buildCompactRecommendNextResponse({
     workDir: "/tmp/project",
     compactState: {
       ok: true,
       workDir: "/tmp/project",
-      nextAction: "Use finalize-current-tree.",
+      nextAction: decisionPlan.action.reason,
       commands: {
-        finalizePreview: "node scripts/autoresearch.mjs finalize-preview --cwd /tmp/project",
         next: "node scripts/autoresearch.mjs next --cwd /tmp/project --compact",
         state: "node scripts/autoresearch.mjs state --cwd /tmp/project --compact",
       },
-      canonicalNextAction: {
-        kind: "current-tree-finalization",
-        reason: "Use finalize-current-tree.",
-        command: "",
-      },
-      decisionEnvelope: {
-        finalizationReadiness: {
-          available: true,
-          ready: false,
-          actionCode: "current-tree-finalization",
-          warnings: ["Current branch tree is not covered."],
-        },
-        canonicalNextAction: {
-          kind: "current-tree-finalization",
-          reason: "Use finalize-current-tree.",
-          command: "",
-        },
-        loopContract: {
-          ok: false,
-          canRunNextPacket: false,
-          blockers: [{ kind: "current-tree-finalization" }],
-        },
-      },
+      decisionPlanProjection,
     },
   });
 
-  assert.equal(response.resolvedDecision.finalizationPressure?.available, true);
-  assert.equal(response.resolvedDecision.canonicalNextAction?.toolName, "finalize_current_tree");
-  assert.equal((response.action as any).kind, "current-tree-finalization");
   assert.equal(
-    response.commands.primary,
-    "node scripts/autoresearch.mjs finalize-preview --cwd /tmp/project",
+    (response.decisionPlanProjection as Record<string, unknown>).decisionId,
+    decisionPlan.decisionId,
   );
+  assert.equal((response.action as Record<string, unknown>).kind, decisionPlan.action.kind);
+  assert.equal(response.commands.primary, decisionPlan.action.command);
   assert.doesNotMatch(String(response.commands.primary), /\bnext\b/);
 });
 
-test("recommend-next authority preserves compact state when checked runtime is clean", () => {
-  const authority = selectRecommendNextRuntimeAuthority({
-    viewModel: {
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "benchmark-command",
-          reason: "Configure a benchmark command.",
-        },
-        loopContract: {
-          ok: true,
-          blockers: [],
-        },
-        runtimeProvenance: {
-          status: "checked",
-          drifted: false,
-        },
-      },
-    },
-    compact: {
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "watchdog",
-          reason: "Intervene after stale progress.",
-        },
-        loopContract: {
-          ok: true,
-          blockers: [],
-        },
-      },
-    },
+test("compact state response projects canonical decision semantics within stable compact fields", () => {
+  const decisionPlan = decisionPlanFixture({
+    code: "no-learning-pause",
+    message: "Clean up stale lanes.",
   });
-
-  assert.equal((authority.canonicalNextAction as any).kind, "watchdog");
-  assert.deepEqual(authority.runtimeProvenance, {
-    status: "checked",
-    drifted: false,
-  });
-});
-
-test("compact state response preserves stable compact fields and optional loop fields", () => {
   const response = buildCompactStateResponse({
     workDir: "/tmp/project",
     runs: 3,
     kept: 1,
     discarded: 1,
     measured: 1,
-    nextAction: "Clean up stale lanes.",
-    shouldContinue: true,
-    canRunNextPacket: false,
+    decisionPlan,
     runtimeProvenance: { status: "fresh" },
-    loopContract: { canRunNextPacket: false },
     laneLifecycle: { staleLanes: ["scout"] },
     packetDiagnostics: { unresolved: true },
     watchdogSummary: { stale: true },
@@ -653,37 +485,36 @@ test("compact state response preserves stable compact fields and optional loop f
   assert.equal(response.ok, true);
   assert.equal(response.runs, 3);
   assert.equal(response.kept, 1);
-  assert.equal(response.resolvedDecision.nextAction, "Clean up stale lanes.");
-  assert.equal(response.resolvedDecision.status, "unknown");
-  assert.deepEqual(response.resolvedDecision.runtimeProvenance, { status: "fresh" });
-  assert.deepEqual(response.resolvedDecision.loopContract, { canRunNextPacket: false });
+  assert.equal(response.nextAction, decisionPlan.action.reason);
+  assert.equal(
+    (response.decisionPlanProjection as Record<string, unknown>).decisionId,
+    decisionPlan.decisionId,
+  );
+  assert.equal(Object.hasOwn(response, "resolvedDecision"), false);
   assert.equal(Object.hasOwn(response, "loopContract"), false);
   assert.equal(Object.hasOwn(response, "laneLifecycle"), false);
   assert.equal(Object.hasOwn(response, "packetDiagnostics"), false);
   assert.equal(Object.hasOwn(response, "resumeAudit"), false);
 });
 
-test("compact recommend-next rejects unsafe commands and enforces Unicode byte and line budgets", () => {
+test("compact recommend-next ignores legacy command aliases and enforces Unicode budgets", () => {
+  const decisionPlan = decisionPlanFixture({
+    code: "no-learning-pause",
+    message: "Pause packet work.",
+  });
   const response = buildCompactRecommendNextResponse({
     workDir: `C:/${"😀".repeat(8_000)}`,
     compactState: {
       workDir: `C:/${"😀".repeat(8_000)}`,
       goal: "界".repeat(20_000),
+      nextAction: decisionPlan.action.reason,
+      decisionPlanProjection: projectCompactDecisionPlan(decisionPlan),
       resolvedDecision: {
-        version: 1,
-        status: "ready",
-        strongestBlocker: null,
-        nextAction: "Run the next packet.",
         command: "<command-placeholder>",
         canonicalNextAction: {
           kind: "next-packet",
-          reason: "Run the next packet.",
           command: "node -e \"require('child_process').execSync('whoami')\"",
         },
-        loopContract: { canRunNextPacket: true },
-        runtimeProvenance: null,
-        runtimeAuthority: null,
-        finalizationPressure: null,
       },
       commands: {
         primary: "node -e \"require('child_process').execSync('whoami')\"",
@@ -697,3 +528,46 @@ test("compact recommend-next rejects unsafe commands and enforces Unicode byte a
   assert.equal((response.commands as Record<string, unknown>).primary, undefined);
   assert.doesNotMatch(serialized, /child_process|command-placeholder|state-command/);
 });
+
+function decisionPlanFixture({
+  code,
+  message,
+  command = "",
+}: {
+  code?: DecisionDiagnosticCode;
+  message?: string;
+  command?: string;
+} = {}) {
+  const snapshot: CoherentSessionSnapshot = {
+    kind: "coherent-session-snapshot",
+    schemaVersion: 1,
+    generationId: "command-builder-generation",
+    sessionCwd: "/tmp/project",
+    workDir: "/tmp/project",
+    vector: {
+      ledger: { size: 0, mtimeNs: "0", tailHash: "missing" },
+      config: { storage: "session", hash: "config" },
+      packet: { storage: "git-private", hash: "missing" },
+      receipt: { storage: "git-private", hash: "missing" },
+      process: { storage: "git-private", hash: "missing" },
+      git: { head: "head", indexTree: "index", statusHash: "status" },
+    },
+    records: [],
+    config: {},
+    lastRunPacket: null,
+    pendingTransaction: null,
+    processProgress: null,
+    git: { head: "head", indexTree: "index", statusHash: "status" },
+    sourceDiagnostics: { ledgerIssues: [] },
+    semanticFacts: {
+      contractDigest: "contract-a",
+      evaluatorIdentity: "evaluator-a",
+      acceptedCheckIdentities: ["check-a@digest-a"],
+      preconditionEpoch: "epoch-a",
+    },
+  };
+  return compileDecisionPlan(
+    snapshot,
+    code ? [decisionDiagnostic(code, { message, command })] : [],
+  );
+}

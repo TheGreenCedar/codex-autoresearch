@@ -8,12 +8,10 @@ import {
 } from "../partial-results.js";
 import { boolOption } from "../cli/args.js";
 import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
-import { loopContinuation } from "./continuation.js";
 import {
   computeConfidence,
   currentState,
   finiteMetric,
-  readConfig,
   researchSlugFromArgs,
 } from "../session-core.js";
 import { appendJsonl } from "../session-records.js";
@@ -212,6 +210,5 @@ async function recordPartialResultCandidate({
     baseline: stateAfter.baseline,
     best: stateAfter.best,
     confidence: stateAfter.confidence,
-    continuation: loopContinuation(workDir, stateAfter, readConfig(workDir), "logged"),
   };
 }

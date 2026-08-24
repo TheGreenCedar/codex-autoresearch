@@ -16,8 +16,8 @@ export function DecisionRail({
 }) {
   const action = (viewModel.nextBestAction || {}) as NextBestAction;
   const summary = recordFrom(viewModel.decisionEnvelopeSummary);
-  const envelope = recordFrom(viewModel.decisionEnvelope);
-  const operatorDecision = operatorDecisionFor({ action, envelope, readout, summary });
+  const decisionPlan = recordFrom(viewModel.decisionPlanProjection);
+  const operatorDecision = operatorDecisionFor({ action, decisionPlan, readout, summary });
   const chips = evidenceChipsFor(viewModel, action, readout);
   const reportCopy = useCopyText();
   const handoffCopy = useCopyText();
@@ -145,43 +145,38 @@ export function DecisionRail({
 
 function operatorDecisionFor({
   action,
-  envelope,
+  decisionPlan,
   readout,
   summary,
 }: {
   action: NextBestAction;
-  envelope: Record<string, unknown>;
+  decisionPlan: Record<string, unknown>;
   readout: DashboardReadout;
   summary: Record<string, unknown>;
 }) {
-  const actionRecord = action as Record<string, unknown>;
-  const primaryCommand = recordFrom(actionRecord.primaryCommand);
-  const blocker = cleanText(envelope.strongestBlocker);
+  const planAction = recordFrom(decisionPlan.action);
+  const display = recordFrom(decisionPlan.display);
+  const blocker = cleanText(decisionPlan.primaryBlockerCode);
   return {
     title: String(summary.title || action.title || "Review the next safe step"),
-    status: operatorStatus(envelope.resolvedStatus, blocker),
-    blocker:
-      blocker ||
-      (String(envelope.resolvedStatus || "").toLowerCase() === "blocked"
-        ? "Review the blocking evidence before continuing."
-        : "No blocker reported."),
+    status: operatorStatus(decisionPlan),
+    blocker: blocker || "No blocker reported.",
     action:
+      cleanText(display.actionReason) ||
       cleanText(summary.detail) ||
       cleanText(action.detail) ||
       cleanText(readout.nextAction) ||
       "Run a packet to generate the next measured step.",
-    command:
-      cleanText(summary.command) ||
-      cleanText(actionRecord.command) ||
-      cleanText(primaryCommand.command),
+    command: cleanText(planAction.command),
   };
 }
 
-function operatorStatus(value: unknown, blocker: string) {
-  const status = cleanText(value).toLowerCase();
-  if (status === "blocked" || blocker) return "Blocked";
-  if (status === "ready") return "Ready to continue";
-  if (status === "complete") return "Ready for review";
+function operatorStatus(decisionPlan: Record<string, unknown>) {
+  const loop = recordFrom(decisionPlan.loopDisposition);
+  const parent = recordFrom(decisionPlan.parentDisposition);
+  if (loop.kind === "blocked" || parent.kind === "block-final-answer") return "Blocked";
+  if (loop.kind === "complete") return "Ready for review";
+  if (loop.kind === "continue" || loop.kind === "pause") return "Ready to continue";
   return "Needs review";
 }
 

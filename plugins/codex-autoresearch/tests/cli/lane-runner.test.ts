@@ -80,7 +80,11 @@ test("lane-runner stops before post-run probes when termination is unproven", as
 
 test("lane-runner big_idea mode is read-only, approval-gated, and bounded", async () => {
   await withTempDir("autoresearch", "lane-runner-big-idea", async (dir) => {
-    const init = await setupFixture(dir, { name: "big idea lane", metricName: "quality_gap" });
+    const init = await setupFixture(dir, {
+      name: "big idea lane",
+      metricName: "quality_gap",
+      acceptedContract: true,
+    });
     assert.equal(init.code, 0, init.stderr);
 
     const blockedCommand = await runCli([
@@ -170,17 +174,26 @@ test("lane-runner big_idea mode is read-only, approval-gated, and bounded", asyn
     const stateAfterUnapproved = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(stateAfterUnapproved.code, 0, stateAfterUnapproved.stderr);
     const unapprovedStatePayload = JSON.parse(stateAfterUnapproved.stdout);
+    const unapprovedPlan = unapprovedStatePayload.decisionPlan;
     assert.equal(unapprovedStatePayload.approvalLedger.status, "blocked");
-    assert.equal(unapprovedStatePayload.resolvedDecision.canonicalNextAction.kind, "approval-gate");
+    assert.equal(unapprovedPlan.kind, "decision-plan");
+    assert.equal(unapprovedPlan.primaryBlockerCode, "approval-required");
+    assert.equal(unapprovedPlan.action.kind, "request-approval");
+    assert.equal(unapprovedPlan.capabilities["run-packet"], "blocked");
+    assert.ok(unapprovedPlan.contractDigest);
+    assert.ok(unapprovedPlan.evaluatorIdentity);
+    assert.ok(unapprovedPlan.requiredEvidence.acceptedCheckIdentities.length > 0);
     assert.match(unapprovedStatePayload.approvalLedger.blockers.join(" "), /architecture-scout/);
 
     const recommendAfterUnapproved = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommendAfterUnapproved.code, 0, recommendAfterUnapproved.stderr);
     const unapprovedRecommendPayload = JSON.parse(recommendAfterUnapproved.stdout);
-    assert.equal(
-      unapprovedRecommendPayload.resolvedDecision.canonicalNextAction.kind,
-      "approval-gate",
-    );
+    const unapprovedProjection = unapprovedRecommendPayload.decisionPlanProjection;
+    assert.equal(unapprovedProjection.kind, "decision-plan-projection");
+    assert.equal(unapprovedProjection.decisionId, unapprovedPlan.decisionId);
+    assert.equal(unapprovedProjection.action.kind, unapprovedPlan.action.kind);
+    assert.equal(unapprovedProjection.capabilities["run-packet"], "blocked");
+    assert.equal(Object.hasOwn(unapprovedRecommendPayload, "decisionEnvelope"), false);
 
     const approved = await runCli([
       "lane-runner",
@@ -241,10 +254,10 @@ test("lane-runner big_idea mode is read-only, approval-gated, and bounded", asyn
     assert.equal(stateAfterApproval.code, 0, stateAfterApproval.stderr);
     const approvedStatePayload = JSON.parse(stateAfterApproval.stdout);
     assert.equal(approvedStatePayload.approvalLedger.status, "approved");
-    assert.notEqual(
-      approvedStatePayload.resolvedDecision.canonicalNextAction.kind,
-      "approval-gate",
-    );
+    assert.equal(approvedStatePayload.decisionPlan.kind, "decision-plan");
+    assert.notEqual(approvedStatePayload.decisionPlan.primaryBlockerCode, "approval-required");
+    assert.equal(approvedStatePayload.decisionPlan.capabilities["run-packet"], "allowed");
+    assert.equal(Object.hasOwn(approvedStatePayload, "decisionEnvelope"), false);
   });
 });
 
@@ -395,17 +408,14 @@ test("lane-runner hardens scout porcelain probes against configured fsmonitor ho
       await rm(ignoredMarker, { force: true });
       await rm(outsideMarker, { force: true });
 
-      const allowed = await runCli([
-        "lane-runner",
-        "--cwd",
-        dir,
-        "--mode",
-        "read_only_scout",
-        "--command",
-        "git status --short",
-        "--yes",
-      ]);
-      assert.equal(allowed.code, 0, allowed.stderr);
+      const allowed = await laneRunner({
+        cwd: dir,
+        mode: "read_only_scout",
+        command: "git status --short",
+        yes: true,
+      });
+      assert.equal(allowed.ok, true);
+      assert.equal(allowed.result.commandResult.code, 0);
 
       const after = await runProcess("git", hardenedStatusArgs, { cwd: dir, env: hardenedEnv });
       assert.equal(after.code, 0, after.stderr);

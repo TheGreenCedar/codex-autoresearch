@@ -38,7 +38,6 @@ import {
   type ExperimentContract,
   type RunPurpose,
 } from "../experiment-contract.js";
-import { loopContinuation } from "./continuation.js";
 import { redactEvidenceText } from "../evidence-redaction.js";
 import {
   EVIDENCE_STATUSES,
@@ -60,7 +59,6 @@ import {
   shortHead,
   writePrivateStateFile,
   PrivateStateConflictError,
-  type PrivateStateSpec,
 } from "../git-private-state.js";
 import { normalizeRelativePaths } from "../literal-paths.js";
 import {
@@ -86,6 +84,7 @@ import {
 import { isMetricEligibleStatus } from "../run-status.js";
 import { buildProcessLifecycleRecord, rekeyProcessLifecycleRecords } from "../process-governor.js";
 import { parseJsonlRecords } from "../session-records.js";
+import { pendingLogTransactionStateSpec } from "../pending-log-transaction-store.js";
 import {
   AUTORESEARCH_DASHBOARD_FILE,
   AUTORESEARCH_RESEARCH_DIR,
@@ -100,7 +99,6 @@ import {
 } from "../path-containment.js";
 
 const PENDING_LOG_TRANSACTION_CODE = "pending_log_transaction";
-const PENDING_LOG_TRANSACTION_GIT_PATH = "autoresearch/pending-log-transaction.json";
 const AUTORESEARCH_OWNED_FILES = [AUTORESEARCH_DASHBOARD_FILE];
 const AUTORESEARCH_OWNED_DIRS = [
   AUTORESEARCH_RESEARCH_DIR,
@@ -236,6 +234,7 @@ export async function logExperiment(
   const stateBefore = currentState(workDir);
   let contractEvaluationEvidence: ContractEvaluationEvidence | null = null;
   let acceptedContract: ExperimentContract | null = null;
+  let preconditionEpoch = "";
   let runPurpose: RunPurpose = manualRunPurpose(status, stateBefore);
   let evaluationAuthority: EvaluationAuthority = "manual";
   let candidateOrigin: CandidateOrigin =
@@ -258,6 +257,7 @@ export async function logExperiment(
     }
     const accepted = authority.contract;
     acceptedContract = accepted;
+    preconditionEpoch = String(authority.event.eventId || "");
     const candidateFingerprint = await contractCandidateFingerprintForWorkDir(workDir, accepted);
     const packetCandidateFingerprint = packetRun.contractCandidateFingerprint;
     const evaluatedMetric = finiteMetric(packetRun.parsedPrimary);
@@ -394,7 +394,9 @@ export async function logExperiment(
     runPurpose,
     evaluationAuthority,
     candidateOrigin,
+    learning: { kind: "none" },
   };
+  if (preconditionEpoch) experiment.preconditionEpoch = preconditionEpoch;
   if (contractEvaluationEvidence) {
     experiment.contractEvaluationEvidence = contractEvaluationEvidence;
   }
@@ -508,7 +510,6 @@ export async function logExperiment(
     warnings: logWarnings,
     warningDetails: [],
     lastRunCleared: Boolean(lastPacket),
-    continuation: loopContinuation(workDir, stateAfter, config, "logged"),
   };
 }
 
@@ -761,23 +762,11 @@ export async function appendSessionRunNote(
   });
 }
 
-function fallbackPendingLogTransactionPath(workDir: string): string {
-  return resolveSessionPaths({ workDir }).pendingLogTransactionFallbackPath;
-}
-
-function pendingLogTransactionSpec(workDir: string): PrivateStateSpec {
-  return {
-    fallbackPath: fallbackPendingLogTransactionPath(workDir),
-    gitRelativePath: PENDING_LOG_TRANSACTION_GIT_PATH,
-    label: "pending log receipt",
-  };
-}
-
 async function pendingLogTransactionCandidatePaths(
   workDir: string,
   _inGit?: boolean,
 ): Promise<string[]> {
-  return await privateStateCandidatePaths(workDir, pendingLogTransactionSpec(workDir));
+  return await privateStateCandidatePaths(workDir, pendingLogTransactionStateSpec(workDir));
 }
 
 interface VerifiedEvidenceArtifact extends UnknownRecord {
@@ -897,7 +886,7 @@ async function writeLogTransactionReceipt(
   let storedReceipt = receipt;
   const stored = await writePrivateStateFile(
     workDir,
-    pendingLogTransactionSpec(workDir),
+    pendingLogTransactionStateSpec(workDir),
     (stateTarget) => {
       storedReceipt = {
         ...receipt,
@@ -916,7 +905,7 @@ async function writeLogTransactionReceipt(
 }
 
 async function readPendingLogTransaction(workDir: string): Promise<LogTransactionReceipt | null> {
-  const target = await resolvePrivateStateTarget(workDir, pendingLogTransactionSpec(workDir));
+  const target = await resolvePrivateStateTarget(workDir, pendingLogTransactionStateSpec(workDir));
   if (!(await pathExists(target.path))) return null;
   const stat = await fsp.lstat(target.path);
   if (stat.isSymbolicLink()) {
@@ -1198,7 +1187,6 @@ async function resumePendingLogTransaction({
     warnings,
     warningDetails: [],
     lastRunCleared: receipt.packet.required,
-    continuation: loopContinuation(workDir, stateAfter, config, "logged"),
   };
 }
 
@@ -2606,7 +2594,7 @@ async function requiredGitText(workDir: string, args: string[], label: string): 
 
 export async function pendingLogTransactionWarnings(workDir: string, inGit?: boolean) {
   try {
-    await resolvePrivateStateTarget(workDir, pendingLogTransactionSpec(workDir));
+    await resolvePrivateStateTarget(workDir, pendingLogTransactionStateSpec(workDir));
   } catch (error) {
     if (!(error instanceof PrivateStateConflictError)) throw error;
     return [

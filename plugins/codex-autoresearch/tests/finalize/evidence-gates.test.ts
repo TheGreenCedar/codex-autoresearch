@@ -151,7 +151,7 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
-  "finalize preview refuses hard decision capsules",
+  "finalize preview keeps hard decision capsules display-only",
   "autoresearch-finalize-capsule-",
   async (root) => {
     const repo = path.join(root, "repo");
@@ -191,45 +191,53 @@ testWithTempRoot(
         "",
       ].join("\n"),
     );
-    await writeFile(
-      path.join(repo, "autoresearch.research", "benchmark-contract", "decision-capsule.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        kind: "session-decision-capsule",
-        status: "active",
-        enforcement: {
-          mode: "hard-block",
-          canRunNextPacket: false,
-          allowBoundedNext: false,
-          blocksFinalization: true,
-          clearingCondition: "Run benchmark-lint successfully before finalization.",
-          commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
-          triggeredBy: ["sessionDecisionCapsule", "benchmarkContract"],
-        },
-        bottleneck: "Benchmark wrapper cannot prove the primary METRIC.",
-        evidence: ["benchmark-lint timed out and parsed zero primary METRIC lines."],
-        nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
-        wrongNextActions: ["Do not run next or finalize."],
-        doNotRepeat: [],
-        commandBudgetWarnings: [],
-        generatedFrom: {
-          compactions: 0,
-          first: "2026-06-01T13:00:00.000Z",
-          last: "2026-06-01T13:10:00.000Z",
-          toolCounts: {},
-          topCommandHeads: [],
-        },
-        importedAt: "2026-06-01T13:10:00.000Z",
-      }),
+    const capsulePath = path.join(
+      repo,
+      "autoresearch.research",
+      "benchmark-contract",
+      "decision-capsule.json",
     );
+    const capsule = {
+      schemaVersion: 1,
+      kind: "session-decision-capsule",
+      status: "active",
+      enforcement: {
+        mode: "hard-block",
+        canRunNextPacket: false,
+        allowBoundedNext: false,
+        blocksFinalization: true,
+        clearingCondition: "Run benchmark-lint successfully before finalization.",
+        commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
+        triggeredBy: ["sessionDecisionCapsule", "benchmarkContract"],
+      },
+      bottleneck: "Benchmark wrapper cannot prove the primary METRIC.",
+      evidence: ["benchmark-lint timed out and parsed zero primary METRIC lines."],
+      nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
+      wrongNextActions: ["Do not run next or finalize."],
+      doNotRepeat: [],
+      commandBudgetWarnings: [],
+      generatedFrom: {
+        compactions: 0,
+        first: "2026-06-01T13:00:00.000Z",
+        last: "2026-06-01T13:10:00.000Z",
+        toolCounts: {},
+        topCommandHeads: [],
+      },
+      importedAt: "2026-06-01T13:10:00.000Z",
+    };
+    await writeFile(capsulePath, JSON.stringify(capsule));
     await git(["add", "autoresearch.jsonl"], repo);
     await git(["commit", "-m", "log autoresearch session"], repo);
 
     const payload = await finalizePreview({ cwd: repo, trunk: "main" });
-    assert.equal(payload.ready, false);
     assert.equal(payload.sessionDecisionCapsule.kind, "session-decision-capsule");
-    assert.match(payload.nextAction, /Repair benchmark-lint/);
-    assert.match(payload.warnings.join("\n"), /primary METRIC/);
+    assert.notEqual(payload.actionCode, "decision-capsule");
+    assert.doesNotMatch(payload.nextAction, /Repair benchmark-lint/);
+    assert.doesNotMatch(payload.warnings.join("\n"), /primary METRIC/);
+    assert.equal(
+      payload.decisionPlanProjection.requiredEvidence.diagnosticCodes.includes("decision-capsule"),
+      false,
+    );
   },
 );
 

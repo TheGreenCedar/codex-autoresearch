@@ -1,16 +1,11 @@
-import { STATUS_VALUES, buildDecisionEnvelope, finiteMetric } from "./session-core.js";
+import { STATUS_VALUES, finiteMetric } from "./session-core.js";
 import { redactEvidenceObject } from "./evidence-redaction.js";
 import { acceptedCurrentRuns, buildEvidenceRegistry } from "./evidence-registry.js";
 import { buildAiSummary } from "./dashboard-view-model/ai-summary.js";
 import { buildMissionControl } from "./dashboard-view-model/mission-control.js";
 import { buildWatchdogSummary } from "./watchdog-summary.js";
+import { actionMetadataForKind } from "./action-metadata.js";
 import {
-  actionMetadataForKind,
-  fallbackCommandForKind,
-  isPacketBrakeKind,
-} from "./action-metadata.js";
-import {
-  dashboardCommandMapKey,
   dashboardReadOnlyCommand,
   stripDashboardGuidanceCommandFields,
 } from "./dashboard-command-safety.js";
@@ -87,32 +82,11 @@ export function buildDashboardViewModel(context: DashboardContext) {
     parallelLanes,
     fanoutPlan: state.fanoutPlan || null,
   });
-  const decisionEnvelope = normalizeDecisionEnvelope({
-    state,
-    settings,
-    guidedSetup,
-    setupPlan,
-    finalizePreview,
-    qualityGap,
-    scaffoldHealth,
-    researchIntegrity,
-    experimentEconomics: state.experimentEconomics || null,
-    salvageCandidates: (state.partialResults as LooseObject)?.candidates || [],
-    workflowFriction: state.workflowFriction || [],
-    experimentMemory,
-    segmentTransition: segmentTransitionFromDashboardInput({ state, guidedSetup, qualityGap }),
-    setupState: setupStateFromDashboardInput({ guidedSetup, setupPlan }),
-    watchdog: watchdogSummary,
-    warnings,
-  });
+  const decisionEnvelope = projectDashboardDecisionEnvelope({ state });
   const decisionEnvelopeSummary = summarizeDecisionEnvelope({
     envelope: decisionEnvelope,
     current,
     measurements,
-    guidedSetup,
-    setupPlan,
-    finalizePreview,
-    experimentMemory,
   });
   const trustContext = buildTrustState({
     state,
@@ -247,9 +221,10 @@ export function buildDashboardViewModel(context: DashboardContext) {
     experimentMemory,
     warnings,
   });
-  return sanitizeDashboardDecisionEnvelope({
+  const viewModel = sanitizeDashboardDecisionEnvelope({
     setup: setupPlan,
     guidedSetup,
+    decisionPlanProjection: state.decisionPlanProjection || null,
     decisionEnvelope,
     decisionEnvelopeSummary,
     experimentEconomics: state.experimentEconomics || decisionEnvelope?.experimentEconomics || null,
@@ -341,6 +316,10 @@ export function buildDashboardViewModel(context: DashboardContext) {
     },
     commands,
   });
+  const projectedPlan = recordOrNull(viewModel.decisionPlanProjection);
+  const projectedAction = recordOrNull(projectedPlan?.action);
+  if (projectedAction) projectedAction.command = "";
+  return viewModel;
 }
 
 function normalizeDashboardContext(context: DashboardContext): NormalizedDashboardContext {
@@ -443,131 +422,46 @@ function normalizeDashboardSettings(
   };
 }
 
-function normalizeDecisionEnvelope({
-  state,
-  settings = {},
-  guidedSetup = null,
-  setupPlan = null,
-  finalizePreview = null,
-  qualityGap = null,
-  scaffoldHealth = null,
-  researchIntegrity = null,
-  experimentEconomics = null,
-  salvageCandidates = [],
-  workflowFriction = [],
-  experimentMemory = null,
-  segmentTransition = null,
-  setupState = null,
-  warnings = [],
-  watchdog = null,
-}: LooseObject): LooseObject {
-  const supplied = firstRecord(
-    state?.decisionEnvelope,
-    state?.resumeAudit,
-    settings.decisionEnvelope,
-    settings.resumeAudit,
-  );
-  const resolved = recordOrNull(state?.resolvedDecision);
-  if (resolved) {
-    return sanitizeDashboardDecisionEnvelope({
-      ...supplied,
-      canonicalNextAction: resolved.canonicalNextAction || supplied.canonicalNextAction || null,
-      loopContract: resolved.loopContract || supplied.loopContract || null,
-      runtimeProvenance: resolved.runtimeProvenance || supplied.runtimeProvenance || null,
-      runtimeAuthority: resolved.runtimeAuthority || supplied.runtimeAuthority || null,
-      finalizationReadiness:
-        resolved.finalizationPressure || supplied.finalizationReadiness || finalizePreview || null,
-      nextAction: resolved.nextAction || supplied.nextAction || "",
-      resolvedStatus: resolved.status || "unknown",
-      strongestBlocker: resolved.strongestBlocker || null,
-    });
-  }
-  if (Object.keys(supplied).length) return sanitizeDashboardDecisionEnvelope(supplied);
-
-  const current = Array.isArray(state?.current) ? state.current : [];
-  const lastRun = guidedSetup?.lastRun || null;
-  const freshness = lastRun?.freshness || null;
-  return sanitizeDashboardDecisionEnvelope(
-    buildDecisionEnvelope({
-      state: { ...state, current },
-      nextAction:
-        guidedSetup?.nextStep?.nextAction?.reason ||
-        guidedSetup?.nextAction ||
-        setupPlan?.nextStep?.nextAction?.reason ||
-        "Run doctor, then next.",
-      lastRunFreshness: freshness,
-      warningDetails: warnings,
-      scaffoldHealth,
-      researchIntegrity,
-      finalization: finalizePreview,
-      qualityGap,
-      experimentEconomics,
-      salvageCandidates,
-      workflowFriction,
-      experimentMemory,
-      segmentTransition,
-      setupState,
-      watchdog,
-    }),
-  );
-}
-
-function setupStateFromDashboardInput({ guidedSetup, setupPlan }: LooseObject) {
-  const blockers = [...stringList(setupPlan?.missing), ...stringList(setupPlan?.missingEssentials)];
-  if (!guidedSetup?.stage && blockers.length === 0) return null;
-  return {
-    stage: cleanText(guidedSetup?.stage),
-    blockers,
-    nextAction:
-      cleanText(guidedSetup?.nextAction) || cleanText(setupPlan?.nextStep?.nextAction?.reason),
+function projectDashboardDecisionEnvelope({ state }: LooseObject): LooseObject {
+  const plan = recordOrNull(state?.decisionPlanProjection);
+  const action = recordOrNull(plan?.action);
+  const display = recordOrNull(plan?.display);
+  const capabilities = recordOrNull(plan?.capabilities);
+  const loopDisposition = recordOrNull(plan?.loopDisposition);
+  const parentDisposition = recordOrNull(plan?.parentDisposition);
+  const nextAction =
+    cleanText(display?.actionReason) || cleanText(action?.kind) || "Decision unavailable.";
+  const blockerCode = cleanText(plan?.primaryBlockerCode);
+  const canonicalNextAction = {
+    kind: cleanText(action?.kind) || "decision-unavailable",
+    reason: nextAction,
+    command: "",
+    commandDigest: cleanText(action?.commandDigest),
+    triggeredBy: blockerCode ? [blockerCode] : [],
   };
+  return sanitizeDashboardDecisionEnvelope({
+    compilerSchemaVersion: plan?.compilerSchemaVersion || null,
+    decisionId: cleanText(plan?.decisionId),
+    generationId: cleanText(plan?.generationId),
+    phase: cleanText(plan?.phase) || "recovery",
+    primaryBlockerCode: blockerCode || null,
+    parentDisposition: cleanText(parentDisposition?.kind) || "block-final-answer",
+    contractDigest: cleanText(plan?.contractDigest),
+    evaluatorIdentity: cleanText(plan?.evaluatorIdentity),
+    canonicalNextAction,
+    loopContract: {
+      ok: loopDisposition?.kind !== "blocked",
+      complete: loopDisposition?.kind === "complete",
+      canRunNextPacket: capabilities?.["run-packet"] === "allowed",
+      blockers: blockerCode ? [{ kind: blockerCode, message: blockerCode }] : [],
+      warnings: [],
+      strongestAction: blockerCode ? canonicalNextAction : null,
+    },
+    nextAction,
+  });
 }
 
-function segmentTransitionFromDashboardInput({ state, guidedSetup, qualityGap }: LooseObject) {
-  const limit = guidedSetup?.state?.limit || guidedSetup?.limit || state?.limit || {};
-  const budgetStatus = limit.budgetStatus || state?.budgetStatus || {};
-  if (budgetStatus.exhausted === true) {
-    return {
-      required: true,
-      nextAction:
-        cleanText(budgetStatus.nextAction) ||
-        "Budget exhausted; stop packet work and ask whether to extend, rescope, or start a new segment.",
-      triggeredBy: ["budget"],
-    };
-  }
-  const limitReached =
-    limit.limitReached === true ||
-    (Number.isFinite(Number(limit.remainingIterations)) && Number(limit.remainingIterations) <= 0);
-  if (limitReached || guidedSetup?.stage === "limit-reached") {
-    return {
-      required: true,
-      nextAction:
-        cleanText(guidedSetup?.nextAction) ||
-        "The active segment reached its limit; extend the limit or start a new segment.",
-      triggeredBy: ["limit"],
-    };
-  }
-  if (qualityGap?.done === true) {
-    return {
-      required: true,
-      nextAction: "The active quality round is closed; refresh gaps or preview finalization.",
-      triggeredBy: ["qualityRound"],
-    };
-  }
-  return null;
-}
-
-function summarizeDecisionEnvelope({
-  envelope,
-  current = [],
-  measurements = [],
-  guidedSetup = null,
-  setupPlan = null,
-  finalizePreview = null,
-  experimentMemory = null,
-}: LooseObject) {
-  const freshness = envelope?.latestPacketFreshness || {};
-  const finalization = envelope?.finalizationReadiness || {};
+function summarizeDecisionEnvelope({ envelope, current = [], measurements = [] }: LooseObject) {
   const canonicalSummary = summaryFromCanonicalNextAction(envelope?.canonicalNextAction, {
     current,
     measurements,
@@ -575,144 +469,18 @@ function summarizeDecisionEnvelope({
   });
   if (canonicalSummary) return canonicalSummary;
 
-  let summary = {
-    kind: "continue",
-    priority: "Next",
-    title: "Run the next measured hypothesis",
-    detail: cleanText(envelope?.nextAction) || "Use the latest ASI hint as the next loop input.",
+  const summary = {
+    kind: "decision-unavailable",
+    priority: "Critical",
+    title: "Decision unavailable",
+    detail: "Refresh state before choosing another action.",
     source: "decision-envelope",
-    fresh: freshness.fresh ?? null,
-    segment: envelope?.activeSegment?.segment ?? null,
-    runs: envelope?.activeSegment?.runs ?? current.length,
+    fresh: null,
+    segment: null,
+    runs: current.length,
     measurementRuns: measurements.length,
-    finalizationReady: finalization.ready ?? null,
+    finalizationReady: null,
   };
-
-  if (!canonicalSummary) {
-    const scaffoldBlockers = stringList(envelope?.scaffoldHealth?.blockers);
-    const setupBlockers = [
-      ...scaffoldBlockers,
-      ...stringList(setupPlan?.missing),
-      ...stringList(setupPlan?.missingEssentials),
-    ];
-    const limit = guidedSetup?.state?.limit || guidedSetup?.limit || {};
-    const limitReached =
-      limit.limitReached === true ||
-      (Number.isFinite(Number(limit.remainingIterations)) &&
-        Number(limit.remainingIterations) <= 0);
-    const watchdog = envelope?.watchdog || {};
-    const qualityRound = envelope?.qualityRound || {};
-
-    if (freshness.fresh === false) {
-      summary = {
-        ...summary,
-        kind: "stale-packet",
-        priority: "Critical",
-        title: "Replace the stale packet",
-        detail: freshness.reason || "The saved last-run packet no longer matches the ledger.",
-        source: "packet",
-      };
-    } else if (setupBlockers.length || guidedSetup?.stage === "needs-setup") {
-      summary = {
-        ...summary,
-        kind: "setup",
-        priority: "Critical",
-        title: "Complete setup",
-        detail:
-          setupBlockers[0] ||
-          guidedSetup?.nextAction ||
-          "Repair setup blockers before trusting another packet.",
-        source: "setup",
-      };
-    } else if (guidedSetup?.stage === "needs-benchmark-command") {
-      summary = {
-        ...summary,
-        kind: "benchmark-command",
-        priority: "Critical",
-        title: "Add a benchmark command",
-        detail:
-          guidedSetup?.nextAction ||
-          "This session has logged metrics, but next has no default benchmark script to run.",
-        source: "setup",
-      };
-    } else if (guidedSetup?.stage === "needs-log-decision" && freshness.fresh !== false) {
-      const suggested =
-        guidedSetup?.lastRun?.safeSuggestedStatus || guidedSetup?.lastRun?.suggestedStatus;
-      summary = {
-        ...summary,
-        kind: "log-decision",
-        priority: "Critical",
-        title: "Log the last packet",
-        detail: suggested
-          ? `Record the last packet as ${suggested}, then run a new packet.`
-          : "Record the fresh last-run packet before starting another packet.",
-        source: "packet",
-      };
-    } else if (
-      limitReached ||
-      guidedSetup?.stage === "limit-reached" ||
-      qualityRound.done === true
-    ) {
-      summary = {
-        ...summary,
-        kind: "segment-transition",
-        priority: "Transition",
-        title: qualityRound.done === true ? "Review completion state" : "Start a new segment",
-        detail:
-          guidedSetup?.nextAction ||
-          (qualityRound.done === true
-            ? "The active quality round is closed; refresh gaps or preview finalization."
-            : "The active segment reached its limit; extend the limit or start a new segment."),
-        source: "segment",
-      };
-    } else if (experimentMemory?.plateau?.detected) {
-      summary = {
-        ...summary,
-        kind: "plateau",
-        priority: "Critical",
-        title: "Break the plateau",
-        detail:
-          experimentMemory?.diversityGuidance?.nextActionHint ||
-          experimentMemory?.plateau?.recommendation ||
-          "Recent runs are clustering without a new best.",
-        source: "plateau",
-      };
-    } else if (watchdog.stale === true) {
-      summary = {
-        ...summary,
-        kind: "watchdog",
-        priority: "Critical",
-        title: "Investigate the quiet window",
-        detail:
-          watchdog.recommendation || "No progress signal has appeared within the watchdog window.",
-        source: "watchdog",
-      };
-    } else if (finalization.ready === true || finalizePreview?.ready === true) {
-      summary = {
-        ...summary,
-        kind: "finalize-preview",
-        priority: "Review",
-        title: "Preview finalization",
-        detail:
-          finalization.nextAction ||
-          finalizePreview?.nextAction ||
-          "Inspect the branch packet before creating review branches.",
-        source: "finalize",
-      };
-    }
-  }
-
-  if (summary.kind === "continue" && !current.length) {
-    summary = {
-      ...summary,
-      kind: "baseline",
-      priority: "Start",
-      title: "Capture the baseline",
-      detail:
-        guidedSetup?.nextAction || "Run the first measured packet so future changes have a floor.",
-      source: "baseline",
-    };
-  }
 
   return summary;
 }
@@ -738,7 +506,9 @@ function summaryFromCanonicalNextAction(
     detail:
       cleanText(canonical.reason) || cleanText(envelope?.nextAction) || "Review before continuing.",
     command: cleanText(canonical.command),
-    source: "decision-envelope",
+    blockerCode: cleanText(envelope?.primaryBlockerCode),
+    canRunPacket: envelope?.loopContract?.canRunNextPacket === true,
+    source: "decision-plan",
     fresh: envelope?.latestPacketFreshness?.fresh ?? null,
     segment: envelope?.activeSegment?.segment ?? null,
     runs: envelope?.activeSegment?.runs ?? current.length,
@@ -1796,245 +1566,25 @@ function truthBreadthLabel(truth: LooseObject): string {
   return `${counts.reduce((sum, value) => sum + value, 0)} checks`;
 }
 
-function shouldPrioritizeFinalization({
-  canFinalize,
-  guidedSetup,
-  hasQualityGaps,
-  hasClosedQualityGapSet,
-  lastMemoryAction,
-  nextAction,
-}: LooseObject) {
-  if (!canFinalize || hasQualityGaps) return false;
-  if (hasClosedQualityGapSet) return true;
-  return (
-    actionSuggestsFinalization(lastMemoryAction || nextAction) || iterationLimitReached(guidedSetup)
-  );
-}
-
-function actionSuggestsFinalization(value: unknown): boolean {
-  const action = cleanText(value);
-  return (
-    /^(stop|finali[sz]e|review|package|handoff|done)\b/i.test(action) ||
-    /no credible next|no next packet|no remaining hypothesis/i.test(action)
-  );
-}
-
-function iterationLimitReached(guidedSetup: LooseObject | null): boolean {
-  const limit = guidedSetup?.state?.limit || guidedSetup?.limit || {};
-  if (limit.limitReached === true) return true;
-  const remaining = Number(limit.remainingIterations);
-  return Number.isFinite(remaining) && remaining <= 0;
-}
-
 export function buildActionRail({
-  current,
   bestKept,
   latestFailure,
-  nextAction,
   decisionEnvelopeSummary = null,
-  setupPlan,
-  guidedSetup,
-  qualityGap,
-  finalizePreview,
-  experimentMemory,
   commands,
 }: LooseObject) {
   const commandMap = commandLookup(commands);
-  const lastMemoryAction = experimentMemory?.latestNextAction || "";
-  const qualityGapOpen = Number(qualityGap?.open);
-  const hasQualityGaps = Number.isFinite(qualityGapOpen) && qualityGapOpen > 0;
-  const hasClosedQualityGapSet =
-    Boolean(qualityGap) &&
-    Number.isFinite(qualityGapOpen) &&
-    qualityGapOpen === 0 &&
-    Number(qualityGap?.total) > 0;
-  const canFinalize = Boolean(finalizePreview?.ready);
-  const shouldFinalizeNow = shouldPrioritizeFinalization({
-    canFinalize,
-    guidedSetup,
-    hasQualityGaps,
-    hasClosedQualityGapSet,
-    lastMemoryAction,
-    nextAction,
-  });
-
-  let primary;
-  if (decisionEnvelopeSummary?.kind && decisionEnvelopeSummary.kind !== "continue") {
-    primary = actionFromDecisionEnvelope(decisionEnvelopeSummary, {
-      guidedSetup,
-      setupPlan,
-      commandMap,
-    });
-  } else if (guidedSetup?.stage === "needs-setup") {
-    primary = actionItem({
-      kind: "setup",
-      priority: "Critical",
-      title: "Complete setup",
-      detail:
-        guidedSetup.nextAction || "Create or complete the session setup before running a baseline.",
-      utilityCopy: "Setup comes before trustworthy metrics.",
-      safeAction: "setup-plan",
-      command: guidedSetup.commands?.setup || commandMap.get("setup plan"),
-      commandLabel: "Setup",
-      tone: "warn",
-      source: "setup",
-    });
-  } else if (guidedSetup?.stage === "stale-last-run") {
-    const stalePacketCommand =
-      guidedSetup.commands?.replaceLast ||
-      (setupPlan?.defaultBenchmarkCommandReady ? commandMap.get("next run") : "");
-    primary = actionItem({
-      kind: "stale-packet",
-      priority: "Critical",
-      title: "Replace the stale packet",
-      detail:
-        guidedSetup.lastRun?.freshness?.reason ||
-        guidedSetup.nextAction ||
-        "The saved last-run packet no longer matches the ledger.",
-      utilityCopy: "Run a fresh packet before logging so old metrics cannot be reused.",
-      safeAction: stalePacketCommand ? "" : "setup-plan",
-      command: stalePacketCommand || guidedSetup.commands?.setup || commandMap.get("setup plan"),
-      commandLabel: stalePacketCommand ? "Replace stale packet" : "Setup",
-      tone: "warn",
-      source: "packet",
-    });
-  } else if (guidedSetup?.stage === "needs-log-decision") {
-    const suggested = guidedSetup.lastRun?.suggestedStatus || "keep or discard";
-    primary = actionItem({
-      kind: "log-decision",
-      priority: "Critical",
-      title: "Log the last packet",
-      detail: `Record the last packet as ${suggested}, then run a new packet.`,
-      utilityCopy: "Logging clears the packet so it cannot be reused by mistake.",
-      command:
-        guidedSetup.commands?.logLast ||
-        commandMap.get("keep last") ||
-        commandMap.get("discard last"),
-      commandLabel: "Log",
-      tone: "warn",
-      source: "packet",
-    });
-  } else if (guidedSetup?.stage === "needs-benchmark-command") {
-    primary = actionItem({
-      kind: "benchmark-command",
-      priority: "Critical",
-      title: "Add a benchmark command",
-      detail:
-        guidedSetup.nextAction ||
-        "This session has logged metrics, but next has no default benchmark script to run.",
-      utilityCopy:
-        "Measured loops need a repeatable command before the dashboard can send you to next.",
-      safeAction: "setup-plan",
-      command: guidedSetup.commands?.setup || commandMap.get("setup plan"),
-      commandLabel: "Setup",
-      tone: "warn",
-      source: "setup",
-    });
-  } else if (!current.length) {
-    primary = actionItem({
-      kind: "baseline",
-      priority: "Start",
-      title: guidedSetup?.stage ? `Run ${guidedSetup.stage}` : "Capture the baseline",
-      detail:
-        guidedSetup?.nextAction || "Run the first measured packet so future changes have a floor.",
-      utilityCopy: "Establish the benchmark floor before tuning.",
-      command: guidedSetup?.commands?.baseline || commandMap.get("next run"),
-      commandLabel: "Next",
-      tone: "start",
-      source: "baseline",
-    });
-  } else if (experimentMemory?.plateau?.detected) {
-    const lane =
-      experimentMemory.diversityGuidance ||
-      (Array.isArray(experimentMemory.lanePortfolio) ? experimentMemory.lanePortfolio[0] : null);
-    primary = actionItem({
-      kind: "plateau",
-      priority: "Critical",
-      title: "Break the plateau",
-      detail: lane?.nextActionHint || experimentMemory.plateau.recommendation,
-      utilityCopy:
-        experimentMemory.plateau.reason || "Recent runs are clustering without a new best.",
-      command: commandMap.get("next run"),
-      commandLabel: "Next",
-      tone: "warn",
-      source: lane?.id || "plateau",
-    });
-  } else if (shouldFinalizeNow) {
-    primary = actionItem({
-      kind: "finalize-preview",
-      priority: "Review",
-      title: "Preview finalization",
-      detail:
-        finalizePreview.nextAction || "Inspect the branch packet before creating review branches.",
-      utilityCopy: "Turn kept evidence into a reviewable packet.",
-      safeAction: "finalize-preview",
-      command: commandMap.get("finalize preview"),
-      commandLabel: "Preview finalization",
-      tone: "good",
-      source: "finalize",
-    });
-  } else if (hasQualityGaps) {
-    primary = actionItem({
-      kind: "continue",
-      priority: "Narrow",
-      title: "Pick a quality gap",
-      detail: `${qualityGap.open} open gap${qualityGap.open === 1 ? "" : "s"} remain in ${qualityGap.slug}.`,
-      utilityCopy: "Convert the next gap into one measurable hypothesis.",
-      safeAction: "gap-candidates",
-      command: commandMap.get("gap candidates"),
-      commandLabel: "Gaps",
-      tone: "focus",
-      source: "quality-gap",
-    });
-  } else if (hasClosedQualityGapSet) {
-    const detail =
-      lastMemoryAction && /^stop\b|^stop iteration\b/i.test(lastMemoryAction)
-        ? lastMemoryAction
-        : `${qualityGap.total} accepted quality gap${qualityGap.total === 1 ? "" : "s"} are closed in ${qualityGap.slug}.`;
-    primary = actionItem({
-      kind: "complete",
-      priority: "Complete",
-      title: "Review completion state",
-      detail,
-      utilityCopy: finalizePreview?.warnings?.length
-        ? "Accepted gaps are closed; resolve finalization warnings before creating review branches."
-        : "Accepted gaps are closed; run a fresh gap preview only if you need another research round.",
-      safeAction: "gap-candidates",
-      command:
-        commandMap.get("gap candidates") ||
-        commandMap.get("finalize preview") ||
-        commandMap.get("export dashboard"),
-      commandLabel: commandMap.get("gap candidates") ? "Gaps" : "Review",
-      tone: "good",
-      source: "quality-gap",
-    });
-  } else if (lastMemoryAction || nextAction) {
-    primary = actionItem({
-      kind: "continue",
-      priority: "Next",
-      title: "Run the next measured hypothesis",
-      detail: lastMemoryAction || nextAction,
-      utilityCopy: latestFailure
-        ? "Avoid repeating the rejected path."
-        : "Use the latest ASI hint as the next loop input.",
-      command: commandMap.get("next run"),
-      commandLabel: "Next",
-      tone: "focus",
-      source: "asi-memory",
-    });
-  } else {
-    primary = actionItem({
-      kind: "continue",
-      priority: "Decide",
-      title: "Choose the next hypothesis",
-      detail: "No ASI next action was recorded on the latest runs.",
-      utilityCopy: "Add next_action_hint when logging the next result.",
-      command: commandMap.get("next run"),
-      commandLabel: "Next",
-      tone: "warn",
-      source: "memory",
-    });
-  }
+  const canonicalSummary =
+    decisionEnvelopeSummary?.kind && typeof decisionEnvelopeSummary.canRunPacket === "boolean"
+      ? decisionEnvelopeSummary
+      : {
+          kind: "decision-unavailable",
+          priority: "Critical",
+          title: "Decision unavailable",
+          detail: "Refresh state to load the canonical capability decision.",
+          source: "decision-plan",
+          canRunPacket: false,
+        };
+  const primary = actionFromDecisionEnvelope(canonicalSummary);
 
   const secondary = [
     latestFailure &&
@@ -2081,144 +1631,20 @@ export function buildActionRail({
   return [primary, ...secondary].slice(0, 4);
 }
 
-function actionFromDecisionEnvelope(
-  summary: LooseObject,
-  {
-    guidedSetup = null,
-    setupPlan = null,
-    commandMap,
-  }: { guidedSetup?: LooseObject | null; setupPlan?: LooseObject | null; commandMap: CommandMap },
-) {
+function actionFromDecisionEnvelope(summary: LooseObject) {
   const kind = cleanText(summary.kind) || "continue";
-  const stalePacketCommand =
-    guidedSetup?.commands?.replaceLast ||
-    (setupPlan?.defaultBenchmarkCommandReady ? commandMap.get("next run") : "");
-  const metadata = actionMetadataForKind(kind);
-  const metadataCommand = fallbackCommandForKind(kind, (key) =>
-    commandMap.get(dashboardCommandMapKey(key)),
-  );
-  const commandOverrides: Record<string, string> = {
-    "stale-packet":
-      stalePacketCommand || guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
-    setup: guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
-    "benchmark-command": guidedSetup?.commands?.setup || commandMap.get("setup plan") || "",
-    "log-decision": guidedSetup?.commands?.logLast || "",
-    baseline: guidedSetup?.commands?.baseline || commandMap.get("next run") || "",
-  };
-  const commandLabel = dashboardCommandLabelOverride(kind, {
-    commandMap,
-    stalePacketCommand,
-  });
-  const safeAction = dashboardSafeActionOverride(kind, { commandMap, stalePacketCommand });
-  const packetBrake = isPacketBrakeKind(kind);
   return actionItem({
     kind,
     priority: cleanText(summary.priority) || "Next",
     title: cleanText(summary.title) || "Next action",
     detail: cleanText(summary.detail) || "Review the decision envelope before continuing.",
-    utilityCopy: decisionEnvelopeUtility(kind),
-    safeAction: safeAction ?? metadata?.safeAction ?? "",
-    command:
-      cleanText(summary.command) ||
-      commandOverrides[kind] ||
-      metadataCommand ||
-      (packetBrake ? "" : commandMap.get("next run") || ""),
-    commandLabel: commandLabel || metadata?.commandLabel || "Next",
-    tone: ["finalize-preview", "finalization"].includes(kind)
-      ? "good"
-      : [
-            "safety-blocker",
-            "benchmark-mismatch",
-            "gate-quality",
-            "preflight",
-            "portfolio-trust-blocker",
-            "metric-saturation",
-            "current-tree-finalization",
-            "workflow-friction",
-            "stale-packet",
-            "setup",
-            "benchmark-command",
-            "decision-capsule",
-            "log-decision",
-            "watchdog",
-            "plateau",
-            "plateau-pivot",
-          ].includes(kind)
-        ? "warn"
-        : "focus",
-    source: cleanText(summary.source) || "decision-envelope",
+    utilityCopy: "This action is projected from the canonical session decision.",
+    command: cleanText(summary.command),
+    commandLabel: "Inspect",
+    tone: cleanText(summary.blockerCode) ? "warn" : "focus",
+    source: cleanText(summary.source) || "decision-plan",
+    packetBrake: typeof summary.canRunPacket === "boolean" ? !summary.canRunPacket : undefined,
   });
-}
-
-function dashboardCommandLabelOverride(
-  kind: string,
-  { commandMap, stalePacketCommand }: { commandMap: CommandMap; stalePacketCommand: string },
-): string {
-  if (kind === "stale-packet" && stalePacketCommand) return "Next";
-  if (kind === "watchdog") return commandMap.get("finalize preview") ? "Preview" : "Inspect";
-  if (kind === "segment-transition") {
-    if (commandMap.get("new segment")) return "Segment";
-    return commandMap.get("gap candidates") ? "Gaps" : "Review";
-  }
-  return "";
-}
-
-function dashboardSafeActionOverride(
-  kind: string,
-  { commandMap, stalePacketCommand }: { commandMap: CommandMap; stalePacketCommand: string },
-): string | null {
-  if (kind === "stale-packet" && stalePacketCommand) return "";
-  if (kind === "watchdog") {
-    return commandMap.get("finalize preview") ? "finalize-preview" : "state";
-  }
-  return null;
-}
-
-function decisionEnvelopeUtility(kind: string): string {
-  if (kind === "safety-blocker") return "Safety blockers come before benchmark work.";
-  if (kind === "workflow-friction")
-    return "Workflow friction should be removed before spending another packet.";
-  if (kind === "lane-cleanup") return "Lane cleanup comes before another measured packet.";
-  if (kind === "runtime-provenance")
-    return "Runtime provenance should be refreshed before trusting another packet.";
-  if (kind === "packet-diagnostic")
-    return "Packet diagnostics should explain the last run before another packet.";
-  if (kind === "benchmark-mismatch")
-    return "Benchmark timeout and command-shape mismatches come before reruns.";
-  if (kind === "gate-quality")
-    return "Independent gate quality should be repaired before another measured packet.";
-  if (kind === "preflight") return "Preflight blockers come before another measured packet.";
-  if (kind === "portfolio-trust-blocker")
-    return "Portfolio trust blockers should be resolved before spending another packet.";
-  if (kind === "metric-saturation")
-    return "Saturated metrics need promotion evidence or a pivot before more packets.";
-  if (kind === "current-tree-finalization")
-    return "Current-tree finalization should describe the branch before review work continues.";
-  if (kind === "stale-packet") return "Authoritative packet freshness blocks logging old metrics.";
-  if (kind === "partial-salvage")
-    return "Review completed artifact rows before rerunning an expensive failed packet.";
-  if (kind === "context-distillation")
-    return "Refresh bounded context before context loss repeats the same work.";
-  if (kind === "decision-capsule")
-    return "Imported session evidence can brake unsafe packets until its next experiment is cleared.";
-  if (kind === "quality-gap")
-    return "Accepted quality gaps should drive the next implementation step.";
-  if (kind === "plateau-pivot") return "Plateau evidence should redirect the next hypothesis.";
-  if (kind === "watchdog") return "A quiet progress window should trigger intervention.";
-  if (kind === "finalization") return "Finalization is ready after higher-priority loop checks.";
-  if (kind === "next-packet") return "The next packet should produce metric evidence and ASI.";
-  if (kind === "setup") return "Setup blockers come before trustworthy metrics.";
-  if (kind === "benchmark-command")
-    return "A repeatable benchmark command comes before more segment work.";
-  if (kind === "log-decision")
-    return "A fresh packet decision should be logged before another run.";
-  if (kind === "segment-transition")
-    return "Segment or limit state should be resolved before more tuning.";
-  if (kind === "plateau") return "Plateau evidence should redirect the next hypothesis.";
-  if (kind === "finalize-preview")
-    return "Finalization is ready after higher-priority loop checks.";
-  if (kind === "baseline") return "Establish the benchmark floor before tuning.";
-  return "Decision envelope is the authoritative next-action source.";
 }
 
 function actionItem({
@@ -2233,6 +1659,7 @@ function actionItem({
   tone = "neutral",
   source = "",
   explanation = null,
+  packetBrake,
 }: {
   kind?: string;
   priority: string;
@@ -2245,6 +1672,7 @@ function actionItem({
   tone?: string;
   source?: string;
   explanation?: LooseObject | null;
+  packetBrake?: boolean;
 }) {
   const safeCommand = dashboardReadOnlyCommand(command);
   return {
@@ -2253,7 +1681,7 @@ function actionItem({
     title,
     detail,
     utilityCopy,
-    packetBrake: isPacketBrakeKind(kind),
+    packetBrake: packetBrake ?? false,
     explanation:
       explanation || buildActionExplanation({ kind, title, detail, utilityCopy, source }),
     safeAction,
@@ -2383,14 +1811,6 @@ function recordValue(value: unknown): LooseObject {
 function recordOrNull(value: unknown): LooseObject | null {
   const record = recordValue(value);
   return Object.keys(record).length ? record : null;
-}
-
-function firstRecord(...values: unknown[]): LooseObject {
-  for (const value of values) {
-    const record = recordValue(value);
-    if (Object.keys(record).length) return record;
-  }
-  return {};
 }
 
 function buildPortfolio(memory: LooseObject | null, direction: Direction) {

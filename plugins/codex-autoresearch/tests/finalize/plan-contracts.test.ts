@@ -327,7 +327,7 @@ testWithTempRoot(
         }),
         JSON.stringify({
           type: "run",
-          run: 99,
+          run: 2,
           status: "measure",
           commit: audit.commit,
           metric: 1,
@@ -335,7 +335,7 @@ testWithTempRoot(
         }),
         JSON.stringify({
           type: "run",
-          run: 100,
+          run: 3,
           status: "keep",
           evidenceStatus: "rejected",
           commit: malformedCommit,

@@ -1,6 +1,74 @@
 import assert from "node:assert/strict";
 import { collectDashboardCommandFields } from "../../lib/dashboard-command-safety.js";
 
+export function dashboardDecisionPlanProjection({
+  actionKind = "run-packet",
+  actionReason = "Run the next accepted packet.",
+  blockerCode = null,
+  capabilityStatuses = {},
+  loopKind,
+  parentKind = "hand-back",
+  phase = "packet",
+}: {
+  actionKind?: string;
+  actionReason?: string;
+  blockerCode?: string | null;
+  capabilityStatuses?: Record<string, "allowed" | "blocked" | "recovery-only">;
+  loopKind?: "blocked" | "complete" | "continue" | "pause";
+  parentKind?: "block-final-answer" | "complete" | "hand-back";
+  phase?: string;
+} = {}) {
+  const capabilities = {
+    "mutate-session": "allowed",
+    "run-packet": "allowed",
+    "authorize-keep": "allowed",
+    "transition-segment": "allowed",
+    finalize: "allowed",
+    "parent-final-answer": "allowed",
+    ...capabilityStatuses,
+  };
+  const disposition =
+    loopKind || (capabilities["run-packet"] === "allowed" ? "continue" : "blocked");
+  return {
+    kind: "dashboard-decision-plan-projection",
+    projection: "dashboard",
+    compilerSchemaVersion: 1,
+    generationId: `generation-${actionKind}`,
+    decisionId: `decision-${actionKind}-${blockerCode || "clear"}`,
+    phase,
+    action: {
+      kind: actionKind,
+      command: "",
+      commandDigest: "redacted-command-digest",
+    },
+    primaryBlockerCode: blockerCode,
+    capabilities,
+    requiredEvidence: {
+      preconditionEpoch: "accepted-contract:fixture",
+      acceptedCheckIdentities: ["checks@fixture"],
+      diagnosticCodes: blockerCode ? [blockerCode] : [],
+      capabilityEffectCodes: Object.entries(capabilityStatuses).map(
+        ([capability, status]) => `${blockerCode || "fixture"}:${capability}:${status}`,
+      ),
+    },
+    loopDisposition: {
+      kind: disposition,
+      canRunPacket: capabilities["run-packet"] === "allowed",
+      shouldContinue: disposition === "continue",
+    },
+    parentDisposition: {
+      kind: parentKind,
+      mayAnswer: parentKind !== "block-final-answer",
+      mayClaimCompletion: parentKind === "complete",
+    },
+    contractDigest: "contract-fixture",
+    evaluatorIdentity: "evaluator@fixture",
+    outcome: "unknown",
+    learning: { kind: "none", consecutiveNoLearningCandidates: 0 },
+    display: { actionReason },
+  };
+}
+
 export function assertNoMutatingDashboardCommands(value: unknown) {
   const commands = collectDashboardCommandFields(value).join("\n");
   assert.doesNotMatch(commands, /(?:^|\s)(?:next|log)(?:\s|$)/i);

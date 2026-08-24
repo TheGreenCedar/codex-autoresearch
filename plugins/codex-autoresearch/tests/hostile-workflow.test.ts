@@ -88,21 +88,11 @@ test("protected benchmark edits block next and keep until a new segment", async 
     await runGit(dir, ["commit", "-m", "baseline benchmark"]);
 
     const benchmarkCommand = `node ${quoteForShell(benchmarkPath)}`;
-    await assertCliOk([
-      "setup",
-      "--cwd",
-      dir,
-      "--name",
-      "protected",
-      "--metric-name",
-      "seconds",
-      "--benchmark-command",
+    await setupProtectedBenchmarkSession(dir, {
+      name: "protected",
       benchmarkCommand,
-      "--benchmark-prints-metric",
-      "true",
-      "--protected-benchmark-paths",
-      "bench.mjs",
-    ]);
+      protectedBenchmarkPath: "bench.mjs",
+    });
     await assertCliOk([
       "log",
       "--cwd",
@@ -124,12 +114,11 @@ test("protected benchmark edits block next and keep until a new segment", async 
     const doctorPayload = JSON.parse(doctor.stdout);
     assert.equal(doctorPayload.ok, false);
     assert.match(doctorPayload.issues.join("\n"), /Protected benchmark paths changed/i);
+    assertEvaluatorDriftDecision(doctorPayload, /Protected benchmark paths changed/i);
 
     const next = await runCli(["next", "--cwd", dir]);
-    assert.equal(next.code, 0, next.stderr);
-    const nextPayload = JSON.parse(next.stdout);
-    assert.equal(nextPayload.ok, false);
-    assert.match(JSON.stringify(nextPayload), /Protected benchmark paths changed/i);
+    assert.notEqual(next.code, 0);
+    assert.match(next.stderr, /protected execution input changed|accepted experiment contract/i);
 
     const keep = await runCli([
       "log",
@@ -143,7 +132,7 @@ test("protected benchmark edits block next and keep until a new segment", async 
       "mutated benchmark",
     ]);
     assert.notEqual(keep.code, 0);
-    assert.match(keep.stderr, /Protected benchmark paths changed/i);
+    assert.match(keep.stderr, /protected execution input changed|accepted experiment contract/i);
 
     await assertCliOk([
       "new-segment",
@@ -157,6 +146,10 @@ test("protected benchmark edits block next and keep until a new segment", async 
     assert.equal(postSegmentDoctor.code, 0, postSegmentDoctor.stderr);
     const postSegmentPayload = JSON.parse(postSegmentDoctor.stdout);
     assert.doesNotMatch(postSegmentPayload.issues.join("\n"), /Protected benchmark paths changed/i);
+    assert.notEqual(
+      postSegmentPayload.decisionPlanProjection.primaryBlockerCode,
+      "evaluator-drift",
+    );
   });
 });
 
@@ -183,23 +176,17 @@ test("dirty protected benchmark paths block the first keep baseline", async () =
     await runGit(dir, ["add", "bench.mjs"]);
     await runGit(dir, ["commit", "-m", "benchmark contract"]);
 
-    await assertCliOk([
-      "setup",
-      "--cwd",
-      dir,
-      "--name",
-      "dirty protected baseline",
-      "--metric-name",
-      "seconds",
-      "--benchmark-command",
-      `node ${quoteForShell(benchmarkPath)}`,
-      "--benchmark-prints-metric",
-      "true",
-      "--protected-benchmark-paths",
-      "bench.mjs",
-    ]);
+    await setupProtectedBenchmarkSession(dir, {
+      name: "dirty protected baseline",
+      benchmarkCommand: `node ${quoteForShell(benchmarkPath)}`,
+      protectedBenchmarkPath: "bench.mjs",
+    });
 
     await writeFile(benchmarkPath, "console.log('METRIC seconds=0.5')\n", "utf8");
+
+    const doctor = await runCli(["doctor", "--cwd", dir]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    assertEvaluatorDriftDecision(JSON.parse(doctor.stdout), /dirty before the first baseline/i);
 
     const keep = await runCli([
       "log",
@@ -213,13 +200,36 @@ test("dirty protected benchmark paths block the first keep baseline", async () =
       "dirty first baseline",
     ]);
     assert.notEqual(keep.code, 0);
-    assert.match(keep.stderr, /dirty before the first baseline/i);
+    assert.match(keep.stderr, /protected execution input changed|accepted experiment contract/i);
 
     const next = await runCli(["next", "--cwd", dir]);
-    assert.equal(next.code, 0, next.stderr);
-    const nextPayload = JSON.parse(next.stdout);
-    assert.equal(nextPayload.ok, false);
-    assert.match(JSON.stringify(nextPayload), /dirty before the first baseline/i);
+    assert.notEqual(next.code, 0);
+    assert.match(next.stderr, /protected execution input changed|accepted experiment contract/i);
+  });
+});
+
+test("ordinary editable source dirt blocks keep without blocking packet execution", async () => {
+  await withTempDir("ordinary-editable-source", async (dir) => {
+    await initGit(dir);
+    const benchmarkPath = path.join(dir, "bench.mjs");
+    await writeFile(benchmarkPath, "console.log('METRIC seconds=1')\n", "utf8");
+    await runGit(dir, ["add", "bench.mjs"]);
+    await runGit(dir, ["commit", "-m", "benchmark contract"]);
+    await setupProtectedBenchmarkSession(dir, {
+      name: "ordinary editable source",
+      benchmarkCommand: `node ${quoteForShell(benchmarkPath)}`,
+      protectedBenchmarkPath: "bench.mjs",
+    });
+
+    await writeFile(path.join(dir, "src", "candidate.txt"), "candidate\n", "utf8");
+    const doctor = await runCli(["doctor", "--cwd", dir]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    const payload = JSON.parse(doctor.stdout);
+    const plan = payload.decisionPlanProjection;
+    assert.equal(plan.primaryBlockerCode, "dirty-source");
+    assert.equal(plan.requiredEvidence.diagnosticCodes.includes("evaluator-drift"), false);
+    assert.equal(plan.capabilities["run-packet"], "allowed");
+    assert.equal(plan.capabilities["authorize-keep"], "blocked");
   });
 });
 
@@ -240,22 +250,16 @@ test("renaming a protected hostile path out of scope blocks the first baseline",
     await runGit(dir, ["add", "-A"]);
     await runGit(dir, ["commit", "-m", "protected benchmark"]);
 
-    await assertCliOk([
-      "setup",
-      "--cwd",
-      dir,
-      "--name",
-      "hostile protected rename",
-      "--metric-name",
-      "seconds",
-      "--benchmark-command",
-      `node ${quoteForShell(original)}`,
-      "--benchmark-prints-metric",
-      "true",
-      "--protected-benchmark-paths",
-      protectedRelative,
-    ]);
+    await setupProtectedBenchmarkSession(dir, {
+      name: "hostile protected rename",
+      benchmarkCommand: `node ${quoteForShell(original)}`,
+      protectedBenchmarkPath: protectedRelative,
+    });
     await rename(original, current);
+
+    const doctor = await runCli(["doctor", "--cwd", dir]);
+    assert.equal(doctor.code, 0, doctor.stderr);
+    assertEvaluatorDriftDecision(JSON.parse(doctor.stdout), /dirty before the first baseline/i);
 
     const keep = await runCli([
       "log",
@@ -269,7 +273,7 @@ test("renaming a protected hostile path out of scope blocks the first baseline",
       "must not bless moved benchmark",
     ]);
     assert.notEqual(keep.code, 0);
-    assert.match(keep.stderr, /dirty before the first baseline/i);
+    assert.match(keep.stderr, /protected execution input changed|accepted experiment contract/i);
   });
 });
 
@@ -359,6 +363,67 @@ async function assertCliOk(args) {
   const result = await runCli(args);
   assert.equal(result.code, 0, `${result.stderr}\n${result.stdout}`);
   return result;
+}
+
+async function setupProtectedBenchmarkSession(
+  dir,
+  { name, benchmarkCommand, protectedBenchmarkPath },
+) {
+  await mkdir(path.join(dir, "contract"), { recursive: true });
+  await mkdir(path.join(dir, "src"), { recursive: true });
+  await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n", "utf8");
+  await runGit(dir, ["add", "contract/checks.mjs"]);
+  await runGit(dir, ["commit", "-m", "authoritative checks"]);
+
+  await assertCliOk([
+    "setup",
+    "--cwd",
+    dir,
+    "--name",
+    name,
+    "--metric-name",
+    "seconds",
+    "--benchmark-command",
+    benchmarkCommand,
+    "--benchmark-prints-metric",
+    "true",
+    "--checks-command",
+    `${quoteForShell(process.execPath)} contract/checks.mjs`,
+    "--scope",
+    "src",
+    "--commit-paths",
+    "src",
+    "--protected-benchmark-paths",
+    protectedBenchmarkPath,
+    "--packet-budget",
+    "6",
+    "--max-iterations",
+    "6",
+  ]);
+
+  const configPath = path.join(dir, "autoresearch.config.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  config.checkImplementationPaths = ["contract/checks.mjs"];
+  config.checksAuthoritative = true;
+  config.noiseModel = { kind: "deterministic" };
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  await assertCliOk([
+    "new-segment",
+    "--cwd",
+    dir,
+    "--reason",
+    "Accept the protected benchmark contract",
+    "--yes",
+  ]);
+}
+
+function assertEvaluatorDriftDecision(payload, message) {
+  const plan = payload.decisionPlanProjection;
+  assert.equal(plan.primaryBlockerCode, "dirty-source");
+  assert.equal(plan.requiredEvidence.diagnosticCodes.includes("evaluator-drift"), true);
+  assert.equal(plan.capabilities["run-packet"], "blocked");
+  assert.equal(plan.capabilities["authorize-keep"], "blocked");
+  assert.match(JSON.stringify([payload.issues, payload.warnings]), message);
 }
 
 async function initGit(dir) {

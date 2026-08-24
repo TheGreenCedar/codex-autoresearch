@@ -1,16 +1,22 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 export interface SetupFixtureOptions {
+  acceptedContract?: boolean;
+  benchmarkCommand?: string;
+  checksCommand?: string;
+  completeContract?: boolean;
   direction?: "higher" | "lower";
   goal?: string;
   metricName?: string;
   metricUnit?: string;
   name?: string;
+  packetBudget?: number;
+  scope?: string;
 }
 
 let canonicalSessionModule: Promise<typeof import("../../scripts/autoresearch.js")> | undefined;
@@ -18,7 +24,71 @@ let canonicalSessionModule: Promise<typeof import("../../scripts/autoresearch.js
 export const createSetupFixture = () => {
   return async (cwd: string, options: SetupFixtureOptions = {}) => {
     canonicalSessionModule ??= import("../../scripts/autoresearch.js");
-    const { initExperiment } = await canonicalSessionModule;
+    const module = await canonicalSessionModule;
+    if (options.acceptedContract || options.completeContract) {
+      const metricName = options.metricName ?? "seconds";
+      const scope = options.scope ?? "src";
+      await mkdir(path.join(cwd, scope), { recursive: true });
+      const benchmarkCommand = options.acceptedContract
+        ? (options.benchmarkCommand ??
+          `${quoteForShell(process.execPath)} -e "console.log('METRIC ${metricName}=1')"`)
+        : options.benchmarkCommand;
+      const checksCommand =
+        options.checksCommand ?? `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+      let stdout = "";
+      let stderr = "";
+      const setupCode = await module.runAutoresearchCli(
+        [
+          "setup",
+          "--cwd",
+          cwd,
+          "--name",
+          options.name ?? "test session",
+          "--metric-name",
+          metricName,
+          ...(benchmarkCommand ? ["--benchmark-command", benchmarkCommand] : []),
+          "--checks-command",
+          checksCommand,
+          "--scope",
+          scope,
+          "--commit-paths",
+          scope,
+          "--packet-budget",
+          String(options.packetBudget ?? 6),
+          "--max-iterations",
+          String(options.packetBudget ?? 6),
+          ...(options.goal ? ["--goal", options.goal] : []),
+          ...(options.metricUnit ? ["--metric-unit", options.metricUnit] : []),
+          ...(options.direction ? ["--direction", options.direction] : []),
+        ],
+        {
+          stdout: (text) => {
+            stdout += `${text}\n`;
+          },
+          stderr: (text) => {
+            stderr += `${text}\n`;
+          },
+        },
+      );
+      if (setupCode !== 0 || !options.acceptedContract) {
+        return processResult(setupCode, stdout, stderr);
+      }
+      stdout = "";
+      stderr = "";
+      const segmentCode = await module.runAutoresearchCli(
+        ["new-segment", "--cwd", cwd, "--reason", "Accept the test fixture contract", "--yes"],
+        {
+          stdout: (text) => {
+            stdout += `${text}\n`;
+          },
+          stderr: (text) => {
+            stderr += `${text}\n`;
+          },
+        },
+      );
+      return processResult(segmentCode, stdout, stderr);
+    }
+    const { initExperiment } = module;
     const result = await initExperiment({
       cwd,
       name: options.name ?? "test session",

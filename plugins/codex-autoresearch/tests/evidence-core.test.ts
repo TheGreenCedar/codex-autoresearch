@@ -16,7 +16,6 @@ import test from "node:test";
 
 import {
   appendJsonl,
-  buildDecisionEnvelope,
   buildLastRunFreshnessSnapshot,
   createSessionReadCache,
   currentState,
@@ -39,7 +38,6 @@ import {
   terminateProcessTree,
   verifyWindowsProcessIdentities,
 } from "../lib/runner.js";
-import { buildLoopContractStatus } from "../lib/loop-governance.js";
 import { isPublicCatalogAddress } from "../lib/recipes.js";
 import {
   isMetricEligibleStatus,
@@ -258,7 +256,7 @@ test(
   },
 );
 
-test("a non-resolving terminator is bounded and remains an explicit loop-contract blocker", async () => {
+test("a non-resolving terminator is bounded and remains explicitly unproven", async () => {
   let result: Awaited<ReturnType<typeof runProcess>> | null = null;
   try {
     result = await runProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
@@ -272,10 +270,8 @@ test("a non-resolving terminator is bounded and remains an explicit loop-contrac
     assert.equal(result.termination?.reason, "termination_handler_timeout");
     const progress = progressSnapshotFromRun({ run: result });
     assert.equal(progress.exitState, "termination_failed");
-    const contract = buildLoopContractStatus({ experimentEconomics: { progress } });
-    assert.equal(contract.canRunNextPacket, false);
-    assert.equal(contract.blockers[0]?.kind, "termination-failed");
-    assert.match(contract.blockers[0]?.reason || "", new RegExp(String(result.termination?.pid)));
+    assert.equal(progress.termination?.proven, false);
+    assert.equal(progress.termination?.reason, "termination_handler_timeout");
   } finally {
     await forceCleanupPids(
       result?.termination?.pid ?? null,
@@ -1203,68 +1199,6 @@ test("truth signals ignore rejected and superseded keeps as current best evidenc
   assert.doesNotMatch(stalePrecomputed.warnings.join("\n"), /Current best is development-only/);
 });
 
-test("decision envelope omits rejected and superseded keeps from best evidence", () => {
-  const envelope = buildDecisionEnvelope({
-    state: {
-      config: { bestDirection: "lower" },
-      current: [
-        {
-          run: 1,
-          metric: 1,
-          status: "keep",
-          evidenceStatus: "rejected",
-          description: "Rejected perfect-looking run.",
-          metrics: { promotionGrade: true },
-        },
-        {
-          run: 2,
-          metric: 2,
-          status: "keep",
-          evidenceStatus: "superseded",
-          description: "Superseded run.",
-          metrics: { promotionGrade: true },
-        },
-        {
-          run: 3,
-          metric: 3,
-          status: "keep",
-          description: "Legacy accepted keep.",
-          metrics: { promotionGrade: true },
-        },
-      ],
-      results: [
-        {
-          run: 1,
-          metric: 1,
-          status: "keep",
-          evidenceStatus: "rejected",
-          description: "Rejected perfect-looking run.",
-          metrics: { promotionGrade: true },
-        },
-        {
-          run: 2,
-          metric: 2,
-          status: "keep",
-          evidenceStatus: "superseded",
-          description: "Superseded run.",
-          metrics: { promotionGrade: true },
-        },
-        {
-          run: 3,
-          metric: 3,
-          status: "keep",
-          description: "Legacy accepted keep.",
-          metrics: { promotionGrade: true },
-        },
-      ],
-    },
-    nextAction: "Continue.",
-  });
-
-  assert.equal(envelope.historicalBest.run, 3);
-  assert.equal(envelope.promotionGradeBest.run, 3);
-});
-
 test("evidence registry rejects quarantined artifacts and accepts current artifact evidence", async () => {
   await withTempDir("evidence-registry-artifacts", async (dir) => {
     await mkdir(path.join(dir, "out"), { recursive: true });
@@ -1560,14 +1494,6 @@ test("runner progress and experiment economics expose timeout and stale-progress
   assert.equal(warningCodes.includes("stale_progress"), true);
   assert.equal(economics.freshRunRequired, true);
 
-  assert.equal(
-    buildDecisionEnvelope({
-      state: { current: [] },
-      experimentEconomics: economics,
-    }).canonicalNextAction.kind,
-    "benchmark-mismatch",
-  );
-
   const smallProbeEconomics = analyzeExperimentEconomics({
     state: {
       baseline: 10,
@@ -1582,11 +1508,8 @@ test("runner progress and experiment economics expose timeout and stale-progress
     lastRun: { run: { durationSeconds: 900 }, packetEvidence: { timeoutSeconds: 1200 } },
   });
   assert.equal(
-    buildDecisionEnvelope({
-      state: { current: [{ run: 1, status: "discard", metric: 10 }] },
-      experimentEconomics: smallProbeEconomics,
-    }).canonicalNextAction.kind,
-    "workflow-friction",
+    smallProbeEconomics.warnings.some((warning) => warning.code === "repeated_small_probe"),
+    true,
   );
 });
 
@@ -1671,87 +1594,6 @@ test("metric saturation becomes a review checkpoint before another same-metric p
 
   assert.equal(saturation?.severity, "warning");
   assert.match(saturation?.suggestedAction.reason || "", /review\/rescope checkpoint/);
-  const envelope = buildDecisionEnvelope({
-    state: saturatedState,
-    workflowFriction: signals,
-    nextAction: "Run the next measured packet.",
-  });
-  assert.equal(envelope.canonicalNextAction.kind, "metric-saturation");
-});
-
-test("finalization coverage gaps prefer current-tree finalization", () => {
-  const envelope = buildDecisionEnvelope({
-    state: { current: [{ run: 1, status: "keep", metric: 0 }] },
-    finalization: {
-      ready: false,
-      actionCode: "current-tree-finalization",
-      nextAction: "Resolve the structured current-tree review unit blocker.",
-      warnings: ["Current branch tree is not covered by selected kept groups."],
-    },
-    nextAction: "Run the next measured packet.",
-  });
-
-  assert.equal(envelope.canonicalNextAction.kind, "current-tree-finalization");
-});
-
-test("loop contract blockers drive canonical next action ahead of legacy actions", () => {
-  const envelope = buildDecisionEnvelope({
-    state: {
-      current: [],
-      runtimeProvenance: {
-        drifted: true,
-        reason: "Source and installed runtime drift needs inspection.",
-      },
-    },
-    nextAction: "Run the next measured packet.",
-    finalization: { ready: true, nextAction: "Finalize reviewable kept work." },
-  });
-
-  assert.equal(envelope.loopContract.blockers[0].kind, "runtime-provenance");
-  assert.equal(envelope.canonicalNextAction.kind, "runtime-provenance");
-});
-
-test("loop contract warnings prevent next-packet canonical drift", () => {
-  const envelope = buildDecisionEnvelope({
-    state: {
-      current: [{ run: 1, status: "keep", metric: 5 }],
-    },
-    nextAction: "Run the next measured packet.",
-    finalization: { ready: true, nextAction: "Finalize reviewable kept work." },
-  });
-
-  assert.equal(envelope.loopContract.blockers.length, 0);
-  assert.equal(envelope.loopContract.warnings[0].kind, "finalization");
-  assert.equal(envelope.loopContract.canRunNextPacket, false);
-  assert.equal(envelope.canonicalNextAction.kind, "finalization");
-});
-
-test("loop contract warnings also prevent plateau packet drift", () => {
-  const envelope = buildDecisionEnvelope({
-    state: {
-      current: [{ run: 1, status: "keep", metric: 5 }],
-      sessionDecisionCapsule: {
-        enforcement: {
-          mode: "bounded-next",
-          canRunNextPacket: false,
-          commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd .",
-        },
-        nextExperiment: "Run a bounded benchmark-lint handoff before more packet work.",
-      },
-    },
-    experimentMemory: {
-      plateau: {
-        detected: true,
-        recommendation: "Scout a distant lane before repeating the plateau.",
-      },
-    },
-    nextAction: "Run the next measured packet.",
-  });
-
-  assert.equal(envelope.loopContract.blockers.length, 0);
-  assert.equal(envelope.loopContract.warnings[0].kind, "decision-capsule");
-  assert.equal(envelope.loopContract.canRunNextPacket, false);
-  assert.equal(envelope.canonicalNextAction.kind, "decision-capsule");
 });
 
 test("session forensics parses bounded signals without raw body persistence", async () => {

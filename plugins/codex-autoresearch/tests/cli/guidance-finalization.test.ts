@@ -7,15 +7,33 @@ import {
   writeDecisionCapsule,
 } from "../helpers/git-fixtures.js";
 import { quoteForShell } from "../helpers/process.js";
+import type { UnknownRecord } from "../../lib/types/json.js";
 
 import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
-test("compact state, recommend-next, and onboarding-packet surface resolved decisions", async () => {
-  await withTempDir("decision-envelope", async (dir) => {
-    await setupFixture(dir, { name: "envelope" });
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
+function projectedPlan(payload: UnknownRecord): UnknownRecord {
+  return (payload.decisionPlanProjection ||
+    payload.decisionPlan ||
+    payload.resultingDecision ||
+    payload.preconditionDecision) as UnknownRecord;
+}
 
-    const next = await runCli(["next", "--cwd", dir, "--command", command, "--compact"]);
+function capabilityStatus(plan: UnknownRecord, capability: string): string {
+  const capabilities = plan.capabilities as UnknownRecord;
+  const value = capabilities[capability];
+  return typeof value === "string" ? value : String((value as UnknownRecord).status || "");
+}
+
+test("compact state, recommend-next, and onboarding-packet project one decision plan", async () => {
+  await withTempDir("decision-envelope", async (dir) => {
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
+    await setupFixture(dir, {
+      name: "envelope",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
+
+    const next = await runCli(["next", "--cwd", dir, "--compact"]);
     assert.equal(next.code, 0, next.stderr);
     const nextPayload = JSON.parse(next.stdout);
     assert.ok(nextPayload.decision.allowedStatuses.includes("measure"));
@@ -23,30 +41,28 @@ test("compact state, recommend-next, and onboarding-packet surface resolved deci
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
-    assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "log-decision");
-    assert.equal(statePayload.resolvedDecision.finalizationPressure.available, true);
-    assert.equal(statePayload.resolvedDecision.finalizationPressure.ready, false);
-    assert.equal(typeof statePayload.resolvedDecision.finalizationPressure.nextAction, "string");
-    assert.equal(typeof statePayload.resolvedDecision.nextAction, "string");
+    const statePlan = projectedPlan(statePayload);
+    assert.equal((statePlan.action as UnknownRecord).kind, "log-decision");
+    assert.equal(statePlan.primaryBlockerCode, "pending-packet");
+    assert.equal(capabilityStatus(statePlan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(statePlan, "mutate-session"), "allowed");
+    assert.equal((statePlan.parentDisposition as UnknownRecord).kind, "hand-back");
     assert.equal(Object.hasOwn(statePayload, "decisionEnvelope"), false);
     assert.equal(Object.hasOwn(statePayload, "resumeAudit"), false);
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
-    assert.equal(
-      recommendPayload.nextAction,
-      statePayload.resolvedDecision.canonicalNextAction.reason,
-    );
-    assert.equal(
-      recommendPayload.resolvedDecision.canonicalNextAction.reason,
-      statePayload.resolvedDecision.canonicalNextAction.reason,
-    );
+    const recommendPlan = projectedPlan(recommendPayload);
+    assert.equal(recommendPlan.decisionId, statePlan.decisionId);
+    assert.equal((recommendPlan.action as UnknownRecord).kind, "log-decision");
 
     const onboarding = await runCli(["onboarding-packet", "--cwd", dir, "--compact"]);
     assert.equal(onboarding.code, 0, onboarding.stderr);
     const onboardingPayload = JSON.parse(onboarding.stdout);
-    assert.equal(onboardingPayload.resolvedDecision.canonicalNextAction.kind, "log-decision");
+    const onboardingPlan = projectedPlan(onboardingPayload);
+    assert.equal(onboardingPlan.decisionId, statePlan.decisionId);
+    assert.equal((onboardingPlan.action as UnknownRecord).kind, "log-decision");
     assert.equal(Object.hasOwn(onboardingPayload, "decisionEnvelope"), false);
     assert.equal(Object.hasOwn(onboardingPayload, "resumeAudit"), false);
   });
@@ -59,12 +75,12 @@ test("canonical next action stays consistent across state, report, recommend-nex
   const fixtures = [
     {
       name: "active-artifact",
-      expectedKind: "partial-salvage",
-      commandPattern: /partial-results/,
-      blocked: true,
+      expectedAction: "log-decision",
+      expectedBlocker: "pending-packet",
+      commandPattern: /\blog\b/,
+      runPacket: "blocked",
       absentBest: true,
       prepare: async (dir) => {
-        await setupFixture(dir, { name: "active artifact" });
         const script = path.join(dir, "partial-packet.mjs");
         await writeFile(
           script,
@@ -76,53 +92,53 @@ test("canonical next action stays consistent across state, report, recommend-nex
             "process.exit(1);",
           ].join("\n"),
         );
-        const packet = await runCli([
-          "next",
-          "--cwd",
-          dir,
-          "--command",
-          `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
-        ]);
+        await setupFixture(dir, {
+          name: "active artifact",
+          acceptedContract: true,
+          benchmarkCommand: `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+        });
+        const packet = await runCli(["next", "--cwd", dir]);
         assert.equal(packet.code, 0, packet.stderr);
       },
     },
     {
       name: "stale-packet",
-      expectedKind: "stale-packet",
+      expectedAction: "replace-packet",
+      expectedBlocker: "stale-packet",
       commandPattern: /(?:^|\s)next(?:\s|$)/,
-      blocked: true,
+      runPacket: "recovery-only",
       absentBest: false,
       prepare: async (dir) => {
-        await setupFixture(dir, { name: "stale packet" });
-        const packet = await runCli([
-          "next",
-          "--cwd",
-          dir,
-          "--command",
+        await setupFixture(dir, {
+          name: "stale packet",
+          acceptedContract: true,
           benchmarkCommand,
-          "--checks-command",
-          passingChecks,
-        ]);
+          checksCommand: passingChecks,
+        });
+        const packet = await runCli(["next", "--cwd", dir]);
         assert.equal(packet.code, 0, packet.stderr);
+        const packetPath = path.join(dir, "autoresearch.last-run.json");
+        const capturedPacket = await readFile(packetPath);
         const laterRun = await runCli([
           "log",
           "--cwd",
           dir,
-          "--metric",
-          "2",
+          "--from-last",
           "--status",
-          "keep",
+          "measure",
           "--description",
-          "Later direct run",
+          "Accepted later run",
         ]);
         assert.equal(laterRun.code, 0, laterRun.stderr);
+        await writeFile(packetPath, capturedPacket);
       },
     },
     {
       name: "missing-setup",
-      expectedKind: "setup",
+      expectedAction: "setup",
+      expectedBlocker: "setup-required",
       commandPattern: /setup-plan/,
-      blocked: true,
+      runPacket: "blocked",
       absentBest: true,
       prepare: async (dir) => {
         await writeFile(
@@ -134,44 +150,36 @@ test("canonical next action stays consistent across state, report, recommend-nex
     },
     {
       name: "failed-checks",
-      expectedKind: "log-decision",
+      expectedAction: "log-decision",
+      expectedBlocker: "pending-packet",
       commandPattern: /\blog\b/,
-      blocked: true,
+      runPacket: "blocked",
       absentBest: true,
       prepare: async (dir) => {
-        await setupFixture(dir, { name: "failed checks" });
-        const packet = await runCli([
-          "next",
-          "--cwd",
-          dir,
-          "--command",
+        await setupFixture(dir, {
+          name: "failed checks",
+          acceptedContract: true,
           benchmarkCommand,
-          "--checks-command",
-          failingChecks,
-        ]);
+          checksCommand: failingChecks,
+        });
+        const packet = await runCli(["next", "--cwd", dir]);
         assert.equal(packet.code, 0, packet.stderr);
       },
     },
     {
       name: "ready",
-      expectedKind: "needs-baseline",
+      expectedAction: "run-baseline",
+      expectedBlocker: "finalization-blocked",
       commandPattern: /(?:^|\s)next(?:\s|$)/,
-      blocked: false,
+      runPacket: "allowed",
       absentBest: true,
       prepare: async (dir) => {
-        const setup = await runCli([
-          "setup",
-          "--cwd",
-          dir,
-          "--name",
-          "ready session",
-          "--metric-name",
-          "seconds",
-          "--benchmark-command",
+        const setup = await setupFixture(dir, {
+          name: "ready session",
+          acceptedContract: true,
           benchmarkCommand,
-          "--checks-command",
-          passingChecks,
-        ]);
+          checksCommand: passingChecks,
+        });
         assert.equal(setup.code, 0, setup.stderr);
       },
     },
@@ -203,75 +211,48 @@ test("canonical next action stays consistent across state, report, recommend-nex
       const report = JSON.parse(reportResult.stdout);
       const recommend = JSON.parse(recommendResult.stdout);
       const dashboard = JSON.parse(dashboardResult.stdout);
-      const actions = [
-        full.resolvedDecision.canonicalNextAction,
-        compact.resolvedDecision.canonicalNextAction,
-        recommend.resolvedDecision.canonicalNextAction,
-        dashboard.viewModel.decisionEnvelope.canonicalNextAction,
+      const plans = [
+        projectedPlan(full),
+        projectedPlan(compact),
+        projectedPlan(recommend),
+        projectedPlan(report.report.json),
+        projectedPlan(dashboard.viewModel),
       ];
 
       assert.deepEqual(
-        actions.map((action) => action.kind),
-        Array(actions.length).fill(fixture.expectedKind),
+        plans.map((plan) => plan.action.kind),
+        Array(plans.length).fill(fixture.expectedAction),
         fixture.name,
       );
       assert.deepEqual(
-        actions.map((action) => action.reason),
-        Array(actions.length).fill(actions[0].reason),
+        plans.map((plan) => plan.primaryBlockerCode),
+        Array(plans.length).fill(fixture.expectedBlocker),
         fixture.name,
       );
       assert.deepEqual(
-        [
-          full.resolvedDecision.nextAction,
-          compact.resolvedDecision.nextAction,
-          recommend.resolvedDecision.nextAction,
-          recommend.nextAction,
-          dashboard.viewModel.decisionEnvelope.nextAction,
-          report.report.json.nextAction,
-        ],
-        Array(6).fill(actions[0].reason),
+        plans.map((plan) => plan.decisionId),
+        Array(plans.length).fill(plans[0].decisionId),
         fixture.name,
       );
-      assert.equal(report.report.json.nextAction, actions[0].reason, fixture.name);
-      assert.equal(dashboard.viewModel.nextBestAction.kind, fixture.expectedKind, fixture.name);
+      assert.deepEqual(
+        plans.map((plan) => capabilityStatus(plan, "run-packet")),
+        Array(plans.length).fill(fixture.runPacket),
+        fixture.name,
+      );
+      assert.deepEqual(
+        plans.map((plan) => plan.parentDisposition.kind),
+        Array(plans.length).fill(plans[0].parentDisposition.kind),
+        fixture.name,
+      );
 
       const commands = [
-        actions[0].command,
-        actions[1].command,
+        plans[0].action.command,
+        plans[1].action.command,
         recommend.commands.primary,
         report.report.json.nextCommand,
       ];
       assert.deepEqual(commands, Array(commands.length).fill(commands[0]), fixture.name);
       assert.match(commands[0], fixture.commandPattern, fixture.name);
-
-      const loopContracts = [
-        full.resolvedDecision.loopContract,
-        compact.resolvedDecision.loopContract,
-        recommend.resolvedDecision.loopContract,
-        dashboard.viewModel.decisionEnvelope.loopContract,
-      ];
-      assert.deepEqual(
-        loopContracts.map((contract) => contract.canRunNextPacket),
-        Array(loopContracts.length).fill(!fixture.blocked),
-        fixture.name,
-      );
-      assert.equal(
-        compact.resolvedDecision.loopContract.canRunNextPacket,
-        !fixture.blocked,
-        fixture.name,
-      );
-      assert.equal(report.report.json.status === "blocked", fixture.blocked, fixture.name);
-
-      const portfolioKinds = [
-        full.portfolioRecommendation?.kind,
-        recommend.portfolioRecommendation?.kind,
-        dashboard.viewModel.portfolioRecommendation?.kind,
-        report.report.json.portfolio.kind,
-      ];
-      assert.equal(portfolioKinds.includes("exploit-best"), false, fixture.name);
-      if (fixture.blocked) {
-        assert.deepEqual(portfolioKinds.slice(0, 3), [undefined, undefined, undefined]);
-      }
       if (fixture.absentBest) {
         assert.equal(full.best, null, fixture.name);
         assert.equal(compact.best, null, fixture.name);
@@ -280,19 +261,25 @@ test("canonical next action stays consistent across state, report, recommend-nex
   }
 });
 
-test("recommend-next compact returns state-first handoff with shared finalization authority", async () => {
+test("recommend-next compact returns the state plan and its capability-scoped handoff", async () => {
   await withTempDir("recommend-next-compact-state-first", async (dir) => {
-    await setupFixture(dir, { name: "compact recommend" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
+    await setupFixture(dir, {
+      name: "compact recommend",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
 
-    const next = await runCli(["next", "--cwd", dir, "--command", command, "--compact"]);
+    const next = await runCli(["next", "--cwd", dir, "--compact"]);
     assert.equal(next.code, 0, next.stderr);
 
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
-    assert.equal(statePayload.resolvedDecision.finalizationPressure.available, true);
-    assert.equal(statePayload.resolvedDecision.finalizationPressure.ready, false);
+    const statePlan = projectedPlan(statePayload);
+    assert.equal(capabilityStatus(statePlan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(statePlan, "mutate-session"), "allowed");
+    assert.equal((statePlan.parentDisposition as UnknownRecord).kind, "hand-back");
     assert.match(statePayload.commands.state, /state --cwd/);
 
     const recommend = await runCli([
@@ -306,18 +293,16 @@ test("recommend-next compact returns state-first handoff with shared finalizatio
     ]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
-    assert.equal(recommendPayload.resolvedDecision.finalizationPressure.available, true);
-    assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "log-decision");
-    assert.equal(
-      recommendPayload.commands.primary,
-      statePayload.resolvedDecision.canonicalNextAction.command,
-    );
+    const recommendPlan = projectedPlan(recommendPayload);
+    assert.equal(recommendPlan.decisionId, statePlan.decisionId);
+    assert.equal((statePlan.action as UnknownRecord).kind, "log-decision");
+    assert.equal(recommendPayload.commands.primary, (statePlan.action as UnknownRecord).command);
     assert.doesNotMatch(recommendPayload.commands.primary, /(?:^|\s)next(?:\s|$).*--compact/);
     assert.equal(
-      recommendPayload.resolvedDecision.canonicalNextAction.kind,
-      statePayload.resolvedDecision.canonicalNextAction.kind,
+      (recommendPlan.action as UnknownRecord).kind,
+      (statePlan.action as UnknownRecord).kind,
     );
-    assert.equal(recommendPayload.operatorChecklist.source, "latestPacketFreshness");
+    assert.match(recommendPayload.operatorChecklist.source, /pending-packet/);
     assert.doesNotMatch(
       recommendPayload.operatorChecklist.command,
       /(?:^|\s)next(?:\s|$).*--compact/,
@@ -327,86 +312,69 @@ test("recommend-next compact returns state-first handoff with shared finalizatio
   });
 });
 
-test("recommend-next compact refuses stale next command for plateau pivot", async () => {
+test("recommend-next pauses packets after two accepted no-learning candidates without auto-transition", async () => {
   await withTempDir("plateau-pivot-command", async (dir) => {
-    await runCli([
-      "setup",
-      "--cwd",
-      dir,
-      "--name",
-      "plateau pivot",
-      "--metric-name",
-      "seconds",
-      "--benchmark-command",
-      `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=10')"`,
-    ]);
-    await runCli([
+    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=10')"`;
+    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    await setupFixture(dir, {
+      name: "no-learning pause",
+      acceptedContract: true,
+      benchmarkCommand: benchmark,
+      checksCommand: checks,
+      packetBudget: 6,
+      scope: "src",
+    });
+    const baseline = await runCli(["next", "--cwd", dir]);
+    assert.equal(baseline.code, 0, baseline.stderr);
+    const baselineLog = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "10",
+      "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
-      "Baseline",
-      "--asi",
-      JSON.stringify({
-        family: "cache-size",
-        hypothesis: "baseline cache size",
-        evidence: "seconds=10",
-      }),
+      "Accepted baseline",
     ]);
-    for (const [metric, description] of [
-      ["11", "cache size retry 1"],
-      ["11.0001", "cache size retry 2"],
-    ]) {
-      await runCli([
+    assert.equal(baselineLog.code, 0, baselineLog.stderr);
+
+    for (let index = 1; index <= 2; index += 1) {
+      await writeFile(path.join(dir, "src", "candidate.txt"), `${index}\n`, "utf8");
+      const packet = await runCli(["next", "--cwd", dir]);
+      assert.equal(packet.code, 0, packet.stderr);
+      const logged = await runCli([
         "log",
         "--cwd",
         dir,
-        "--metric",
-        metric,
+        "--from-last",
         "--status",
-        "discard",
+        "measure",
         "--description",
-        description,
-        "--asi",
-        JSON.stringify({
-          family: "cache-size",
-          rollback_reason: "slower than baseline",
-        }),
+        `Accepted no-learning candidate ${index}`,
       ]);
+      assert.equal(logged.code, 0, logged.stderr);
     }
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--status",
-      "crash",
-      "--description",
-      "cache size retry 3",
-      "--asi",
-      JSON.stringify({
-        family: "cache-size",
-        rollback_reason: "crashed before producing a trusted metric",
-      }),
-    ]);
 
     const result = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
-    assert.equal(payload.action?.kind, "plateau-pivot");
-    assert.equal(payload.resolvedDecision.canonicalNextAction.kind, "plateau-pivot");
-    assert.doesNotMatch(payload.commands.primary, /(?:^|\s)next(?:\s|$)/);
-    assert.match(payload.commands.primary, /(?:^|\s)(?:lane-runner|new-segment)(?:\s|$)/);
+    const plan = projectedPlan(payload);
+    assert.equal(plan.primaryBlockerCode, "no-learning-pause");
+    assert.equal((plan.action as UnknownRecord).kind, "pause-packets");
+    assert.equal((plan.learning as UnknownRecord).consecutiveNoLearningCandidates, 2);
+    assert.equal(capabilityStatus(plan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(plan, "transition-segment"), "allowed");
+    assert.doesNotMatch(String(payload.commands?.primary || ""), /(?:lane-runner|new-segment)/);
   });
 });
 
 test("pending log receipts block state, doctor, and new log attempts", async () => {
   await withTempDir("pending-log-receipt", async (dir) => {
     await git(dir, ["init"]);
-    await setupFixture(dir, { name: "pending receipt" });
+    await setupFixture(dir, {
+      name: "pending receipt",
+      acceptedContract: true,
+    });
     const receiptDir = path.join(dir, ".git", "autoresearch");
     const receiptPath = path.join(receiptDir, "pending-log-transaction.json");
     await mkdir(receiptDir, { recursive: true });
@@ -417,11 +385,21 @@ test("pending log receipts block state, doctor, and new log attempts", async () 
           type: "autoresearch.log.transaction",
           schemaVersion: 2,
           transaction: { id: "pending-test-transaction", kind: "non-keep" },
-          input: { requestDigest: "different-input", configDigest: "different-config" },
+          input: {
+            requestDigest: "different-input",
+            configDigest: "different-config",
+          },
           status: "pending",
           completedStages: ["prepared"],
-          evidence: { experiment: { run: 1 }, processLifecycle: [], artifacts: [] },
-          ledgerEvent: { transactionId: "pending-test-transaction", eventDigest: "pending" },
+          evidence: {
+            experiment: { run: 1 },
+            processLifecycle: [],
+            artifacts: [],
+          },
+          ledgerEvent: {
+            transactionId: "pending-test-transaction",
+            eventDigest: "pending",
+          },
           cleanup: { trackedPaths: [], untrackedPaths: [], packetPaths: [] },
         },
         null,
@@ -433,22 +411,22 @@ test("pending log receipts block state, doctor, and new log attempts", async () 
     const state = await runCli(["state", "--cwd", dir, "--compact", "--report"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
-    assert.equal(statePayload.report.json.status, "blocked");
-    assert.match(
-      statePayload.compactState.resolvedDecision.loopContract.blockers.join("\n"),
-      /pending receipt|not be recorded in autoresearch\.jsonl/i,
-    );
+    const statePlan = projectedPlan(statePayload.compactState);
+    assert.equal(statePlan.primaryBlockerCode, "pending-log-transaction");
+    assert.equal(capabilityStatus(statePlan, "mutate-session"), "recovery-only");
+    assert.equal(capabilityStatus(statePlan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(statePlan, "finalize"), "blocked");
+    assert.equal((statePlan.parentDisposition as UnknownRecord).kind, "block-final-answer");
 
     const doctor = await runCli(["doctor", "--cwd", dir, "--explain"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
-    assert.equal(doctorPayload.ok, false);
-    assert.ok(
-      doctorPayload.issues.some((issue) =>
-        /pending receipt|not be recorded in autoresearch\.jsonl/i.test(issue),
-      ),
-    );
+    const doctorPlan = projectedPlan(doctorPayload);
+    assert.equal(doctorPlan.decisionId, statePlan.decisionId);
+    assert.equal(doctorPlan.primaryBlockerCode, "pending-log-transaction");
 
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const ledgerBefore = await readFile(ledgerPath, "utf8");
     const log = await runCli([
       "log",
       "--cwd",
@@ -461,11 +439,11 @@ test("pending log receipts block state, doctor, and new log attempts", async () 
       "Blocked by receipt",
     ]);
     assert.notEqual(log.code, 0);
-    assert.match(log.stderr, /pending receipt|not be recorded in autoresearch\.jsonl/i);
+    assert.equal(await readFile(ledgerPath, "utf8"), ledgerBefore);
   });
 });
 
-test("doctor explain preserves current-tree finalization blockers", async () => {
+test("doctor keeps current-tree finalization blockers scoped to finalization", async () => {
   await withTempDir("doctor-current-tree-finalization", async (dir) => {
     await prepareCurrentTreeFinalizationBlocker(dir, runCli);
     const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
@@ -481,20 +459,18 @@ test("doctor explain preserves current-tree finalization blockers", async () => 
     ]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const payload = JSON.parse(doctor.stdout);
+    const plan = projectedPlan(payload);
 
-    assert.equal(payload.ok, false);
-    assert.equal(payload.resolvedDecision.canonicalNextAction.kind, "current-tree-finalization");
-    assert.equal(payload.resolvedDecision.loopContract.canRunNextPacket, false);
-    assert.equal(payload.resolvedDecision.finalizationPressure.available, true);
-    assert.match(payload.nextAction, /finalize-current-tree|Final tree coverage/i);
-    assert.doesNotMatch(
-      payload.resolvedDecision.canonicalNextAction.command,
-      /(?:^|\s)next(?:\s|$)/,
-    );
+    assert.equal(plan.primaryBlockerCode, "finalization-blocked");
+    assert.equal(capabilityStatus(plan, "finalize"), "blocked");
+    assert.equal(capabilityStatus(plan, "run-packet"), "allowed");
+    assert.equal(capabilityStatus(plan, "mutate-session"), "allowed");
+    assert.equal((plan.loopDisposition as UnknownRecord).kind, "continue");
+    assert.equal((plan.parentDisposition as UnknownRecord).kind, "hand-back");
   });
 });
 
-test("state, recommend-next, doctor, and dashboard share current-tree finalization authority", async () => {
+test("state, recommend-next, doctor, and dashboard share finalization-scoped capability authority", async () => {
   await withTempDir("shared-current-tree-finalization", async (dir) => {
     await prepareCurrentTreeFinalizationBlocker(dir, runCli);
     const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
@@ -503,12 +479,11 @@ test("state, recommend-next, doctor, and dashboard share current-tree finalizati
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     const compactState = statePayload.compactState;
-    assert.equal(
-      compactState.resolvedDecision.canonicalNextAction.kind,
-      "current-tree-finalization",
-    );
-    assert.equal(compactState.resolvedDecision.finalizationPressure.available, true);
-    assert.equal(statePayload.report.json.status, "blocked");
+    const statePlan = projectedPlan(compactState);
+    assert.equal(statePlan.primaryBlockerCode, "finalization-blocked");
+    assert.equal(capabilityStatus(statePlan, "finalize"), "blocked");
+    assert.equal(capabilityStatus(statePlan, "run-packet"), "allowed");
+    assert.equal((statePlan.parentDisposition as UnknownRecord).kind, "hand-back");
 
     const recommend = await runCli([
       "recommend-next",
@@ -519,13 +494,10 @@ test("state, recommend-next, doctor, and dashboard share current-tree finalizati
     ]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
-    assert.equal(
-      recommendPayload.resolvedDecision.canonicalNextAction.kind,
-      compactState.resolvedDecision.canonicalNextAction.kind,
-    );
-    assert.equal(recommendPayload.resolvedDecision.finalizationPressure.available, true);
-    assert.match(recommendPayload.operatorChecklist.source, /currentTree/);
-    assert.doesNotMatch(recommendPayload.commands.primary, /(?:^|\s)next(?:\s|$).*--compact/);
+    const recommendPlan = projectedPlan(recommendPayload);
+    assert.equal(recommendPlan.decisionId, statePlan.decisionId);
+    assert.equal(capabilityStatus(recommendPlan, "finalize"), "blocked");
+    assert.equal(capabilityStatus(recommendPlan, "run-packet"), "allowed");
 
     const doctor = await runCli([
       "doctor",
@@ -538,46 +510,58 @@ test("state, recommend-next, doctor, and dashboard share current-tree finalizati
     ]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
-    assert.equal(
-      doctorPayload.resolvedDecision.canonicalNextAction.kind,
-      compactState.resolvedDecision.canonicalNextAction.kind,
-    );
-    assert.equal(doctorPayload.resolvedDecision.loopContract.canRunNextPacket, false);
+    const doctorPlan = projectedPlan(doctorPayload);
+    assert.equal(doctorPlan.decisionId, statePlan.decisionId);
+    assert.equal(capabilityStatus(doctorPlan, "run-packet"), "allowed");
 
     const exported = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exported.code, 0, exported.stderr);
     const exportPayload = JSON.parse(exported.stdout);
-    assert.equal(
-      exportPayload.viewModel.decisionEnvelope.canonicalNextAction.kind,
-      compactState.resolvedDecision.canonicalNextAction.kind,
-    );
-    assert.equal(exportPayload.viewModel.nextBestAction.kind, "current-tree-finalization");
+    const dashboardPlan = projectedPlan(exportPayload.viewModel);
+    assert.equal(dashboardPlan.decisionId, statePlan.decisionId);
+    assert.equal(capabilityStatus(dashboardPlan, "finalize"), "blocked");
+    assert.equal(capabilityStatus(dashboardPlan, "run-packet"), "allowed");
   });
 });
 
-test("next compact refuses current-tree finalization blockers before running packets", async () => {
+test("next compact runs an accepted packet despite a finalization-only blocker", async () => {
   await withTempDir("next-current-tree-finalization", async (dir) => {
     await prepareCurrentTreeFinalizationBlocker(dir, runCli);
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const before = projectedPlan(JSON.parse(state.stdout));
+    assert.equal(before.primaryBlockerCode, "finalization-blocked");
+    assert.equal(capabilityStatus(before, "finalize"), "blocked");
+    assert.equal(capabilityStatus(before, "run-packet"), "allowed");
 
     const next = await runCli(["next", "--cwd", dir, "--compact"]);
     assert.equal(next.code, 0, next.stderr);
     const payload = JSON.parse(next.stdout);
 
-    assert.equal(payload.ok, false);
-    assert.equal(payload.refused, true);
-    assert.equal(payload.code, "next_blocked_by_loop_contract");
-    assert.equal(payload.blockingAction.kind, "current-tree-finalization");
-    assert.equal(payload.loopContract.canRunNextPacket, false);
-    assert.equal(payload.run, null);
-    assert.equal(payload.decision, null);
-    assert.match(payload.commandHint, /finalize-(preview|current-tree)/);
-    assert.doesNotMatch(payload.commandHint, /autoresearch\.mjs"?\s+next\b/);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.run.ok, true);
+    assert.equal(payload.preconditionDecision.capabilities["run-packet"], "allowed");
+    assert.equal(payload.resultingDecision.primaryBlockerCode, "pending-packet");
   });
 });
 
-test("codex goal complete audit blocks current-tree finalization blockers", async () => {
+test("codex goal audit hands back direct work but blocks a finalization completion claim", async () => {
   await withTempDir("codex-goal-current-tree-complete-blocked", async (dir) => {
     await prepareCurrentTreeFinalizationBlocker(dir, runCli);
+
+    const handback = await runCli([
+      "codex-goal-brief",
+      "--cwd",
+      dir,
+      "--codex-goal-status",
+      "active",
+    ]);
+    assert.equal(handback.code, 0, handback.stderr);
+    const handbackPayload = JSON.parse(handback.stdout);
+    const handbackPlan = projectedPlan(handbackPayload);
+    assert.equal((handbackPlan.parentDisposition as UnknownRecord).kind, "hand-back");
+    assert.equal(capabilityStatus(handbackPlan, "parent-final-answer"), "allowed");
 
     const result = await runCli([
       "codex-goal-brief",
@@ -592,51 +576,45 @@ test("codex goal complete audit blocks current-tree finalization blockers", asyn
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     const audit = payload.completionAudit;
+    const completionPlan = projectedPlan(payload);
 
+    assert.equal((completionPlan.parentDisposition as UnknownRecord).kind, "block-final-answer");
+    assert.equal(capabilityStatus(completionPlan, "parent-final-answer"), "blocked");
     assert.equal(audit.status, "blocked");
     assert.equal(audit.canMarkCodexGoalComplete, false);
-    assert.match(
-      audit.localEvidence.blockers.join("\n"),
-      /Do not mark the Codex goal complete while Autoresearch has unresolved quality gaps, review-required evidence, fixed-control violations, or current-tree finalization blockers\./,
-    );
-    assert.match(audit.recommendedCodexAction, /Do not mark complete|Resolve/);
   });
 });
 
 test("stale packet compact state recommends replacement next command", async () => {
   await withTempDir("state-stale-last-run-replacement", async (dir) => {
-    await setupFixture(dir, { name: "stale state" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     const checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "always",
-      "--checks-command",
+    await setupFixture(dir, {
+      name: "stale state",
+      acceptedContract: true,
+      benchmarkCommand: command,
       checksCommand,
-    ]);
+    });
+    const next = await runCli(["next", "--cwd", dir]);
     assert.equal(next.code, 0, next.stderr);
-    const directLog = await runCli([
+    const lastRunPath = String(JSON.parse(next.stdout).lastRunPath);
+    assert.ok(lastRunPath);
+    const capturedPacket = await readFile(lastRunPath, "utf8");
+    const acceptedLog = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "2",
+      "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
-      "Manual run",
+      "Accepted evaluated run",
     ]);
-    assert.equal(directLog.code, 0, directLog.stderr);
+    assert.equal(acceptedLog.code, 0, acceptedLog.stderr);
 
-    const lastRunPath = path.join(dir, "autoresearch.last-run.json");
-    const lastRunPacket = JSON.parse(await readFile(lastRunPath, "utf8"));
-    assert.match(lastRunPacket.history.replayCommand, /METRIC seconds=3/);
-    assert.match(lastRunPacket.history.replayChecksCommand, /process\.exit\(0\)/);
+    const lastRunPacket = JSON.parse(capturedPacket);
+    assert.match(lastRunPacket.history.replayCommand, /autoresearch\.sh/);
+    assert.match(lastRunPacket.history.replayChecksCommand, /autoresearch\.checks\.sh/);
     lastRunPacket.history.command = "<redacted benchmark command>";
     lastRunPacket.run.command = "";
     lastRunPacket.run.checks.command = "";
@@ -645,51 +623,39 @@ test("stale packet compact state recommends replacement next command", async () 
     const fullState = await runCli(["state", "--cwd", dir]);
     assert.equal(fullState.code, 0, fullState.stderr);
     const fullStatePayload = JSON.parse(fullState.stdout);
+    const fullPlan = projectedPlan(fullStatePayload);
 
-    assert.equal(fullStatePayload.resolvedDecision.canonicalNextAction.kind, "stale-packet");
-    assert.match(
-      fullStatePayload.resolvedDecision.canonicalNextAction.command,
-      /(?:^|\s)next(?:\s|$)/,
-    );
-    assert.match(fullStatePayload.resolvedDecision.canonicalNextAction.command, /--command/);
-    assert.match(fullStatePayload.resolvedDecision.canonicalNextAction.command, /--checks-command/);
+    assert.equal((fullPlan.action as UnknownRecord).kind, "replace-packet");
+    assert.equal(fullPlan.primaryBlockerCode, "stale-packet");
+    assert.match(String((fullPlan.action as UnknownRecord).command), /(?:^|\s)next(?:\s|$)/);
+    assert.doesNotMatch(String((fullPlan.action as UnknownRecord).command), /--command/);
+    assert.doesNotMatch(String((fullPlan.action as UnknownRecord).command), /--checks-command/);
 
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
+    const statePlan = projectedPlan(statePayload);
 
-    assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "stale-packet");
+    assert.equal((statePlan.action as UnknownRecord).kind, "replace-packet");
+    assert.equal(statePlan.primaryBlockerCode, "stale-packet");
+    assert.equal(capabilityStatus(statePlan, "run-packet"), "recovery-only");
     assert.match(statePayload.commands.replaceLast, /(?:^|\s)next(?:\s|$)/);
-    assert.match(statePayload.commands.replaceLast, /--command/);
-    assert.match(statePayload.commands.replaceLast, /--checks-command/);
-    assert.equal(
-      statePayload.resolvedDecision.canonicalNextAction.command,
-      statePayload.commands.replaceLast,
-    );
-    assert.equal(
-      fullStatePayload.resolvedDecision.canonicalNextAction.command,
-      statePayload.commands.replaceLast,
-    );
+    assert.doesNotMatch(statePayload.commands.replaceLast, /--command/);
+    assert.doesNotMatch(statePayload.commands.replaceLast, /--checks-command/);
+    assert.equal((statePlan.action as UnknownRecord).command, statePayload.commands.replaceLast);
+    assert.equal((fullPlan.action as UnknownRecord).command, statePayload.commands.replaceLast);
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
+    const recommendPlan = projectedPlan(recommendPayload);
 
-    assert.equal(recommendPayload.resolvedDecision.canonicalNextAction.kind, "stale-packet");
+    assert.equal(recommendPlan.decisionId, statePlan.decisionId);
+    assert.equal((recommendPlan.action as UnknownRecord).kind, "replace-packet");
     assert.equal(recommendPayload.commands.primary, statePayload.commands.replaceLast);
     assert.match(recommendPayload.commands.primary, /(?:^|\s)next(?:\s|$)/);
 
-    const replacement = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "always",
-      "--checks-command",
-      checksCommand,
-    ]);
+    const replacement = await runCli(["next", "--cwd", dir]);
     assert.equal(replacement.code, 0, replacement.stderr);
     const replacementPayload = JSON.parse(replacement.stdout);
     assert.equal(replacementPayload.decision.metric, 3);
@@ -698,7 +664,7 @@ test("stale packet compact state recommends replacement next command", async () 
 
 test("state report returns a compact one-screen terminal report", async () => {
   await withTempDir("state-terminal-report", async (dir) => {
-    await setupFixture(dir, { name: "report loop" });
+    await setupFixture(dir, { name: "report loop", acceptedContract: true });
 
     const report = await runCli(["state", "--cwd", dir, "--report"]);
     assert.equal(report.code, 0, report.stderr);
@@ -726,29 +692,33 @@ test("state report returns a compact one-screen terminal report", async () => {
     const reportWithSource = await runCli(["state", "--cwd", dir, "--compact", "--report"]);
     assert.equal(reportWithSource.code, 0, reportWithSource.stderr);
     const sourcePayload = JSON.parse(reportWithSource.stdout);
+    const sourcePlan = projectedPlan(sourcePayload.compactState);
     assert.equal(sourcePayload.compactState.metric, "seconds");
-    assert.equal(sourcePayload.report.json.blocker.length > 0, true);
+    assert.equal(sourcePlan.primaryBlockerCode, "finalization-blocked");
+    assert.equal(capabilityStatus(sourcePlan, "run-packet"), "allowed");
+    assert.equal(capabilityStatus(sourcePlan, "finalize"), "blocked");
+    assert.equal(sourcePayload.report.json.blocker, "");
+    assert.equal(
+      sourcePayload.report.json.nextCommand,
+      (sourcePlan.action as UnknownRecord).command,
+    );
   });
 });
 
-test("state report uses canonical command for blocked decision capsules", async () => {
+test("legacy decision capsules remain display facts and never become compiler authority", async () => {
   await withTempDir("state-report-decision-capsule-command", async (dir) => {
-    await setupFixture(dir, { name: "report capsule" });
+    await setupFixture(dir, { name: "report capsule", acceptedContract: true });
     await writeDecisionCapsule(dir, "benchmark-contract");
 
     const report = await runCli(["state", "--cwd", dir, "--compact", "--report"]);
     assert.equal(report.code, 0, report.stderr);
     const payload = JSON.parse(report.stdout);
+    const plan = projectedPlan(payload.compactState);
 
-    assert.equal(
-      payload.compactState.resolvedDecision.canonicalNextAction.kind,
-      "decision-capsule",
-    );
-    assert.equal(
-      payload.report.json.nextCommand,
-      payload.compactState.resolvedDecision.canonicalNextAction.command,
-    );
-    assert.doesNotMatch(payload.report.json.nextCommand, /doctor --cwd/);
+    assert.equal((plan.action as UnknownRecord).kind, "run-baseline");
+    assert.notEqual(plan.primaryBlockerCode, "decision-capsule");
+    assert.equal(payload.report.json.nextCommand, (plan.action as UnknownRecord).command);
+    assert.match(payload.report.json.nextCommand, /(?:^|\s)next(?:\s|$)/);
   });
 });
 

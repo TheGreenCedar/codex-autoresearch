@@ -1,13 +1,15 @@
 import { type UnknownRecord, unknownRecordOrNull as recordOrNull } from "../types/json.js";
-import { withCanonicalActionCommand } from "../action-metadata.js";
 import {
   missingBenchmarkCommandMessage,
   packetEnvModeFromArgs,
   resolveBenchmarkCommandSource,
 } from "../benchmark/command-input.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../command-execution-boundary.js";
+import { withCommandDecisionDiagnostics } from "../command-decision-protocol.js";
 import { boolOption, numberOption } from "../cli/args.js";
-import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
+import { loadCoherentSessionSnapshot } from "../coherent-session-snapshot.js";
+import { decisionDiagnostic, type DecisionDiagnostic } from "../decision-compiler.js";
+import { projectLoopContinuation } from "../decision-projection.js";
 import { decisionGuidance } from "../decision-guidance.js";
 import { buildDriftReport, runtimeProvenance } from "../drift-doctor.js";
 import { fixedControlBlockForCommand } from "../fixed-control.js";
@@ -16,14 +18,13 @@ import { latestBenchmarkContractEntry } from "../operator-warnings.js";
 import { benchmarkContractDiagnostics } from "../packet-diagnostics.js";
 import { PLUGIN_VERSION } from "../plugin-version.js";
 import { resolvePackageRoot } from "../runtime-paths.js";
-import { buildDecisionEnvelope, currentState, finiteMetric, listOption } from "../session-core.js";
-import { continuationCommands, loopContinuation } from "./continuation.js";
+import { finiteMetric, listOption } from "../session-core.js";
 import { inspectRuntimeDrift } from "../runtime-drift-doctor.js";
 import { metricParseSource, parseMetricLines, runShell } from "../runner.js";
 import { projectDoctorReadModel } from "../session-read-model.js";
+import { compileSessionDecision, finalizationDecisionDiagnostics } from "../session-decision.js";
 import { redactCommandDisplay, redactEvidenceObject } from "../evidence-redaction.js";
 import { revalidateRecipeCatalogProvenance } from "../recipes.js";
-import { shouldSuppressPreflightGateBlockerForCapsule } from "../loop-governance.js";
 import { buildRunProgress } from "./run.js";
 import { publicState } from "./state.js";
 
@@ -31,17 +32,32 @@ type CommandRecord = UnknownRecord;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 
 export async function doctorSession(args: CommandRecord): Promise<CommandRecord> {
-  const { sessionCwd, workDir, config } = resolveAuthorizedWorkDir(
-    String(args.working_dir || args.cwd || ""),
-  );
+  const requestedCwd = String(args.working_dir || args.cwd || "");
+  const loaded = await loadCoherentSessionSnapshot({
+    requestedCwd,
+    allowOutsideWorkdir: boolOption(args.allowOutsideWorkdir ?? args.allow_outside_workdir, false),
+  });
+  if (!loaded.ok) {
+    return {
+      ok: false,
+      code: loaded.diagnostic.code,
+      diagnostic: loaded.diagnostic,
+      attempts: loaded.attempts,
+    };
+  }
+  const snapshot = loaded.snapshot;
+  const { sessionCwd, workDir, config } = snapshot;
   const jsonFull = boolOption(args.jsonFull ?? args.json_full ?? args.full, false);
-  const state: CommandRecord = await publicState({ ...args, compact: false, jsonFull: true });
+  const state: CommandRecord = await publicState({
+    ...args,
+    compact: false,
+    jsonFull: true,
+    coherentSnapshot: snapshot,
+  });
   const stateConfig = recordOrEmpty(state.config);
   const stateMemory = recordOrEmpty(state.memory);
   const scaffoldHealth = recordOrEmpty(state.scaffoldHealth);
   const researchIntegrity = recordOrEmpty(state.researchIntegrity);
-  const resolvedDecision = recordOrEmpty(state.resolvedDecision);
-  const stateLimit = recordOrEmpty(state.limit);
   const sourceCleanliness = recordOrEmpty(state.sourceCleanliness);
   const primaryMetricName = String(
     args.metric_name || args.metricName || config.metricName || stateConfig.metricName || "metric",
@@ -131,38 +147,9 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
     pushUniqueMessage(issues, runtimeAuthority.blocker);
   }
   for (const blocker of guidanceBlockers(guidance)) {
-    if (!hasSharperDoctorBlocker(state, blocker)) {
-      pushUniqueMessage(issues, blocker);
-    }
+    pushUniqueMessage(issues, blocker);
   }
   for (const warning of guidanceWarnings(guidance)) pushUniqueMessage(warnings, warning);
-  const sessionState =
-    state.code === "ledger_jsonl_invalid"
-      ? { current: [], allRecords: [], ...state }
-      : currentState(workDir);
-  const loopAuthority = doctorLoopContractAuthority(
-    withCanonicalActionCommand(
-      buildDecisionEnvelope({
-        state: {
-          ...sessionState,
-          gateQuality: guidance.gateQuality,
-          preflight: publicPreflight,
-          portfolioRecommendation: null,
-          runtimeDriftSummary,
-          runtimeAuthority: guidance.runtimeAuthority,
-          scaffoldHealth,
-        },
-        nextAction:
-          String(resolvedDecision.nextAction || "").trim() ||
-          String(recordOrEmpty(resolvedDecision.canonicalNextAction).reason || "").trim() ||
-          "Run the next experiment, then log keep or discard with ASI.",
-        finalization: resolvedDecision.finalizationPressure || null,
-      }),
-      continuationCommands(workDir),
-    ),
-  );
-  for (const blocker of loopAuthority.blockers) pushUniqueMessage(issues, blocker);
-
   const benchmark: CommandRecord = {
     checked: false,
     command: String(args.command || ""),
@@ -252,31 +239,6 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
     }
   }
 
-  let nextAction = "Run the next experiment, then log keep or discard with ASI.";
-  if (runtimeAuthority?.blocking === true) {
-    nextAction =
-      String(runtimeAuthority.blocker || "").trim() ||
-      "Inspect or refresh the installed plugin runtime before claiming installed behavior.";
-  } else if (recordOrEmpty(loopAuthority.canonicalNextAction).safeAction === "ledger-doctor") {
-    nextAction = "Run ledger-doctor before another packet.";
-  } else if (loopAuthority.nextAction) {
-    nextAction = loopAuthority.nextAction;
-  } else if (issues.some((issue) => /contract changed/i.test(issue))) {
-    nextAction =
-      "Start a new segment or explicitly invalidate the old evidence before running another packet.";
-  } else if (issues.some((issue) => /primary metric|benchmark/i.test(issue))) {
-    nextAction =
-      "Fix the benchmark command so it emits the configured primary metric before continuing.";
-  } else if (issues.some((issue) => /fixed_control_rerun_blocked/i.test(issue))) {
-    nextAction = "Reuse the fixed control artifact instead of running the benchmark check.";
-  } else if (state.runs === 0) {
-    nextAction = "Run and log a baseline before trying optimizations.";
-  } else if (stateLimit.limitReached) {
-    nextAction = "Iteration limit reached; export the dashboard or start a new segment.";
-  } else if (warnings.some((warning) => /dirty/.test(warning))) {
-    nextAction = "Review the dirty Git state before logging a kept result.";
-  }
-
   const commandExecutionBoundary = benchmarkCommandHint
     ? {
         mode: COMMAND_EXECUTION_BOUNDARY.mode,
@@ -289,10 +251,26 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
   const contractDiagnostics = benchmarkContractDiagnostics({
     state,
   });
-  const continuationState = sessionState;
   const benchmarkContractChanged = warningDetails.some(
     (detail) => detail.code === "benchmark_contract_changed",
   );
+  const commandDiagnostics = doctorDecisionDiagnostics({
+    benchmark,
+    issues,
+    runtimeAuthority,
+    scaffoldHealth,
+    sourceCleanliness,
+    warningDetails,
+    suppressEvaluatorDrift:
+      typeof args.acceptedContractDigest === "string" &&
+      args.acceptedContractDigest === snapshot.semanticFacts.contractDigest,
+  });
+  const finalizationFacts = { finalization: recordOrNull(state.finalizationPressure) };
+  const decisionPlan = compileSessionDecision(snapshot, {
+    ...finalizationFacts,
+    diagnostics: commandDiagnostics,
+  });
+  const nextAction = decisionPlan.action.reason;
   const publicBenchmark = {
     ...benchmark,
     command: redactCommandDisplay(benchmark.command),
@@ -322,9 +300,7 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
     gateQuality: guidance.gateQuality,
     commandAuthority: publicCommandAuthority,
     preflight: publicPreflight,
-    decisionEnvelope: loopAuthority.decisionEnvelope,
-    loopContract: loopAuthority.loopContract,
-    canonicalNextAction: loopAuthority.canonicalNextAction,
+    decisionPlan,
     commandExecutionBoundary,
     runtimeProvenance: runtimeProvenance(drift),
     scaffoldHealth: state.scaffoldHealth,
@@ -334,10 +310,13 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
     warnings,
     warningDetails,
     nextAction,
-    continuation: loopContinuation(workDir, continuationState, config, "doctor"),
+    continuation: projectLoopContinuation(decisionPlan),
   };
   if (boolOption(args.explain, false)) result.explanation = doctorExplanation(result);
-  return projectDoctorReadModel(result, { full: jsonFull });
+  return withCommandDecisionDiagnostics(projectDoctorReadModel(result, { full: jsonFull }), [
+    ...finalizationDecisionDiagnostics(finalizationFacts),
+    ...commandDiagnostics,
+  ]);
 }
 
 async function catalogTrustCheck(config: CommandRecord, sessionCwd: string) {
@@ -405,15 +384,6 @@ function uniqueStrings(items: unknown[]): string[] {
   return [...new Set(items.map((item) => String(item || "").trim()).filter(Boolean))];
 }
 
-function actionMessage(value: unknown): string {
-  if (typeof value === "string") return value.trim();
-  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
-  const record = value as CommandRecord;
-  return String(
-    record.reason || record.message || record.nextActionHint || record.title || record.kind || "",
-  ).trim();
-}
-
 function guidanceBlockers(guidance: CommandRecord): string[] {
   const gateQuality = recordOrEmpty(guidance.gateQuality);
   const preflight = recordOrEmpty(guidance.preflight);
@@ -435,46 +405,9 @@ function guidanceWarnings(guidance: CommandRecord): string[] {
   return uniqueStrings([...listOption(gateQuality.warnings), ...listOption(preflight.warnings)]);
 }
 
-function doctorLoopContractAuthority(decisionEnvelope: CommandRecord | null | undefined) {
-  const envelope = decisionEnvelope || {};
-  const loopContract = recordOrNull(envelope.loopContract);
-  const canonicalNextAction = recordOrNull(envelope.canonicalNextAction);
-  const blockers = Array.isArray(loopContract?.blockers)
-    ? loopContract.blockers.map(actionMessage).filter(Boolean)
-    : [];
-  const strongestActionMessage = actionMessage(loopContract?.strongestAction);
-  if (blockers.length === 0 && strongestActionMessage && loopContract?.ok === false) {
-    blockers.push(strongestActionMessage);
-  }
-  return {
-    decisionEnvelope: envelope,
-    loopContract,
-    canonicalNextAction,
-    blockers: uniqueStrings(blockers),
-    nextAction:
-      blockers.length > 0
-        ? actionMessage(canonicalNextAction) || strongestActionMessage || blockers[0]
-        : "",
-  };
-}
-
 function pushUniqueMessage(target: string[], message: unknown) {
   const text = String(message || "").trim();
   if (text && !target.includes(text)) target.push(text);
-}
-
-function hasSharperDoctorBlocker(state: CommandRecord, blocker: unknown = ""): boolean {
-  if (hasScaffoldBlocker(state.scaffoldHealth)) return true;
-  if (
-    blocker &&
-    shouldSuppressPreflightGateBlockerForCapsule(
-      { sessionDecisionCapsule: state.sessionDecisionCapsule },
-      blocker,
-    )
-  ) {
-    return true;
-  }
-  return false;
 }
 
 function hasScaffoldBlocker(scaffoldHealth: unknown): boolean {
@@ -493,4 +426,76 @@ function arrayValue(value: unknown): unknown[] {
 
 function stringArray(value: unknown): string[] {
   return arrayValue(value).map(String);
+}
+
+function doctorDecisionDiagnostics({
+  benchmark,
+  issues,
+  runtimeAuthority,
+  scaffoldHealth,
+  sourceCleanliness,
+  warningDetails,
+  suppressEvaluatorDrift,
+}: {
+  benchmark: CommandRecord;
+  issues: string[];
+  runtimeAuthority: CommandRecord | null;
+  scaffoldHealth: CommandRecord;
+  sourceCleanliness: CommandRecord;
+  warningDetails: CommandRecord[];
+  suppressEvaluatorDrift: boolean;
+}): DecisionDiagnostic[] {
+  const diagnostics: DecisionDiagnostic[] = [];
+  if (runtimeAuthority?.blocking === true) {
+    diagnostics.push(
+      decisionDiagnostic("runtime-integrity", {
+        message: String(runtimeAuthority.blocker || "Runtime authority is not proven."),
+      }),
+    );
+  }
+  if (hasScaffoldBlocker(scaffoldHealth)) {
+    diagnostics.push(
+      decisionDiagnostic("scaffold-invalid", {
+        message: "The session scaffold has a blocking integrity issue.",
+      }),
+    );
+  }
+  if (sourceCleanliness.sourceDirty === true) {
+    diagnostics.push(
+      decisionDiagnostic("dirty-source", {
+        message: "Review the dirty source tree before authorizing packet evidence.",
+      }),
+    );
+  }
+  const drift = warningDetails.find((detail) => {
+    const code = String(detail.code || "");
+    return (
+      code === "benchmark_contract_changed" ||
+      (code.startsWith("protected_benchmark_") && detail.severity === "error")
+    );
+  });
+  if (drift && !suppressEvaluatorDrift) {
+    diagnostics.push(
+      decisionDiagnostic("evaluator-drift", {
+        message: String(drift.message || "The accepted evaluator has drifted."),
+      }),
+    );
+  }
+  if (
+    benchmark.checked === true &&
+    (benchmark.exitCode !== 0 || benchmark.timedOut === true || benchmark.emitsPrimary !== true)
+  ) {
+    diagnostics.push(
+      decisionDiagnostic("packet-diagnostic", {
+        message:
+          String(benchmark.metricError || "") ||
+          issues.find((issue) => /benchmark|metric/i.test(issue)) ||
+          "The doctor benchmark check did not produce accepted evaluator evidence.",
+        semantic: {
+          stage: benchmark.timedOut === true ? "timeout" : "evaluator-check",
+        },
+      }),
+    );
+  }
+  return diagnostics;
 }

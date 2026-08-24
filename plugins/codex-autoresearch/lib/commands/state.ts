@@ -1,7 +1,11 @@
 import { type UnknownRecord, unknownRecordOrNull as recordOrNull } from "../types/json.js";
-import { withCanonicalActionCommand } from "../action-metadata.js";
-import { readActiveProgressSnapshot } from "../active-progress-store.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../command-execution-boundary.js";
+import {
+  loadCoherentSessionSnapshot,
+  type CoherentSessionSnapshot,
+} from "../coherent-session-snapshot.js";
+import { decisionDiagnostic, type DecisionDiagnostic } from "../decision-compiler.js";
+import { projectLoopContinuation, projectResolvedDecision } from "../decision-projection.js";
 import {
   buildCheapFinalizationPressure,
   buildSessionReadModel,
@@ -9,19 +13,12 @@ import {
   projectFullState,
   projectStateReadModel,
   statusCountsFromState,
-  withResolvedSessionDecision,
 } from "../session-read-model.js";
 import { analyzeExperimentEconomics } from "../experiment-economics.js";
-import { analyzeLedgerHealth, readLedgerRecordsTolerant } from "../ledger-health.js";
+import { analyzeLedgerHealth } from "../ledger-health.js";
 import { analyzeWorkflowFriction } from "../workflow-friction.js";
 import { boolOption } from "../cli/args.js";
-import {
-  buildDecisionEnvelope,
-  createSessionReadCache,
-  iterationLimitInfo,
-  loadSessionRecords,
-  loadSessionState,
-} from "../session-core.js";
+import { iterationLimitInfo, stateFromSessionRecords } from "../session-core.js";
 import { isAcceptedCurrentRun } from "../evidence-registry.js";
 import { buildLaneLifecycle } from "../lane-lifecycle.js";
 import { buildScaffoldHealth, buildResearchIntegrity } from "../truth-signals.js";
@@ -32,19 +29,14 @@ import { classifyPacketDiagnostics } from "../packet-diagnostics.js";
 import { currentQualityGapSummary } from "../research-gaps.js";
 import { buildDashboardSettings, dashboardCommands } from "./dashboard.js";
 import { decisionGuidance } from "../decision-guidance.js";
-import { continuationCommands, loopContinuation } from "./continuation.js";
+import { continuationCommands } from "./continuation.js";
 import { fixedControlStateSummary } from "../fixed-control.js";
 import { listBuiltInRecipes } from "../recipes.js";
 import { recommendPortfolioDirection } from "../portfolio-advisor.js";
 import { redactCommandDisplay, redactEvidenceObject } from "../evidence-redaction.js";
 import { verifyDashboardHealthSummary } from "../dashboard-health.js";
-import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
-import type { SessionReadCache } from "../session-records.js";
-import {
-  lastRunPacketFreshness,
-  readLastRunPacket,
-  replacementNextCommandForLastRun,
-} from "../last-run-store.js";
+import { replacementNextCommandForLastRun } from "../last-run-store.js";
+import { compileSessionDecision } from "../session-decision.js";
 import { operatorWarningsForWorkDir } from "../operator-warnings.js";
 import { buildParallelOrchestrationContext } from "../parallel-orchestration.js";
 import { PLUGIN_VERSION } from "../plugin-version.js";
@@ -59,20 +51,6 @@ export type CompactStateResponse = UnknownRecord;
 
 export function buildCompactStateResponse(input: CompactStateBuilderInput): CompactStateResponse {
   return projectStateReadModel(input, "compact");
-}
-
-function decisionSetupState(state: CommandRecord): CommandRecord | null {
-  if (
-    (Array.isArray(state.current) && state.current.length > 0) ||
-    String(recordOrEmpty(state.config).name || "").trim()
-  ) {
-    return null;
-  }
-  return {
-    stage: "needs-setup",
-    blockers: [],
-    nextAction: "Create or complete the session setup before running a baseline.",
-  };
 }
 
 type CommandRecord = UnknownRecord;
@@ -100,27 +78,34 @@ async function discoverLastRunPartialResultsLazy(
 }
 
 export async function publicState(args: CommandRecord): Promise<CommandRecord> {
-  const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
+  const requestedCwd = String(args.working_dir || args.cwd || "");
   const compact = boolOption(args.compact, false);
   const report = boolOption(args.report, false);
   const jsonFull = boolOption(args.jsonFull ?? args.json_full ?? args.full, false);
   const bounded = boolOption(args.bounded, false);
   const codexGoalObjective = args.codexGoalObjective || args.codex_goal_objective;
-  const readCache = (args.readCache || createSessionReadCache()) as SessionReadCache;
-  if (compact || report) {
-    let compactState: CommandRecord;
-    try {
-      compactState = await publicCompactState({ workDir, config, codexGoalObjective, readCache });
-    } catch (error) {
-      if (!isStrictLedgerParseError(error)) throw error;
-      compactState = repairFirstStateForInvalidLedger({
-        workDir,
-        config,
-        codexGoalObjective,
-        error,
-        compact: true,
-      });
+  let snapshot = coherentSnapshotOrNull(args.coherentSnapshot);
+  if (!snapshot) {
+    const loaded = await loadCoherentSessionSnapshot({
+      requestedCwd,
+      allowOutsideWorkdir: boolOption(
+        args.allowOutsideWorkdir ?? args.allow_outside_workdir,
+        false,
+      ),
+    });
+    if (!loaded.ok) {
+      return {
+        ok: false,
+        code: loaded.diagnostic.code,
+        diagnostic: loaded.diagnostic,
+        attempts: loaded.attempts,
+      };
     }
+    snapshot = loaded.snapshot;
+  }
+  const { workDir, config } = snapshot;
+  if (compact || report) {
+    const compactState = await publicCompactState({ snapshot, codexGoalObjective });
     if (!report) return compactState;
     const response: CommandRecord = {
       ok: compactState.ok !== false,
@@ -131,32 +116,16 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
     return response;
   }
 
-  let state: ReturnType<typeof loadSessionState>;
-  let records: ReturnType<typeof loadSessionRecords>;
-  try {
-    state = loadSessionState(workDir, readCache);
-    records = loadSessionRecords(workDir, readCache);
-  } catch (error) {
-    if (!isStrictLedgerParseError(error)) throw error;
-    const repairState = repairFirstStateForInvalidLedger({
-      workDir,
-      config,
-      codexGoalObjective,
-      error,
-      compact: false,
-    });
-    return jsonFull || !bounded
-      ? projectFullState(repairState)
-      : projectStateReadModel(repairState, "default");
-  }
-  const ledgerHealth = analyzeLedgerHealth(records);
+  const records = snapshot.records;
+  const state = stateFromSessionRecords(workDir, records);
+  const ledgerHealth = analyzeLedgerHealth(records, {
+    parseErrors: snapshot.sourceDiagnostics.ledgerIssues,
+  });
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
   const researchIntegrity = buildResearchIntegrity({ state, config });
   const warningDetails = await operatorWarningsForWorkDir(workDir, state);
-  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
-  const activeProgress = await readActiveProgressSnapshot(workDir, config);
-  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
-  const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
+  const lastRun = snapshot.lastRunPacket;
+  const activeProgress = snapshot.processProgress;
   const qualityGap = await currentQualityGapSummary(workDir);
   const finalization = await finalizationPressureForWorkDir({
     workDir,
@@ -239,11 +208,7 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
   const experimentEconomics = analyzeExperimentEconomics({
     state: stateWithQualityGap,
     lastRun,
-    progress:
-      activeProgress ||
-      (await readActiveProgressSnapshot(workDir, config)) ||
-      lastRunEvidence.progressSnapshot ||
-      null,
+    progress: activeProgress || lastRunEvidence.progressSnapshot || null,
   });
   const readModel = buildSessionReadModel({
     workDir,
@@ -268,70 +233,34 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
   });
   const controlPlane = readModel.controlPlane;
   const statusCounts = readModel.statusCounts;
-  const continuation = loopContinuation(workDir, state, config, "state");
-  const stateCommands = {
-    ...continuation.commands,
-    ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
-  };
-  const decisionInput = {
-    state: {
-      ...stateWithQualityGap,
-      ...controlPlane,
-      limit: iterationLimitInfo(state, config),
-    },
-    nextAction: continuation.nextAction,
-    lastRunFreshness,
-    warningDetails,
-    scaffoldHealth,
-    researchIntegrity,
-    qualityGap,
-    finalization,
-    experimentEconomics,
-    salvageCandidates: partialResults.candidates,
-    workflowFriction,
+  const portfolioRecommendation = recommendPortfolioDirection({
+    runtimeDrift: guidance.runtimeDriftSummary,
+    gateQuality: guidance.gateQuality,
+    preflight: publicPreflight,
+    laneLifecycle,
+    laneResults: laneLifecycle.latestResults,
+    packetDiagnostics,
     experimentMemory: memory,
-    setupState: decisionSetupState(state),
-    watchdog: watchdogSummary,
-    nextCommand: stateCommands.next,
-  };
-  const preliminaryDecisionEnvelope = buildDecisionEnvelope(decisionInput);
-  const portfolioRecommendation =
-    preliminaryDecisionEnvelope.loopContract?.canRunNextPacket === false
-      ? null
-      : recommendPortfolioDirection({
-          runtimeDrift: guidance.runtimeDriftSummary,
-          gateQuality: guidance.gateQuality,
-          preflight: publicPreflight,
-          laneLifecycle,
-          laneResults: laneLifecycle.latestResults,
-          packetDiagnostics,
-          experimentMemory: memory,
-          best: state.best,
-          current: state.current,
-        });
-  const decisionEnvelope = withCanonicalActionCommand(
-    portfolioRecommendation
-      ? buildDecisionEnvelope({
-          ...decisionInput,
-          state: { ...decisionInput.state, portfolioRecommendation },
-        })
-      : preliminaryDecisionEnvelope,
-    stateCommands,
-  );
-  const loopContract = recordOrEmpty(decisionEnvelope.loopContract);
-  const resolvedReadModel = withResolvedSessionDecision(readModel, {
-    state: {
-      decisionEnvelope,
-      blockers: Array.isArray(loopContract.blockers) ? loopContract.blockers : [],
-    },
-    decisionEnvelope,
-    commands: stateCommands,
-    runtimeProvenance: currentRuntimeProvenance,
-    finalization,
+    best: state.best,
+    current: state.current,
   });
+  const decisionPlan = compileSessionDecision(snapshot, {
+    finalization,
+    diagnostics: decisionDiagnosticsForStateFacts({
+      guidance,
+      packetDiagnostics,
+      scaffoldHealth,
+      sourceCleanliness,
+      warningDetails,
+    }),
+  });
+  const continuation = projectLoopContinuation(decisionPlan);
+  const resolvedDecision = projectResolvedDecision(decisionPlan);
   const fullState = {
-    ok: true,
+    ok: ledgerHealth.ok,
+    ...(ledgerHealth.ok ? {} : { code: "ledger_jsonl_invalid" }),
     workDir,
+    parseErrors: ledgerHealth.parseErrors,
     config: publicSessionConfig(state.config),
     segment: state.segment,
     runs: state.current.length,
@@ -370,8 +299,14 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
       dashboardRefreshSeconds: config.dashboardRefreshSeconds || 5,
       commitPaths: config.commitPaths || [],
     },
-    commands: dashboardCommands(workDir),
-    warnings: warningDetails.map((warning) => warning.message),
+    commands: {
+      ...dashboardCommands(workDir),
+      primary: decisionPlan.action.command,
+      ...(decisionPlan.action.kind === "replace-packet"
+        ? { replaceLast: decisionPlan.action.command }
+        : {}),
+    },
+    warnings: [...ledgerHealth.warnings, ...warningDetails.map((warning) => warning.message)],
     warningDetails,
     fanoutPlan,
     fanoutProvenance,
@@ -385,7 +320,6 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
     ),
     portfolioRecommendation,
     finalizationPressure: finalization,
-    qualityRound: decisionEnvelope.qualityRound || null,
     ...controlPlane,
     watchdogSummary,
     memory,
@@ -393,9 +327,8 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
     partialResults,
     workflowFriction,
     continuation,
-    resolvedDecision: resolvedReadModel.resolvedDecision,
-    resumeAudit: decisionEnvelope,
-    decisionEnvelope,
+    decisionPlan,
+    resolvedDecision,
   };
   if (compact) return compactPublicState(fullState);
   return jsonFull || !bounded
@@ -403,106 +336,21 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
     : projectStateReadModel(fullState, "default");
 }
 
-function isStrictLedgerParseError(error: unknown): boolean {
-  return /^Corrupt autoresearch\.jsonl at line \d+\b/i.test(errorMessage(error));
-}
-
-function repairFirstStateForInvalidLedger({
-  workDir,
-  config,
-  codexGoalObjective,
-  error,
-  compact,
-}: {
-  workDir: string;
-  config: CommandRecord;
-  codexGoalObjective?: unknown;
-  error: unknown;
-  compact: boolean;
-}): CommandRecord {
-  const ledger = readLedgerRecordsTolerant(workDir);
-  const rawLedgerHealth = analyzeLedgerHealth(ledger.records, {
-    parseErrors: ledger.parseErrors,
-  });
-  const commands = continuationCommands(workDir);
-  const ledgerHealth = {
-    ...rawLedgerHealth,
-    command: commands.ledgerDoctor,
-  };
-  const runtimeFacts = runtimeProvenance();
-  const decisionEnvelope = withCanonicalActionCommand(
-    buildDecisionEnvelope({
-      state: {
-        config,
-        current: [],
-        results: [],
-        ledgerHealth,
-        runtimeProvenance: runtimeFacts,
-      },
-      nextAction: "Run ledger-doctor before another Autoresearch packet.",
-    }),
-    commands,
-  );
-  const response = {
-    ok: false,
-    code: "ledger_jsonl_invalid",
-    workDir,
-    config: publicSessionConfig(config),
-    segment: 0,
-    runs: ledger.records.length,
-    totalRuns: ledger.records.length,
-    kept: 0,
-    discarded: 0,
-    measured: 0,
-    crashed: 0,
-    checksFailed: 0,
-    baseline: null,
-    best: null,
-    historicalBest: null,
-    development: null,
-    promotion: null,
-    confidence: null,
-    ledgerPath: ledger.ledgerPath,
-    ledgerHealth,
-    parseErrors: ledgerHealth.parseErrors,
-    warnings: ledgerHealth.warnings,
-    error: errorMessage(error),
-    commands,
-    continuation: {
-      shouldContinue: false,
-      nextAction: "Run ledger-doctor before another packet.",
-      commands,
-    },
-    nextAction: "Run ledger-doctor before another packet.",
-    blockers: ledgerHealth.warnings,
-    runtimeProvenance: runtimeFacts,
-    codexGoalObjective,
-    resumeAudit: decisionEnvelope,
-    decisionEnvelope,
-    canonicalNextAction: decisionEnvelope.canonicalNextAction,
-    loopContract: decisionEnvelope.loopContract,
-  };
-  return compact ? compactPublicState(response) : projectFullState(response);
-}
-
 async function publicCompactState({
-  workDir,
-  config,
+  snapshot,
   codexGoalObjective,
-  readCache,
 }: {
-  workDir: string;
-  config: CommandRecord;
+  snapshot: CoherentSessionSnapshot;
   codexGoalObjective?: unknown;
-  readCache?: unknown;
 }): Promise<CommandRecord> {
-  const effectiveReadCache = (readCache || createSessionReadCache()) as SessionReadCache;
-  const state = loadSessionState(workDir, effectiveReadCache);
-  const records = loadSessionRecords(workDir, effectiveReadCache);
-  const ledgerHealth = analyzeLedgerHealth(records);
-  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
-  const activeProgress = await readActiveProgressSnapshot(workDir, config);
-  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun) : null;
+  const { workDir, config } = snapshot;
+  const records = snapshot.records;
+  const state = stateFromSessionRecords(workDir, records);
+  const ledgerHealth = analyzeLedgerHealth(records, {
+    parseErrors: snapshot.sourceDiagnostics.ledgerIssues,
+  });
+  const lastRun = snapshot.lastRunPacket;
+  const activeProgress = snapshot.processProgress;
   const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
   const qualityGap = await currentQualityGapSummary(workDir);
   const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
@@ -585,9 +433,9 @@ async function publicCompactState({
     progress: activeProgress || lastRunEvidence.progressSnapshot || null,
   });
   const statusCounts = statusCountsFromState(state);
-  const continuation = loopContinuation(workDir, state, config, "state");
+  const continuationCommandSet = continuationCommands(workDir);
   const compactCommands = {
-    ...continuation.commands,
+    ...continuationCommandSet,
     ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
   };
   const finalization = await finalizationPressureForWorkDir({
@@ -618,54 +466,34 @@ async function publicCompactState({
     preflight: publicPreflight,
   });
   const controlPlane = readModel.controlPlane;
-  const decisionInput = {
-    state: {
-      ...stateWithQualityGap,
-      ...controlPlane,
-      limit: iterationLimitInfo(state, config),
-    },
-    nextAction: continuation.nextAction,
-    lastRunFreshness,
-    warningDetails,
-    scaffoldHealth,
-    researchIntegrity,
-    qualityGap,
-    finalization,
-    experimentEconomics,
-    salvageCandidates: partialResults.candidates,
-    workflowFriction,
+  const portfolioRecommendation = recommendPortfolioDirection({
+    runtimeDrift: guidance.runtimeDriftSummary,
+    gateQuality: guidance.gateQuality,
+    preflight: publicPreflight,
+    laneLifecycle,
+    laneResults: laneLifecycle.latestResults,
+    packetDiagnostics,
     experimentMemory: memory,
-    setupState: decisionSetupState(state),
-    watchdog: watchdogSummary,
-    nextCommand: compactCommands.next,
-  };
-  const preliminaryDecisionEnvelope = buildDecisionEnvelope(decisionInput);
-  const portfolioRecommendation =
-    preliminaryDecisionEnvelope.loopContract?.canRunNextPacket === false
-      ? null
-      : recommendPortfolioDirection({
-          runtimeDrift: guidance.runtimeDriftSummary,
-          gateQuality: guidance.gateQuality,
-          preflight: publicPreflight,
-          laneLifecycle,
-          laneResults: laneLifecycle.latestResults,
-          packetDiagnostics,
-          experimentMemory: memory,
-          best: state.best,
-          current: state.current,
-        });
-  const decisionEnvelope = withCanonicalActionCommand(
-    portfolioRecommendation
-      ? buildDecisionEnvelope({
-          ...decisionInput,
-          state: { ...decisionInput.state, portfolioRecommendation },
-        })
-      : preliminaryDecisionEnvelope,
-    compactCommands,
-  );
+    best: state.best,
+    current: state.current,
+  });
+  const decisionPlan = compileSessionDecision(snapshot, {
+    finalization,
+    diagnostics: decisionDiagnosticsForStateFacts({
+      guidance,
+      packetDiagnostics,
+      scaffoldHealth,
+      sourceCleanliness,
+      warningDetails,
+    }),
+  });
+  const continuation = projectLoopContinuation(decisionPlan);
+  const resolvedDecision = projectResolvedDecision(decisionPlan);
   return compactPublicState({
-    ok: true,
+    ok: ledgerHealth.ok,
+    ...(ledgerHealth.ok ? {} : { code: "ledger_jsonl_invalid" }),
     workDir,
+    parseErrors: ledgerHealth.parseErrors,
     config: publicSessionConfig(state.config),
     segment: state.segment,
     runs: state.current.length,
@@ -703,8 +531,14 @@ async function publicCompactState({
       dashboardRefreshSeconds: config.dashboardRefreshSeconds || 5,
       commitPaths: config.commitPaths || [],
     },
-    commands: compactCommands,
-    warnings: warningDetails.map((warning) => warning.message),
+    commands: {
+      ...compactCommands,
+      primary: decisionPlan.action.command,
+      ...(decisionPlan.action.kind === "replace-packet"
+        ? { replaceLast: decisionPlan.action.command }
+        : {}),
+    },
+    warnings: [...ledgerHealth.warnings, ...warningDetails.map((warning) => warning.message)],
     warningDetails,
     qualityGap,
     memory,
@@ -725,9 +559,9 @@ async function publicCompactState({
     workflowFriction,
     ...controlPlane,
     codexGoalObjective,
-    resumeAudit: decisionEnvelope,
-    decisionEnvelope,
     continuation,
+    decisionPlan,
+    resolvedDecision,
   });
 }
 
@@ -831,6 +665,79 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function decisionDiagnosticsForStateFacts({
+  guidance,
+  packetDiagnostics,
+  scaffoldHealth,
+  sourceCleanliness,
+  warningDetails,
+}: {
+  guidance: CommandRecord;
+  packetDiagnostics: unknown;
+  scaffoldHealth: CommandRecord;
+  sourceCleanliness: unknown;
+  warningDetails: CommandRecord[];
+}): DecisionDiagnostic[] {
+  const diagnostics: DecisionDiagnostic[] = [];
+  const packetFacts = recordOrEmpty(packetDiagnostics);
+  const cleanlinessFacts = recordOrEmpty(sourceCleanliness);
+  const runtimeAuthority = recordOrEmpty(guidance.runtimeAuthority);
+  if (runtimeAuthority.blocking === true) {
+    diagnostics.push(
+      decisionDiagnostic("runtime-integrity", {
+        message: String(runtimeAuthority.blocker || "Runtime authority is not proven."),
+      }),
+    );
+  }
+  if (
+    (Array.isArray(scaffoldHealth.checks) ? scaffoldHealth.checks : []).some(
+      (value) => recordOrEmpty(value).severity === "blocker",
+    )
+  ) {
+    diagnostics.push(
+      decisionDiagnostic("scaffold-invalid", {
+        message: "The session scaffold has a blocking integrity issue.",
+      }),
+    );
+  }
+  if (cleanlinessFacts.sourceDirty === true) {
+    diagnostics.push(
+      decisionDiagnostic("dirty-source", {
+        message: "Review the dirty source tree before authorizing packet evidence.",
+      }),
+    );
+  }
+  const evaluatorDrift = warningDetails.find((warning) =>
+    ["benchmark_contract_changed", "protected_benchmark_changed"].includes(
+      String(warning.code || ""),
+    ),
+  );
+  if (evaluatorDrift) {
+    diagnostics.push(
+      decisionDiagnostic("evaluator-drift", {
+        message: String(evaluatorDrift.message || "The accepted evaluator has drifted."),
+      }),
+    );
+  }
+  if (packetFacts.unresolved === true && packetFacts.primaryStage) {
+    diagnostics.push(
+      decisionDiagnostic("packet-diagnostic", {
+        message: String(packetFacts.recommendation || "Resolve the latest packet diagnostic."),
+        command: String(packetFacts.command || ""),
+        semantic: { primaryStage: String(packetFacts.primaryStage) },
+      }),
+    );
+  }
+  return diagnostics;
+}
+
 function recordOrEmpty(value: unknown): UnknownRecord {
   return recordOrNull(value) || {};
+}
+
+function coherentSnapshotOrNull(value: unknown): CoherentSessionSnapshot | null {
+  const snapshot = recordOrNull(value);
+  return snapshot?.kind === "coherent-session-snapshot" && snapshot.schemaVersion === 1
+    ? (snapshot as unknown as CoherentSessionSnapshot)
+    : null;
 }

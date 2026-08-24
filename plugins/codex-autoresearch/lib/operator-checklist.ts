@@ -1,6 +1,3 @@
-import { actionMetadataForKind } from "./action-metadata.js";
-import { firstSafeCommand } from "./safe-command-resolver.js";
-
 type LooseObject = Record<string, unknown>;
 
 export interface OperatorChecklist {
@@ -12,140 +9,43 @@ export interface OperatorChecklist {
 }
 
 export function buildOperatorChecklist(
-  canonicalAction: LooseObject | null | undefined,
+  decisionPlan: LooseObject | null | undefined,
   context: LooseObject = {},
 ): OperatorChecklist {
-  const action = objectValue(canonicalAction) || {};
-  const rawCommand =
-    stringValue(action.command) ||
-    stringValue(context.primaryCommand) ||
-    inspectCommandForAction(action, context);
-  const command = boundedChecklistCommand(rawCommand, action, context);
+  const plan = objectValue(decisionPlan) || {};
+  const action = objectValue(plan.action) || {};
+  const capabilities = objectValue(plan.capabilities);
+  const requiredEvidence = objectValue(plan.requiredEvidence) || {};
+  const diagnosticCodes = stringArray(requiredEvidence.diagnosticCodes);
+  const acceptedCheckIdentities = stringArray(requiredEvidence.acceptedCheckIdentities);
+  const hasCanonicalPacketCapability =
+    stringValue(objectValue(capabilities?.["run-packet"])?.status) ||
+    stringValue(capabilities?.["run-packet"]);
+
+  if (!hasCanonicalPacketCapability) {
+    return {
+      command: "",
+      safetyReason: "Canonical capability decision unavailable; refresh state before acting.",
+      blocker: "decision-unavailable",
+      evidenceRole: "decision-precondition",
+      source: "decision-plan",
+    };
+  }
+
   return {
-    command,
+    command: stringValue(action.command) || stringValue(context.primaryCommand),
     safetyReason:
-      stringValue(action.reason) || "Decision envelope is the authoritative next-action source.",
-    blocker: blockerForAction(action, context),
-    evidenceRole: evidenceRoleForAction(stringValue(action.kind)),
-    source: stringValue(context.source) || "canonical-next-action",
+      stringValue(action.reason) ||
+      stringValue(context.actionReason) ||
+      "Projected from the canonical session decision.",
+    blocker: stringValue(plan.primaryBlockerCode),
+    evidenceRole: acceptedCheckIdentities.length
+      ? "accepted-checks"
+      : diagnosticCodes.length
+        ? "decision-diagnostics"
+        : "decision-precondition",
+    source: stringValue(context.source) || diagnosticCodes.join(",") || "decision-plan",
   };
-}
-
-function boundedChecklistCommand(
-  command: string,
-  action: LooseObject,
-  context: LooseObject,
-): string {
-  if (!/\bdoctor\b/i.test(command) || !/--explain\b/i.test(command)) return command;
-  return boundedInspectCommandForAction(action, context) || command;
-}
-
-function blockerForAction(action: LooseObject, context: LooseObject): string {
-  const blockers = arrayValue(objectValue(context.loopContract)?.blockers);
-  const actionKind = stringValue(action.kind);
-  const matching = blockers.find((item) => stringValue(objectValue(item)?.kind) === actionKind);
-  const first = objectValue(matching || blockers[0]);
-  if (first) return stringValue(first.reason);
-  if (["next-packet", "finalization"].includes(actionKind)) return "";
-  return actionKind ? stringValue(action.reason) : "";
-}
-
-function evidenceRoleForAction(kind: string): string {
-  switch (kind) {
-    case "log-decision":
-      return "fresh-packet";
-    case "finalization":
-      return "accepted-current-keeps";
-    case "context-distillation":
-      return "context-capsule";
-    case "lane-cleanup":
-      return "lane-lifecycle";
-    case "runtime-provenance":
-      return "runtime-truth";
-    case "packet-diagnostic":
-      return "diagnostic-measure";
-    case "gate-quality":
-    case "preflight":
-      return "loop-contract";
-    case "portfolio-trust-blocker":
-      return "portfolio-trust";
-    case "metric-saturation":
-      return "promotion-readiness";
-    case "current-tree-finalization":
-      return "current-tree-finalization";
-    case "next-packet":
-      return "new-measurement";
-    default:
-      return "safety-repair";
-  }
-}
-
-function inspectCommandForAction(action: LooseObject, context: LooseObject): string {
-  return firstSafeCommand(inspectionCommandCandidatesForAction(action, context), "operational");
-}
-
-function boundedInspectCommandForAction(action: LooseObject, context: LooseObject): string {
-  return firstSafeCommand(
-    boundedInspectionCommandCandidatesForAction(action, context),
-    "operational",
-  );
-}
-
-function inspectionCommandCandidatesForAction(action: LooseObject, context: LooseObject): string[] {
-  const workDir = stringValue(context.workDir || context.cwd);
-  if (!workDir) return [];
-  const script = scriptCommand(context);
-  const cwd = quoteCommandArg(workDir);
-  switch (stringValue(action.kind)) {
-    case "context-distillation":
-      return [`${script} session-forensics --cwd ${cwd} --dry-run`];
-    case "packet-diagnostic":
-      return [`${script} partial-results --cwd ${cwd} --from-last`];
-    case "gate-quality":
-    case "preflight":
-    case "runtime-provenance":
-      return [`${script} doctor --cwd ${cwd} --check-benchmark --explain`];
-    case "portfolio-trust-blocker":
-    case "metric-saturation":
-      return [`${script} state --cwd ${cwd} --compact --report`];
-    case "current-tree-finalization":
-      return [`${script} finalize-preview --cwd ${cwd}`];
-    case "finalization":
-      return [`${script} finalize-preview --cwd ${cwd} --dry-run`];
-    case "lane-cleanup":
-      return [`${script} state --cwd ${cwd} --compact`];
-    default:
-      return actionMetadataForKind(action.kind)?.packetBrake === false
-        ? []
-        : [`${script} state --cwd ${cwd} --compact`];
-  }
-}
-
-function boundedInspectionCommandCandidatesForAction(
-  action: LooseObject,
-  context: LooseObject,
-): string[] {
-  const workDir = stringValue(context.workDir || context.cwd);
-  if (!workDir) return [];
-  const script = scriptCommand(context);
-  const cwd = quoteCommandArg(workDir);
-  switch (stringValue(action.kind)) {
-    case "preflight":
-    case "setup":
-    case "benchmark-command":
-      return [`${script} setup-plan --cwd ${cwd}`];
-    case "benchmark-mismatch":
-    case "gate-quality":
-      return [`${script} benchmark-lint --cwd ${cwd}`];
-    default:
-      return [`${script} state --cwd ${cwd} --compact`];
-  }
-}
-
-function scriptCommand(context: LooseObject): string {
-  const pluginRoot = stringValue(context.pluginRoot);
-  if (!pluginRoot) return "node scripts/autoresearch.mjs";
-  return `node ${quoteCommandArg(`${pluginRoot.replace(/[\\/]$/, "")}/scripts/autoresearch.mjs`)}`;
 }
 
 function objectValue(value: unknown): LooseObject | null {
@@ -154,14 +54,10 @@ function objectValue(value: unknown): LooseObject | null {
     : null;
 }
 
-function arrayValue(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => stringValue(item)).filter(Boolean) : [];
 }
 
 function stringValue(value: unknown): string {
   return value == null ? "" : String(value);
-}
-
-function quoteCommandArg(value: unknown): string {
-  return `"${String(value).replace(/[\\"]/g, "\\$&")}"`;
 }

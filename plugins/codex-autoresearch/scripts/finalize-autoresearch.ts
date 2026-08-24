@@ -22,6 +22,12 @@ import {
   type FinalizationEvidenceFingerprint,
 } from "../lib/finalization-plan.js";
 import { buildFinalizationProductClaimCoverageFromLedger } from "../lib/product-claim-coverage.js";
+import { runCommandDecisionProtocol } from "../lib/command-decision-protocol.js";
+import { resolveWorkDir } from "../lib/session-core.js";
+import {
+  sessionMutationLockLocation,
+  withSessionMutationLock,
+} from "../lib/session-mutation-lock.js";
 import {
   CLEANUP_SESSION_PATHS,
   REPORT_DIRNAME,
@@ -1290,24 +1296,16 @@ async function writeDraftPlan(args: CliArgs, cwd: string): Promise<FinalizePlan>
   return plan;
 }
 
-async function main(argv: string[]) {
-  const cli = parseFinalizerCliArgs(argv) as CliArgs;
+async function executeFinalizer(cli: CliArgs, cwd: string) {
   const command = cli._[0];
   const file = command;
-  if (!file || cli.help) {
-    console.log(usage());
-    return;
-  }
-  const cwd = resolveFinalizerCwd(cli);
   if (command === "plan") {
-    await withPhase(
+    const plan = await withPhase(
       "plan generation",
       "Fix autoresearch.jsonl and rerun finalizer plan.",
-      async () => {
-        await writeDraftPlan(cli, cwd);
-      },
+      async () => await writeDraftPlan(cli, cwd),
     );
-    return;
+    return { ok: true, mode: "plan", workDir: cwd, plan };
   }
   const configPath = resolveCliPath(file, cwd);
   const config = await withPhase("configuration", "Fix groups.json and retry.", async () => {
@@ -1488,6 +1486,13 @@ async function main(argv: string[]) {
     "  Source branch and session-artifact cleanup commands are intentionally omitted here.",
   );
   console.log("  Use the generated review summary after trunk merge verification succeeds.");
+  return {
+    ok: true,
+    mode: "finalize",
+    workDir: cwd,
+    reviewSummary: summaryPath,
+    reviewBranches,
+  };
 }
 
 function planFingerprint(plan: FinalizePlan): string {
@@ -1630,22 +1635,59 @@ function posixQuote(value: unknown): string {
   return `'${String(value).replace(/'/g, "'\"'\"'")}'`;
 }
 
-const argv = process.argv.slice(2);
-let debug = false;
-try {
-  debug = cliDebugRequested(argv, true);
-  await main(argv);
-} catch (error: unknown) {
-  const failure =
-    error instanceof CliUsageError || isFinalizeError(error)
-      ? (error as FinalizePhaseError)
-      : finalizeError(
-          "FINALIZE_OPERATION_FAILED",
-          errorMessage(error),
-          "Inspect the error and rerun with --debug after correcting the reported cause.",
-          { cause: error },
-        );
-  const message = debug && failure.stack ? failure.stack : failure.message || String(failure);
-  console.error(error instanceof CliUsageError ? `${message}\n\n${usage()}` : message);
-  process.exitCode = 1;
+export async function runFinalizerCli(argv: string[] = process.argv.slice(2)): Promise<number> {
+  let debug = false;
+  try {
+    debug = cliDebugRequested(argv, true);
+    const cli = parseFinalizerCliArgs(argv) as CliArgs;
+    const command = cli._[0];
+    if (!command || cli.help) {
+      console.log(usage());
+      return 0;
+    }
+    const requestedCwd = resolveFinalizerCwd(cli);
+    // The initial read chooses the existing lock. The shared protocol re-captures and verifies
+    // this route under the lock before finalization can write an artifact or mutate Git.
+    const resolution = resolveWorkDir(requestedCwd);
+    const lock = await sessionMutationLockLocation(resolution.workDir);
+    const protocol = await withSessionMutationLock(
+      lock.root,
+      `finalize-autoresearch:${command === "plan" ? "plan" : "apply"}`,
+      async () =>
+        await runCommandDecisionProtocol({
+          command: `finalize-autoresearch:${command === "plan" ? "plan" : "apply"}`,
+          requestedCwd: String(requestedCwd),
+          expectedWorkDir: resolution.workDir,
+          mutate: async () => await executeFinalizer(cli, resolution.workDir),
+        }),
+      lock.path,
+    );
+    console.log(JSON.stringify(protocol));
+    return 0;
+  } catch (error: unknown) {
+    const failure =
+      error instanceof CliUsageError || isFinalizeError(error)
+        ? (error as FinalizePhaseError)
+        : /Corrupt autoresearch\.jsonl/i.test(errorMessage(error))
+          ? finalizeError(
+              "FINALIZE_PLAN_GENERATION_FAILED",
+              errorMessage(error),
+              "Fix autoresearch.jsonl and rerun finalizer plan.",
+              { cause: error },
+            )
+          : finalizeError(
+              "FINALIZE_OPERATION_FAILED",
+              errorMessage(error),
+              "Inspect the error and rerun with --debug after correcting the reported cause.",
+              { cause: error },
+            );
+    const message = debug && failure.stack ? failure.stack : failure.message || String(failure);
+    console.error(error instanceof CliUsageError ? `${message}\n\n${usage()}` : message);
+    return 1;
+  }
+}
+
+const code = await runFinalizerCli();
+if (code !== 0) {
+  process.exitCode = code;
 }

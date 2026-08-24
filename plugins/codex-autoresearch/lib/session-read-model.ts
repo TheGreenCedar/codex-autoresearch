@@ -4,10 +4,12 @@ import {
   buildApprovalLedgerStatus,
   dedupeApprovalRequirements,
 } from "./approval-ledger.js";
-import { resolveActionCommand } from "./action-metadata.js";
-import { renderedPowerShellCommandBody } from "./command-rendering.js";
-import { hasUnsafeShellOperator } from "./dashboard-command-safety.js";
-import { selectDecisionAuthority } from "./decision-authority.js";
+import type { DecisionPlan } from "./decision-compiler.js";
+import {
+  projectCompactDecisionPlan,
+  projectResolvedDecision,
+  type ProjectedResolvedDecision,
+} from "./decision-projection.js";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { classifyEvidenceMaturity, runsFromState } from "./evidence-maturity.js";
 import { buildGoalContract } from "./goal-frame.js";
@@ -31,24 +33,13 @@ export const DEFAULT_STATE_MAX_BYTES = 20_480;
 export const DEFAULT_STATE_MAX_LINES = 260;
 export const DEFAULT_STATE_MAX_TOKENS = 5_120;
 export const DEFAULT_DOCTOR_MAX_BYTES = 8_192;
-export const DEFAULT_DOCTOR_MAX_LINES = 100;
+export const DEFAULT_DOCTOR_MAX_LINES = 160;
 export const DEFAULT_DOCTOR_MAX_TOKENS = 2_048;
 export const TERMINAL_REPORT_MAX_BYTES = 8_192;
-export const TERMINAL_REPORT_MAX_LINES = 100;
+export const TERMINAL_REPORT_MAX_LINES = 120;
 export const TERMINAL_REPORT_MAX_TOKENS = 2_048;
 
-export interface ResolvedDecision {
-  version: 1;
-  status: "blocked" | "ready" | "complete" | "unknown";
-  strongestBlocker: string | null;
-  nextAction: string;
-  command: string;
-  canonicalNextAction: UnknownRecord | null;
-  loopContract: UnknownRecord | null;
-  runtimeProvenance: UnknownRecord | null;
-  runtimeAuthority: UnknownRecord | null;
-  finalizationPressure: UnknownRecord | null;
-}
+export type ResolvedDecision = ProjectedResolvedDecision;
 
 export interface SessionReadModel {
   version: 1;
@@ -58,7 +49,6 @@ export interface SessionReadModel {
   statusCounts: Record<string, number>;
   controlPlane: ReadModelRecord;
   finalization: ReadModelRecord;
-  resolvedDecision: ResolvedDecision;
 }
 
 export interface ProjectionBudget {
@@ -235,11 +225,6 @@ export function buildSessionReadModel({
       processProgress,
     }),
     finalization: effectiveFinalization,
-    resolvedDecision: resolveSessionDecision({
-      state: stateWithReadModel,
-      commands,
-      finalization: effectiveFinalization,
-    }),
   };
 }
 
@@ -317,267 +302,21 @@ export function buildControlPlaneContracts({
   };
 }
 
-export function withResolvedSessionDecision(
-  readModel: SessionReadModel,
-  {
-    state: stateInput,
-    decisionEnvelope,
-    commands,
-    runtimeProvenance,
-    finalization,
-  }: {
-    state?: unknown;
-    decisionEnvelope?: unknown;
-    commands?: unknown;
-    runtimeProvenance?: unknown;
-    finalization?: unknown;
-  },
-): SessionReadModel {
-  return {
-    ...readModel,
-    resolvedDecision: resolveSessionDecision({
-      state: {
-        ...readModel.stateWithReadModel,
-        ...readModel.controlPlane,
-        ...unknownRecordOrEmpty(stateInput),
-        decisionEnvelope,
-      },
-      decisionEnvelope,
-      commands,
-      runtimeProvenance,
-      finalization,
-    }),
-  };
-}
-
-export function resolveSessionDecision({
-  state: stateInput,
-  decisionEnvelope: envelopeInput,
-  commands: commandsInput,
-  runtimeProvenance: runtimeInput,
-  finalization: finalizationInput,
-}: {
-  state?: unknown;
-  decisionEnvelope?: unknown;
-  commands?: unknown;
-  runtimeProvenance?: unknown;
-  finalization?: unknown;
-} = {}): ResolvedDecision {
+export function projectFullState(stateInput: unknown): ReadModelRecord {
   const state = unknownRecordOrEmpty(stateInput);
-  const existing = recordOrNull(state.resolvedDecision);
-  const envelope =
-    recordOrNull(envelopeInput) ||
-    recordOrNull(state.decisionEnvelope) ||
-    // v2.7 migration: read the old alias, but projections never emit it.
-    recordOrNull(state.resumeAudit);
-  const loopContract =
-    recordOrNull(existing?.loopContract) ||
-    recordOrNull(envelope?.loopContract) ||
-    recordOrNull(state.loopContract);
-  const envelopeAction = recordOrNull(envelope?.canonicalNextAction);
-  const existingAction = recordOrNull(existing?.canonicalNextAction);
-  const stateAction = recordOrNull(state.canonicalNextAction);
-  const canonical = existingAction
-    ? {
-        ...(stateAction?.kind === existingAction.kind ? stateAction : {}),
-        ...(envelopeAction?.kind === existingAction.kind ? envelopeAction : {}),
-        ...existingAction,
-      }
-    : envelopeAction
-      ? {
-          ...(stateAction?.kind === envelopeAction.kind ? stateAction : {}),
-          ...envelopeAction,
-        }
-      : stateAction;
-  const strongestAction = recordOrNull(loopContract?.strongestAction);
-  const structuredBlocker = Array.isArray(loopContract?.blockers)
-    ? recordOrNull(loopContract.blockers[0])
-    : null;
-  const evidencePrerequisite = decisionEvidencePrerequisite(state, envelope, canonical);
-  const blockingEvidencePrerequisite =
-    evidencePrerequisite?.allowsNextPacket === true ? null : evidencePrerequisite;
-  const blockers = uniqueMessages([
-    stringValue(existing?.strongestBlocker),
-    ...messageList(loopContract?.blockers),
-    stringValue(blockingEvidencePrerequisite?.reason),
-    ...messageList(state.blockers),
-  ]);
-  const strongestBlocker = blockers[0] || stringValue(existing?.strongestBlocker) || null;
-  const blockerAction = strongestAction || blockingEvidencePrerequisite || structuredBlocker;
-  const mergedBlockerAction = blockerAction
-    ? canonical && blockerAction.kind === canonical.kind
-      ? {
-          ...canonical,
-          ...blockerAction,
-          command: safeDecisionCommand(blockerAction.command)
-            ? stringValue(blockerAction.command)
-            : stringValue(canonical.command),
-        }
-      : blockerAction
-    : null;
-  const guidanceAction =
-    strongestAction?.allowsNextPacket === true
-      ? strongestAction
-      : evidencePrerequisite?.allowsNextPacket === true
-        ? evidencePrerequisite
-        : null;
-  const authoritativeAction = strongestBlocker
-    ? selectDecisionAuthority(
-        canonical && canonical.kind !== "next-packet" ? canonical : null,
-        mergedBlockerAction || { kind: "blocked", reason: strongestBlocker, command: "" },
-        true,
-      )
-    : guidanceAction || canonical;
-  const commands = unknownRecordOrEmpty(commandsInput ?? state.commands);
-  const resolvedCommand = resolveActionCommand(authoritativeAction?.kind, commands, {
-    explicitCommand: authoritativeAction?.command ?? existing?.command,
-  });
-  const command = safeDecisionCommand(resolvedCommand) ? resolvedCommand : "";
-  const rawFinalizationPressure =
-    recordOrNull(existing?.finalizationPressure) ||
-    recordOrNull(finalizationInput) ||
-    recordOrNull(envelope?.finalizationReadiness) ||
-    recordOrNull(state.finalizationPressure) ||
-    recordOrNull(state.finalizationRunway);
-  const finalizationPressure = evidencePrerequisite
-    ? rawFinalizationPressure
-      ? {
-          ...rawFinalizationPressure,
-          ready: false,
-          blockedBy: evidencePrerequisite.kind,
-        }
-      : null
-    : rawFinalizationPressure;
-  const terminal = loopContract?.complete === true || loopContract?.terminal === true;
-  const canRunNextPacket = loopContract?.canRunNextPacket;
-  const existingStatus = decisionStatus(existing?.status);
-  const status: ResolvedDecision["status"] = strongestBlocker
-    ? "blocked"
-    : evidencePrerequisite?.allowsNextPacket === true
-      ? "ready"
-      : existingStatus
-        ? existingStatus
-        : terminal
-          ? "complete"
-          : canRunNextPacket === true || finalizationPressure?.ready === true
-            ? "ready"
-            : "unknown";
-  const nextAction =
-    stringValue(authoritativeAction?.reason) ||
-    strongestBlocker ||
-    stringValue(existing?.nextAction) ||
-    stringValue(state.nextAction) ||
-    "Read state and choose the next safe Autoresearch action.";
-
-  return {
-    version: SESSION_READ_MODEL_VERSION,
-    status,
-    strongestBlocker,
-    nextAction,
-    command,
-    canonicalNextAction: authoritativeAction ? { ...authoritativeAction, command } : null,
-    loopContract,
-    runtimeProvenance:
-      recordOrNull(existing?.runtimeProvenance) ||
-      recordOrNull(runtimeInput) ||
-      recordOrNull(envelope?.runtimeProvenance) ||
-      recordOrNull(state.runtimeProvenance),
-    runtimeAuthority:
-      recordOrNull(existing?.runtimeAuthority) ||
-      recordOrNull(envelope?.runtimeAuthority) ||
-      recordOrNull(state.runtimeAuthority),
-    finalizationPressure,
-  };
-}
-
-function decisionEvidencePrerequisite(
-  state: ReadModelRecord,
-  envelope: ReadModelRecord | null,
-  canonical: ReadModelRecord | null,
-): ReadModelRecord | null {
-  const activeSegment = recordOrNull(envelope?.activeSegment) || recordOrNull(state.activeSegment);
-  const current = Array.isArray(state.current) ? state.current : null;
-  const explicitRunCount =
-    finiteNumber(activeSegment?.runs) ?? finiteNumber(state.runs) ?? current?.length;
-  const packetFreshness = recordOrNull(envelope?.latestPacketFreshness);
-  if (explicitRunCount === 0 && packetFreshness?.fresh !== true) {
-    const activeKind = stringValue(canonical?.kind);
-    if (
-      [
-        "log-decision",
-        "stale-packet",
-        "partial-salvage",
-        "packet-diagnostic",
-        "current-tree-finalization",
-      ].includes(activeKind)
-    ) {
-      return null;
-    }
-    return {
-      kind: "needs-baseline",
-      reason:
-        "No runs are logged. Run and log a baseline before saturation, finalization, or completion claims.",
-      command: "",
-      triggeredBy: ["activeSegment", "runs"],
-      allowsNextPacket: true,
-    };
-  }
-
-  const config = unknownRecordOrEmpty(state.config);
-  const qualityGap = recordOrNull(state.qualityGap);
-  const roundDecision = recordOrNull(qualityGap?.roundDecision);
-  if (
-    config.metricName === "quality_gap" &&
-    qualityGap &&
-    roundDecision?.accepted !== true &&
-    (qualityGap.open == null ||
-      Number(qualityGap.open) === 0 ||
-      (Array.isArray(qualityGap.legacyProvisionalClosed) &&
-        qualityGap.legacyProvisionalClosed.length > 0) ||
-      (Array.isArray(qualityGap.decisionIssues) && qualityGap.decisionIssues.length > 0))
-  ) {
-    return {
-      kind: "needs-evidence",
-      reason:
-        stringValue(roundDecision?.reason) ||
-        "The qualitative round needs an evidence-bearing accepted decision before completion.",
-      command: "",
-      triggeredBy: ["qualityGap", "roundDecision"],
-    };
-  }
-  return null;
-}
-
-export function attachResolvedDecision<T extends UnknownRecord>(
-  stateInput: T,
-  overrides: {
-    decisionEnvelope?: unknown;
-    commands?: unknown;
-    runtimeProvenance?: unknown;
-    finalization?: unknown;
-  } = {},
-): T & { resolvedDecision: ResolvedDecision } {
+  const decisionPlan = requireDecisionPlan(state.decisionPlan, "state");
   const {
     resumeAudit: _removedResumeAudit,
     decisionEnvelope: _removedDecisionEnvelope,
     canonicalNextAction: _canonicalAlias,
     loopContract: _loopAlias,
-    ...state
-  } = stateInput;
+    ...details
+  } = state;
   return {
-    ...state,
-    resolvedDecision: resolveSessionDecision({ state: stateInput, ...overrides }),
-  } as T & { resolvedDecision: ResolvedDecision };
-}
-
-export function projectFullState(stateInput: unknown): ReadModelRecord {
-  const state = unknownRecordOrEmpty(stateInput);
-  return attachResolvedDecision(state, {
-    decisionEnvelope: state.decisionEnvelope,
-    commands: state.commands,
-    runtimeProvenance: state.runtimeProvenance,
-    finalization: state.finalizationPressure,
-  });
+    ...details,
+    decisionPlan,
+    resolvedDecision: projectResolvedDecision(decisionPlan),
+  };
 }
 
 export function projectStateReadModel(
@@ -586,17 +325,18 @@ export function projectStateReadModel(
 ): ReadModelRecord {
   const state = unknownRecordOrEmpty(stateInput);
   const config = unknownRecordOrEmpty(state.config);
-  const decision = resolveSessionDecision({
-    state,
-    commands: state.commands,
-    runtimeProvenance: state.runtimeProvenance,
-    finalization: state.finalizationPressure,
-  });
+  const decisionPlan = requireDecisionPlan(state.decisionPlan, "state");
+  const decision = projectResolvedDecision(decisionPlan);
   const goalContract = recordOrNull(state.goalContract);
-  const envelope = recordOrNull(state.decisionEnvelope);
-  const goalAdvice = compactGoalAdvice(envelope?.goalAdvice || state.goalAdvice);
-  const continuation = compactContinuation(state.continuation);
-  const continuationSource = recordOrNull(state.continuation);
+  const goalAdvice = compactGoalAdvice(state.goalAdvice);
+  const continuation = compactContinuation({
+    mode: "decision-plan",
+    stage: decisionPlan.phase,
+    activeBudget: decisionPlan.loopDisposition.kind === "continue",
+    shouldContinue: decisionPlan.loopDisposition.shouldContinue,
+    forbidFinalAnswer: decisionPlan.parentDisposition.kind === "block-final-answer",
+    finalAnswerPolicy: decisionPlan.parentDisposition.kind,
+  });
   const watchdogSummary = compactWatchdogSummary(state.watchdogSummary);
   const workflowFriction = compactWorkflowFriction(state.workflowFriction);
   const sourceCleanliness = compactSourceCleanliness(state.sourceCleanliness);
@@ -641,7 +381,8 @@ export function projectStateReadModel(
     historicalBest: boundedValue(state.historicalBest),
     developmentBest: boundedValue(state.developmentBest ?? recordOrNull(state.development)?.best),
     promotionBest: boundedValue(state.promotionBest ?? recordOrNull(state.promotion)?.best),
-    resolvedDecision: compactResolvedDecision(decision, sourceCleanliness),
+    decisionPlanProjection: projectCompactDecisionPlan(decisionPlan),
+    ...(mode === "compact" ? {} : { resolvedDecision: compactResolvedDecision(decision) }),
     warnings: boundedMessages(state.warnings),
     warningDetails: boundedValue(state.warningDetails),
     commands: compactCommands(state.commands, decision.command, mode === "compact"),
@@ -649,12 +390,10 @@ export function projectStateReadModel(
     ...(continuation ? { continuation } : {}),
     report: { next: boundedText(decision.nextAction) },
     nextAction: boundedText(decision.nextAction),
-    activeBudget: continuationSource?.activeBudget === true,
-    shouldContinue: continuationSource?.shouldContinue === true,
-    canRunNextPacket:
-      recordOrNull(decision.loopContract)?.canRunNextPacket === true &&
-      decision.status !== "blocked",
-    forbidFinalAnswer: continuationSource?.forbidFinalAnswer === true,
+    activeBudget: decisionPlan.loopDisposition.kind === "continue",
+    shouldContinue: decisionPlan.loopDisposition.shouldContinue,
+    canRunNextPacket: decisionPlan.capabilities["run-packet"] === "allowed",
+    forbidFinalAnswer: decisionPlan.parentDisposition.kind === "block-final-answer",
     limitReached: recordOrNull(state.limit)?.limitReached === true,
     ...(watchdogSummary ? { watchdogSummary } : {}),
     scaffoldHealth: boundedValue(state.scaffoldHealth),
@@ -737,14 +476,8 @@ export function projectDoctorReadModel(
 ): ReadModelRecord {
   const doctor = unknownRecordOrEmpty(doctorInput);
   const state = unknownRecordOrEmpty(doctor.state);
-  const { resolvedDecision: _stateDecision, ...stateWithoutDecision } = state;
-  const decision = resolveSessionDecision({
-    state: { ...stateWithoutDecision, ...doctor },
-    decisionEnvelope: doctor.decisionEnvelope || state.decisionEnvelope,
-    commands: recordOrNull(doctor.continuation)?.commands || state.commands,
-    runtimeProvenance: doctor.runtimeProvenance || state.runtimeProvenance,
-    finalization: recordOrNull(doctor.decisionEnvelope)?.finalizationReadiness,
-  });
+  const decisionPlan = requireDecisionPlan(doctor.decisionPlan || state.decisionPlan, "doctor");
+  const decision = projectResolvedDecision(decisionPlan);
   if (full) {
     const {
       resumeAudit: _resumeAlias,
@@ -756,6 +489,7 @@ export function projectDoctorReadModel(
     return {
       ...details,
       state: projectFullState(state),
+      decisionPlan,
       resolvedDecision: decision,
     };
   }
@@ -769,7 +503,7 @@ export function projectDoctorReadModel(
     issues: boundedMessages(doctor.issues).slice(0, 4),
     warnings: boundedMessages(doctor.warnings).slice(0, 4),
     nextAction: boundedText(decision.nextAction),
-    resolvedDecision: compactResolvedDecision(decision),
+    decisionPlanProjection: projectCompactDecisionPlan(decisionPlan),
     git: boundedValue(doctor.git),
     benchmark: compactDoctorBenchmark(doctor.benchmark),
     commandExecutionBoundary: boundedValue(doctor.commandExecutionBoundary),
@@ -888,67 +622,6 @@ function compactMetricSemanticsWarning(value: unknown): ReadModelRecord | null {
   return warning ? pickFields(warning, ["code", "message"]) : null;
 }
 
-export function projectDashboardDecision(stateInput: unknown): ResolvedDecision {
-  const state = unknownRecordOrEmpty(stateInput);
-  return resolveSessionDecision({
-    state,
-    commands: state.commands,
-    runtimeProvenance: state.runtimeProvenance,
-    finalization: state.finalizationPressure,
-  });
-}
-
-export function projectFinalizationDecision(stateInput: unknown): ReadModelRecord {
-  const decision = projectDashboardDecision(stateInput);
-  return {
-    status: decision.status,
-    strongestBlocker: decision.strongestBlocker,
-    nextAction: decision.nextAction,
-    command: decision.command,
-    runtimeProvenance: boundedValue(decision.runtimeProvenance),
-    runtimeAuthority: boundedValue(decision.runtimeAuthority),
-    finalizationPressure: boundedValue(decision.finalizationPressure),
-  };
-}
-
-export function resolveFinalizationDecision(
-  finalizationInput: unknown,
-  kind = "finalize-preview",
-): ResolvedDecision {
-  const finalization = unknownRecordOrEmpty(finalizationInput);
-  const ready = finalization.ready === true;
-  const nextAction =
-    stringValue(finalization.nextAction) ||
-    (ready ? "Review the finalization preview." : "Resolve finalization blockers.");
-  const explicitBlockers = messageList(finalization.blockers);
-  const blockers = ready
-    ? explicitBlockers
-    : explicitBlockers.length > 0
-      ? explicitBlockers
-      : [nextAction || messageList(finalization.warnings)[0]].filter(Boolean);
-  const action = {
-    kind: stringValue(finalization.actionCode) || kind,
-    reason: nextAction,
-    command: stringValue(finalization.suggestedCommand),
-  };
-  return resolveSessionDecision({
-    state: { blockers, nextAction },
-    decisionEnvelope: {
-      canonicalNextAction: action,
-      loopContract: {
-        ok: ready,
-        canRunNextPacket: false,
-        blockers,
-        warnings: messageList(finalization.warnings),
-        strongestAction: ready ? null : action,
-      },
-      finalizationReadiness: finalization,
-    },
-    commands: { primary: finalization.suggestedCommand },
-    finalization,
-  });
-}
-
 export function projectionBudget(value: unknown): ProjectionBudget {
   const serialized = JSON.stringify(value, null, 2);
   const bytes = Buffer.byteLength(serialized, "utf8");
@@ -976,26 +649,25 @@ export function assertProjectionBudget(
   }
 }
 
-function compactResolvedDecision(
-  decision: ResolvedDecision,
-  sourceCleanliness: ReadModelRecord | null = null,
-): ResolvedDecision {
+function compactResolvedDecision(decision: ResolvedDecision): ReadModelRecord {
   const action = recordOrNull(decision.canonicalNextAction);
   const loop = recordOrNull(decision.loopContract);
   const loopStrongestAction = recordOrNull(loop?.strongestAction);
   const runtime = recordOrNull(decision.runtimeProvenance);
   const authority = recordOrNull(decision.runtimeAuthority);
   const finalization = recordOrNull(decision.finalizationPressure);
-  const cleanlinessBlocker =
-    sourceCleanliness?.sourceDirty === true
-      ? "Git worktree is dirty; review unrelated changes before continuing."
-      : "";
-  const loopBlockers = uniqueMessages([
-    cleanlinessBlocker,
-    ...boundedMessages(loop?.blockers),
-  ]).slice(0, 3);
+  const loopBlockers = boundedMessages(loop?.blockers).slice(0, 3);
   return {
     version: SESSION_READ_MODEL_VERSION,
+    compilerSchemaVersion: decision.compilerSchemaVersion,
+    decisionId: decision.decisionId,
+    generationId: decision.generationId,
+    phase: decision.phase,
+    actionKind: decision.actionKind,
+    primaryBlockerCode: decision.primaryBlockerCode,
+    parentDisposition: decision.parentDisposition,
+    contractDigest: decision.contractDigest,
+    evaluatorIdentity: decision.evaluatorIdentity,
     status: decision.status,
     strongestBlocker: decision.strongestBlocker ? boundedText(decision.strongestBlocker) : null,
     nextAction: boundedText(decision.nextAction),
@@ -1159,68 +831,9 @@ function boundedText(value: unknown, limit = 500): string {
   return `${kept.join("")}${suffix}`;
 }
 
-function decisionStatus(value: unknown): ResolvedDecision["status"] | null {
-  return value === "blocked" || value === "ready" || value === "complete" || value === "unknown"
-    ? value
-    : null;
-}
-
-function safeDecisionCommand(value: unknown): boolean {
-  const command = stringValue(value).trim();
-  const commandBody = renderedPowerShellCommandBody(command) ?? command;
-  if (!commandBody || /<[^>]+>/.test(commandBody) || hasUnsafeShellOperator(commandBody))
-    return false;
-  return !usesInterpreterEvaluationMode(commandBody);
-}
-
-function usesInterpreterEvaluationMode(command: string): boolean {
-  const invocation = firstCommandInvocation(command);
-  if (!invocation) return false;
-  const executable = invocation.executable.replace(/\\/g, "/").split("/").pop()?.toLowerCase();
-  const firstArgument = firstCommandArgument(invocation.args);
-  if (/^(?:node|python(?:3)?|powershell|pwsh|(?:ba|z|k)?sh)(?:\.exe)?$/.test(executable || "")) {
-    return !firstArgument || firstArgument.startsWith("-");
-  }
-  return (
-    (executable === "cmd" || executable === "cmd.exe") &&
-    (!firstArgument || firstArgument.startsWith("/") || firstArgument.startsWith("-"))
-  );
-}
-
-function firstCommandArgument(args: string): string | null {
-  const text = args.trimStart();
-  if (!text) return null;
-  const quote = text[0];
-  if (quote === "'" || quote === '"') {
-    const end = text.indexOf(quote, 1);
-    return end < 0 ? null : text.slice(1, end);
-  }
-  const separator = text.search(/\s/);
-  return separator < 0 ? text : text.slice(0, separator);
-}
-
-function firstCommandInvocation(command: string): { executable: string; args: string } | null {
-  const text = command.trim().replace(/^&\s+/, "");
-  if (!text) return null;
-  const quote = text[0];
-  if (quote === "'" || quote === '"') {
-    const end = text.indexOf(quote, 1);
-    if (end < 0) return null;
-    return { executable: text.slice(1, end), args: text.slice(end + 1).trimStart() };
-  }
-  const separator = text.search(/\s/);
-  return separator < 0
-    ? { executable: text, args: "" }
-    : { executable: text.slice(0, separator), args: text.slice(separator).trimStart() };
-}
-
 function messageList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map(describeValue).filter(Boolean);
-}
-
-function uniqueMessages(values: string[]): string[] {
-  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function describeValue(value: unknown): string {
@@ -1241,6 +854,21 @@ function finiteNumber(value: unknown): number | null {
   if (typeof value === "string" && !value.trim()) return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function decisionPlanOrNull(value: unknown): DecisionPlan | null {
+  const plan = recordOrNull(value);
+  return plan?.kind === "decision-plan" &&
+    typeof plan.decisionId === "string" &&
+    recordOrNull(plan.capabilities) != null
+    ? (plan as unknown as DecisionPlan)
+    : null;
+}
+
+function requireDecisionPlan(value: unknown, surface: string): DecisionPlan {
+  const plan = decisionPlanOrNull(value);
+  if (plan) return plan;
+  throw new TypeError(`${surface} requires a canonical DecisionPlan.`);
 }
 
 function stringValue(value: unknown): string {

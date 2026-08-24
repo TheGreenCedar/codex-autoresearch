@@ -12,6 +12,16 @@ import { addressPort, closeServer, listenOnRandomPort } from "../helpers/server.
 
 import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
+async function appendLegacyLedgerRows(dir: string, rows: Record<string, unknown>[]) {
+  const ledgerPath = path.join(dir, "autoresearch.jsonl");
+  const ledger = await readFile(ledgerPath, "utf8");
+  await writeFile(
+    ledgerPath,
+    `${ledger}${rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    "utf8",
+  );
+}
+
 test("state report marks registry-only dashboard health dead until HTTP responds", async () => {
   await withTempDir("state-report-dashboard-health", async (dir) => {
     await setupFixture(dir, { name: "dashboard health" });
@@ -213,35 +223,26 @@ test("state health accepts an alive same-cwd current-version HTTP response", asy
 
 test("legacy failed sentinel metrics do not suppress next-run baseline measure guidance", async () => {
   await withTempDir("legacy-sentinel-baseline", async (dir) => {
-    await setupFixture(dir, { name: "legacy sentinel" });
-
-    const legacyFailure = await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "-999",
-      "--status",
-      "crash",
-      "--description",
-      "Legacy sentinel failure",
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=5')"`;
+    await setupFixture(dir, {
+      name: "legacy sentinel",
+      completeContract: true,
+      benchmarkCommand: command,
+    });
+    await appendLegacyLedgerRows(dir, [
+      {
+        run: 1,
+        metric: -999,
+        status: "crash",
+        description: "Legacy sentinel failure",
+      },
     ]);
-    assert.equal(legacyFailure.code, 0, legacyFailure.stderr);
 
     const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     assert.equal(JSON.parse(state.stdout).baseline, null);
 
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=5')"`;
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
     const payload = JSON.parse(next.stdout);
     assert.equal(payload.decision.rawSuggestedStatus, "measure");
@@ -251,18 +252,14 @@ test("legacy failed sentinel metrics do not suppress next-run baseline measure g
 
 test("metricless failed last-run packets log cleanly and preserve packet on invalid status", async () => {
   await withTempDir("metricless-last-run", async (dir) => {
-    await setupFixture(dir, { name: "metricless last run" });
     const command = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
+    await setupFixture(dir, {
+      name: "metricless last run",
+      completeContract: true,
+      benchmarkCommand: command,
+    });
 
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
     assert.equal(packet.decision.metric, null);
@@ -377,7 +374,7 @@ test("state normalizes invalid metrics before experiment memory ranking", async 
   });
 });
 
-test("last-run packet does not dirty git worktrees before discard logging", async () => {
+test("last-run packet keeps source clean while contract acceptance dirties only the session ledger", async () => {
   await withTempDir("git-last-run", async (dir) => {
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
@@ -386,26 +383,27 @@ test("last-run packet does not dirty git worktrees before discard logging", asyn
     await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await setupFixture(dir, { name: "git last run" });
-    await git(dir, ["add", "autoresearch.jsonl"]);
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    await setupFixture(dir, {
+      name: "git last run",
+      completeContract: true,
+      benchmarkCommand: command,
+    });
+    await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-m", "session"]);
 
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
     assert.doesNotMatch(packet.lastRunPath, /autoresearch\.last-run\.json$/);
 
     const statusBeforeLog = await git(dir, ["status", "--short"]);
-    assert.equal(statusBeforeLog, "");
+    assert.equal(statusBeforeLog, "M autoresearch.jsonl");
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.sourceCleanliness.sourceDirty, false);
+    assert.equal(statePayload.sourceCleanliness.status, "session-artifacts-dirty");
 
     const log = await runCli([
       "log",
@@ -423,7 +421,7 @@ test("last-run packet does not dirty git worktrees before discard logging", asyn
   });
 });
 
-test("no-change keep records no fake kept commit", async () => {
+test("no-change packet cannot record a fake kept commit", async () => {
   await withTempDir("no-change-keep", async (dir) => {
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
@@ -432,21 +430,60 @@ test("no-change keep records no fake kept commit", async () => {
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await setupFixture(dir, { name: "no change keep" });
-    await git(dir, ["add", "autoresearch.jsonl"]);
-    await git(dir, ["commit", "-m", "session"]);
-
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
-    const next = await runCli([
-      "next",
+    await mkdir(path.join(dir, "contract"), { recursive: true });
+    await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n", "utf8");
+    await setupFixture(dir, {
+      name: "no change keep",
+      benchmarkCommand: command,
+      checksCommand: `${quoteForShell(process.execPath)} contract/checks.mjs`,
+      completeContract: true,
+    });
+    const configPath = path.join(dir, "autoresearch.config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          ...config,
+          checkImplementationPaths: ["contract/checks.mjs"],
+          checksAuthoritative: true,
+          noiseModel: { kind: "deterministic" },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "session"]);
+    const headBefore = await git(dir, ["rev-parse", "HEAD"]);
+    const segment = await runCli([
+      "new-segment",
       "--cwd",
       dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
+      "--reason",
+      "Accept no-change test contract",
+      "--yes",
     ]);
+    assert.equal(segment.code, 0, segment.stderr);
+    const baseline = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "2",
+      "--status",
+      "measure",
+      "--description",
+      "Accepted reference observation",
+    ]);
+    assert.equal(baseline.code, 0, baseline.stderr);
+
+    const next = await runCli(["next", "--cwd", dir]);
     assert.equal(next.code, 0, next.stderr);
+    const packet = JSON.parse(next.stdout);
+    assert.equal(packet.decision.allowedStatuses.includes("keep"), true);
 
     const log = await runCli([
       "log",
@@ -457,13 +494,10 @@ test("no-change keep records no fake kept commit", async () => {
       "keep",
       "--description",
       "Keep evidence without file changes",
-      "--commit-paths",
-      "tracked.txt",
     ]);
-    assert.equal(log.code, 0, log.stderr);
-    const payload = JSON.parse(log.stdout);
-    assert.equal(payload.experiment.commit, "");
-    assert.match(payload.git, /nothing to commit/);
+    assert.notEqual(log.code, 0);
+    assert.match(log.stderr, /Refusing a no-op keep/);
+    assert.equal(await git(dir, ["rev-parse", "HEAD"]), headBefore);
   });
 });
 
@@ -498,28 +532,17 @@ test("config extend is based on the active segment run count", async () => {
 
 test("dashboard script renders zero and negative metric points", async () => {
   await withTempDir("dashboard-runtime", async (dir) => {
-    await setupFixture(dir, { name: "runtime dashboard", metricName: "delta", direction: "lower" });
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "0",
-      "--status",
-      "keep",
-      "--description",
-      "Zero baseline",
-    ]);
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "-2",
-      "--status",
-      "keep",
-      "--description",
-      "Negative improvement",
+    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC delta=0')"`;
+    await setupFixture(dir, {
+      name: "runtime dashboard",
+      metricName: "delta",
+      direction: "lower",
+      completeContract: true,
+      benchmarkCommand,
+    });
+    await appendLegacyLedgerRows(dir, [
+      { type: "run", run: 1, metric: 0, status: "keep", description: "Zero baseline" },
+      { type: "run", run: 2, metric: -2, status: "keep", description: "Negative improvement" },
     ]);
 
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);

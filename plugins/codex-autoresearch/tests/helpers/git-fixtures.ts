@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { runGit, createSetupFixture } from "./process.js";
+import { runGit, createSetupFixture, quoteForShell } from "./process.js";
 
 export async function writeDecisionCapsule(dir, slug, overrides = {}) {
   const capsuleDir = path.join(dir, "autoresearch.research", slug);
@@ -42,41 +42,97 @@ export async function writeDecisionCapsule(dir, slug, overrides = {}) {
 
 export async function prepareCurrentTreeFinalizationBlocker(dir, runCli) {
   const setupFixture = createSetupFixture();
+  const benchmarkCommand = `${JSON.stringify(process.execPath)} -e "const fs=require('node:fs');console.log('METRIC seconds='+(fs.existsSync('src/kept.txt')?0:1))"`;
+  const checksPath = path.join(dir, "contract", "checks.mjs");
+  const checksCommand = `${quoteForShell(process.execPath)} contract/checks.mjs`;
   await runGit(dir, ["init"]);
   await writeFile(path.join(dir, "base.txt"), "base\n", "utf8");
   await runGit(dir, ["add", "base.txt"]);
   await runGit(dir, ["commit", "-m", "base"]);
   await runGit(dir, ["branch", "-M", "main"]);
   await runGit(dir, ["checkout", "-b", "feature"]);
-  await writeFile(path.join(dir, "autoresearch.ps1"), "Write-Output 'METRIC seconds=1'\n", "utf8");
-  await writeFile(path.join(dir, "autoresearch.checks.ps1"), "Write-Output 'test ok'\n", "utf8");
-  await setupFixture(dir, { name: "current tree finalization" });
-  await runGit(dir, ["add", "autoresearch.jsonl", "autoresearch.ps1", "autoresearch.checks.ps1"]);
+  await mkdir(path.dirname(checksPath), { recursive: true });
+  await writeFile(checksPath, "process.exit(0);\n", "utf8");
+  await setupFixture(dir, {
+    name: "current tree finalization",
+    acceptedContract: true,
+    benchmarkCommand,
+    checksCommand,
+    scope: "src",
+  });
+  const configPath = path.join(dir, "autoresearch.config.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  config.checkImplementationPaths = ["contract/checks.mjs"];
+  config.checksAuthoritative = true;
+  config.noiseModel = { kind: "deterministic" };
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  await runGit(dir, ["add", "-A"]);
   await runGit(dir, ["commit", "-m", "init autoresearch"]);
+
+  const acceptedSegment = await runCli([
+    "new-segment",
+    "--cwd",
+    dir,
+    "--reason",
+    "Accept committed fixture preconditions",
+    "--yes",
+  ]);
+  assert.equal(acceptedSegment.code, 0, acceptedSegment.stderr);
+
+  const baseline = await runCli(["next", "--cwd", dir]);
+  assert.equal(baseline.code, 0, baseline.stderr);
+  const baselineLog = await runCli([
+    "log",
+    "--cwd",
+    dir,
+    "--from-last",
+    "--status",
+    "measure",
+    "--description",
+    "Accepted baseline",
+  ]);
+  assert.equal(baselineLog.code, 0, baselineLog.stderr);
 
   await mkdir(path.join(dir, "src"), { recursive: true });
   await writeFile(path.join(dir, "src", "kept.txt"), "kept\n", "utf8");
-  await runGit(dir, ["add", "src/kept.txt"]);
-  await runGit(dir, ["commit", "-m", "kept change"]);
-  const keptCommit = (await runGit(dir, ["rev-parse", "HEAD"])).trim();
+  const candidate = await runCli(["next", "--cwd", dir]);
+  assert.equal(candidate.code, 0, candidate.stderr);
+  const candidatePayload = JSON.parse(candidate.stdout);
+  assert.equal(
+    typeof candidatePayload.lastRunPath,
+    "string",
+    `accepted candidate did not produce a packet: ${candidate.stdout}`,
+  );
+  const capturedCandidate = JSON.parse(
+    await readFile(String(candidatePayload.lastRunPath), "utf8"),
+  );
+  assert.equal(
+    capturedCandidate.decision.allowedStatuses.includes("keep"),
+    true,
+    "accepted candidate should satisfy authoritative checks and deterministic noise",
+  );
   const keep = await runCli([
     "log",
     "--cwd",
     dir,
-    "--metric",
-    "1",
+    "--from-last",
     "--status",
     "keep",
     "--description",
-    "Keep committed change",
-    "--commit",
-    keptCommit,
+    "Keep accepted candidate",
   ]);
   assert.equal(keep.code, 0, keep.stderr);
-  await runGit(dir, ["add", "autoresearch.jsonl"]);
-  await runGit(dir, ["commit", "-m", "log kept run"]);
 
   await writeFile(path.join(dir, "src", "unlogged.txt"), "support\n", "utf8");
   await runGit(dir, ["add", "src/unlogged.txt"]);
   await runGit(dir, ["commit", "-m", "unlogged support change"]);
+  const currentTreeContract = await runCli([
+    "new-segment",
+    "--cwd",
+    dir,
+    "--reason",
+    "Accept evaluator authority at the unlogged current tree",
+    "--yes",
+  ]);
+  assert.equal(currentTreeContract.code, 0, currentTreeContract.stderr);
 }

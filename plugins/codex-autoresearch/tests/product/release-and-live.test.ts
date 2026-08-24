@@ -11,6 +11,13 @@ import {
   withTempDir,
 } from "./helpers.js";
 
+const secondsOneBenchmark = `${JSON.stringify(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+const valueFileBenchmark = `${JSON.stringify(process.execPath)} -e "const fs=require('node:fs'); const value=fs.readFileSync('src/value.txt','utf8').trim(); console.log('METRIC seconds='+(value==='kept'?1:2))"`;
+
+function requiredEvidenceCodes(plan) {
+  return plan.requiredEvidence.diagnosticCodes;
+}
+
 test("finalize-preview summarizes kept commits without creating branches", async () => {
   await withTempDir("finalize-preview", async (dir) => {
     await git(dir, ["init", "-b", "main"]);
@@ -23,16 +30,64 @@ test("finalize-preview summarizes kept commits without creating branches", async
     await git(dir, ["branch", "develop"]);
 
     await git(dir, ["switch", "-c", "codex/autoresearch-preview"]);
-    await setupFixture(dir, { name: "preview" });
-    await git(dir, ["add", "autoresearch.jsonl"]);
+    await setupFixture(dir, {
+      name: "preview",
+      completeContract: true,
+      benchmarkCommand: valueFileBenchmark,
+    });
+    const configPath = path.join(dir, "autoresearch.config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          ...config,
+          checksAuthoritative: true,
+          noiseModel: { kind: "deterministic" },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-m", "session"]);
+    const accepted = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "Accept the finalization fixture contract",
+      "--yes",
+    ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
+    const baselinePacket = await runCli(["next", "--cwd", dir]);
+    assert.equal(baselinePacket.code, 0, baselinePacket.stderr);
+    const baseline = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "Reference measurement",
+    ]);
+    assert.equal(baseline.code, 0, baseline.stderr);
     await writeFile(path.join(dir, "src", "value.txt"), "kept\n");
+    const candidate = await runCli(["next", "--cwd", dir]);
+    assert.equal(candidate.code, 0, candidate.stderr);
+    const candidatePayload = JSON.parse(candidate.stdout);
+    assert.equal(
+      candidatePayload.decision.allowedStatuses.includes("keep"),
+      true,
+      JSON.stringify(candidatePayload.run.contractKeepEligibility, null, 2),
+    );
     const keep = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
       "keep",
       "--description",
@@ -41,13 +96,13 @@ test("finalize-preview summarizes kept commits without creating branches", async
       "src",
     ]);
     assert.equal(keep.code, 0, keep.stderr);
-    await git(dir, ["add", "autoresearch.jsonl"]);
+    await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-m", "record run"]);
 
     const preview = await runCli(["finalize-preview", "--cwd", dir]);
     assert.equal(preview.code, 0, preview.stderr);
     const payload = JSON.parse(preview.stdout);
-    assert.equal(payload.ready, true);
+    assert.equal(payload.ready, true, JSON.stringify(payload, null, 2));
     assert.equal(payload.progress.mode, "synchronous");
     assert.equal(payload.progress.status, "completed");
     assert.equal(payload.progress.stages[0].stage, "finalize-preview");
@@ -68,29 +123,40 @@ test("finalize-preview summarizes kept commits without creating branches", async
 
 test("live server exposes health and view-model endpoints", async () => {
   await withTempDir("live-server", async (dir) => {
-    await setupFixture(dir, { name: "live" });
-    await runCli([
+    await setupFixture(dir, {
+      name: "live",
+      acceptedContract: true,
+      benchmarkCommand: secondsOneBenchmark,
+    });
+    const baselinePacket = await runCli(["next", "--cwd", dir]);
+    assert.equal(baselinePacket.code, 0, baselinePacket.stderr);
+    const baseline = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Baseline",
     ]);
+    assert.equal(baseline.code, 0, baseline.stderr);
 
     const exported = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exported.code, 0, exported.stderr);
     const exportPayload = JSON.parse(exported.stdout);
-    assert.equal(exportPayload.decisionEnvelopeSummary.kind, "benchmark-command");
-    assert.equal(exportPayload.decisionEnvelopeSummary.runs, 1);
+    const exportPlan = exportPayload.viewModel.decisionPlanProjection;
+    assert.equal(exportPlan.kind, "dashboard-decision-plan-projection");
+    assert.equal(exportPlan.action.kind, "direct-work");
+    assert.equal(exportPlan.capabilities["run-packet"], "allowed");
+    assert.equal(exportPlan.capabilities.finalize, "blocked");
+    assert.equal(exportPlan.loopDisposition.kind, "continue");
+    assert.equal(exportPlan.parentDisposition.kind, "hand-back");
+    assert.ok(requiredEvidenceCodes(exportPlan).includes("finalization-blocked"));
 
     await withLiveServer(dir, async (payload) => {
       assert.equal(payload.modeGuidance.deliveryMode, "live-server");
       assert.equal(payload.verified, true);
-      assert.equal(payload.decisionEnvelopeSummary, null);
       assert.match(
         payload.deferredViewModel.availableAt,
         /^http:\/\/127\.0\.0\.1:\d+\/view-model\.json$/,
@@ -124,16 +190,25 @@ test("live server exposes health and view-model endpoints", async () => {
       const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());
       assert.equal(viewModel.summary.runs, 1);
       assert.equal(Array.isArray(viewModel.ledgerEntries), true);
-      assert.equal(viewModel.ledgerEntries.length, 2);
-      assert.equal(viewModel.ledgerEntries[0].type, "config");
-      assert.equal(viewModel.ledgerEntries[1].description, "Baseline");
+      assert.ok(viewModel.ledgerEntries.some((entry) => entry.type === "config"));
+      assert.ok(viewModel.ledgerEntries.some((entry) => entry.description === "Baseline"));
+      assert.equal(viewModel.decisionPlanProjection.decisionId, exportPlan.decisionId);
+      assert.equal(viewModel.decisionPlanProjection.action.kind, exportPlan.action.kind);
+      assert.equal(
+        viewModel.decisionPlanProjection.primaryBlockerCode,
+        exportPlan.primaryBlockerCode,
+      );
     });
   });
 });
 
 test("dashboard export and live endpoints redact sensitive evidence", async () => {
   await withTempDir("dashboard-redaction", async (dir) => {
-    await setupFixture(dir, { name: "redacted live" });
+    await setupFixture(dir, {
+      name: "redacted live",
+      acceptedContract: true,
+      benchmarkCommand: secondsOneBenchmark,
+    });
     const sensitiveEvidence = [
       "api_key=abcdefghijklmnop",
       "Bearer zyxwvutsrqponmlkjihgfedcba",
@@ -142,14 +217,15 @@ test("dashboard export and live endpoints redact sensitive evidence", async () =
       "/home/alice/.env",
       "Error: failed\n    at leak (C:\\Users\\Alice\\repo\\src\\secret.ts:1:2)",
     ].join(" ");
-    await runCli([
+    const baselinePacket = await runCli(["next", "--cwd", dir]);
+    assert.equal(baselinePacket.code, 0, baselinePacket.stderr);
+    const baseline = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       `Baseline ${sensitiveEvidence}`,
       "--asi",
@@ -159,6 +235,7 @@ test("dashboard export and live endpoints redact sensitive evidence", async () =
         next_action_hint: `Continue without leaking ${sensitiveEvidence}`,
       }),
     ]);
+    assert.equal(baseline.code, 0, baseline.stderr);
 
     const exported = await runCli(["export", "--cwd", dir]);
     assert.equal(exported.code, 0, exported.stderr);
@@ -228,17 +305,22 @@ test("live server has no dashboard action routes because CLI owns mutations", as
 
 test("live server log actions stay disabled and leave last-run packets untouched", async () => {
   await withTempDir("live-log-action", async (dir) => {
-    await setupFixture(dir, { name: "live log" });
-    const benchmarkFile = process.platform === "win32" ? "autoresearch.ps1" : "autoresearch.sh";
-    const benchmarkBody =
-      process.platform === "win32"
-        ? 'Write-Output "METRIC seconds=2"\n'
-        : "#!/bin/sh\nprintf 'METRIC seconds=2\\n'\n";
-    await writeFile(path.join(dir, benchmarkFile), benchmarkBody, "utf8");
+    const benchmarkCommand = `${JSON.stringify(process.execPath)} -e "console.log('METRIC seconds=2')"`;
+    await setupFixture(dir, {
+      name: "live log",
+      acceptedContract: true,
+      benchmarkCommand,
+    });
     const next = await runCli(["next", "--cwd", dir]);
     assert.equal(next.code, 0, next.stderr);
     const packet = JSON.parse(next.stdout);
-    assert.equal(packet.continuation.stage, "needs-log-decision");
+    assert.equal(packet.resultingDecision.action.kind, "log-decision");
+    assert.equal(packet.resultingDecision.primaryBlockerCode, "pending-packet");
+    assert.equal(packet.resultingDecision.capabilities["run-packet"], "blocked");
+    assert.equal(packet.resultingDecision.capabilities["mutate-session"], "allowed");
+    assert.equal(packet.resultingDecision.loopDisposition.kind, "blocked");
+    assert.equal(packet.resultingDecision.parentDisposition.kind, "hand-back");
+    assert.ok(requiredEvidenceCodes(packet.resultingDecision).includes("pending-packet"));
 
     await withLiveServer(dir, async (payload) => {
       const viewModel = await fetch(`${payload.url}view-model.json`).then((res) => res.json());

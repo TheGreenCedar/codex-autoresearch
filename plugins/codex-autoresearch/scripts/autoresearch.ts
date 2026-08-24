@@ -7,6 +7,14 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
 import { decisionGuidance } from "../lib/decision-guidance.js";
+import { decisionDiagnostic, type DecisionPlan } from "../lib/decision-compiler.js";
+import {
+  projectCompactDecisionPlan,
+  projectDashboardDecisionPlan,
+  projectLoopContinuation,
+  projectResolvedDecision,
+} from "../lib/decision-projection.js";
+import { loadCanonicalSessionDecision } from "../lib/session-decision.js";
 import { adaptLegacySessionMetadata, classifyFit } from "../lib/fit-gate.js";
 import { stripDashboardGuidanceCommandFields } from "../lib/dashboard-command-safety.js";
 import { dashboardSafeGuidanceText } from "../lib/dashboard-transport.js";
@@ -15,15 +23,10 @@ import {
   buildDashboardSettings as dashboardSettings,
   dashboardCommands,
 } from "../lib/commands/dashboard.js";
-import {
-  buildContinuationCommands,
-  continuationCommands,
-  loopContinuation,
-} from "../lib/commands/continuation.js";
+import { buildContinuationCommands, continuationCommands } from "../lib/commands/continuation.js";
 import {
   buildCompactRecommendNextResponse,
   buildRecommendNextResponse,
-  selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
 import { doctorSession as runDoctorSession } from "../lib/commands/doctor.js";
 import { runExperiment } from "../lib/commands/run.js";
@@ -41,15 +44,14 @@ import {
   type CommandShell,
 } from "../lib/command-rendering.js";
 import {
-  actionSafeActionForKind,
   actionToolNameForKind,
   actionTitleForKind,
   resolveActionCommand,
-  withCanonicalActionCommand,
 } from "../lib/action-metadata.js";
 import { renderCliHelp } from "../lib/cli/help.js";
 import {
   commandRequiresSessionMutationLock,
+  commandUsesSessionDecisionProtocol,
   compatibilityErrorForCli,
 } from "../lib/command-table.js";
 import {
@@ -68,6 +70,7 @@ import {
 } from "../lib/cli/args.js";
 import {
   resolveAuthorizedWorkDir,
+  withAcceptedWorkdirResolution,
   withOutsideWorkdirAuthorization,
 } from "../lib/cli/workdir-context.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
@@ -87,14 +90,15 @@ import {
 } from "../lib/active-progress-store.js";
 import { rekeyProcessLifecycleRecords } from "../lib/process-governor.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../lib/command-execution-boundary.js";
+import {
+  commandDecisionDiagnosticsFrom,
+  runCommandDecisionProtocol,
+  withCommandDecisionDiagnostics,
+  type CommandDecisionProtocolResult,
+} from "../lib/command-decision-protocol.js";
 import { defaultChecksCommand } from "../lib/check-policy.js";
 import { buildSourceCleanliness } from "../lib/source-cleanliness.js";
-import {
-  buildSessionReadModel,
-  buildSessionReadModelState,
-  resolveSessionDecision,
-  withResolvedSessionDecision,
-} from "../lib/session-read-model.js";
+import { buildSessionReadModelState } from "../lib/session-read-model.js";
 import { normalizeProtectedBenchmarkPaths } from "../lib/benchmark/contract-guards.js";
 import { packetBudgetUsage } from "../lib/benchmark/budget-contract.js";
 import {
@@ -117,7 +121,7 @@ import { artifactList } from "../lib/evidence-registry.js";
 import { isPathInside } from "../lib/path-containment.js";
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
-import { goalCompletionUnresolvedBlockers } from "../lib/goal-frame.js";
+import { fixedControlBlockForCommand, fixedControlRerunError } from "../lib/fixed-control.js";
 import { runWithRequiredCleanup } from "../lib/required-cleanup.js";
 import { normalizeRelativePaths } from "../lib/literal-paths.js";
 import {
@@ -173,7 +177,6 @@ import {
 } from "../lib/runner-progress.js";
 import {
   appendJsonl,
-  buildDecisionEnvelope,
   createSessionReadCache,
   finiteMetric,
   currentState,
@@ -183,7 +186,6 @@ import {
   pathExists,
   stateFromSessionRecords,
   safeSlug,
-  iterationLimitInfo,
   promotionGradeValue,
   readConfig as readSessionConfig,
 } from "../lib/session-core.js";
@@ -197,7 +199,6 @@ import {
 import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
-import { isBoundedNextAllowedByCapsule } from "../lib/session-decision-capsule.js";
 import {
   AUTORESEARCH_RESEARCH_DIR,
   researchDirPathForSession,
@@ -254,6 +255,9 @@ async function serveAutoresearchLazy(
   return (await import("../lib/live-server.js")).serveAutoresearch(...args);
 }
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
+export const AUTORESEARCH_RUNTIME_IDENTITY = {
+  pluginVersion: PLUGIN_VERSION,
+} as const;
 
 async function publicState(args: LooseObject): Promise<LooseObject> {
   return await readPublicState(args);
@@ -922,28 +926,20 @@ function guidedNextStep({
   });
 }
 
-function canonicalActionForGuidedSetup({
-  doctor,
-  explicitBenchmarkCommand,
-  stage,
-}: LooseObject): LooseObject | null {
+function canonicalActionForGuidedSetup({ doctor, stage }: LooseObject): LooseObject | null {
+  const plan = compactRecord(doctor?.decisionPlan);
+  const action = compactRecord(plan?.action);
+  const capabilities = compactRecord(plan?.capabilities);
+  const runPacket = compactRecord(capabilities?.["run-packet"]);
+  if (!action || runPacket?.status === "allowed") return null;
   if (
-    stage === "stale-last-run" ||
-    stage === "needs-log-decision" ||
-    stage === "needs-setup" ||
-    stage === "needs-benchmark-command"
+    (stage === "stale-last-run" && action.kind === "replace-packet") ||
+    (stage === "needs-log-decision" && action.kind === "log-decision") ||
+    (stage === "needs-setup" && action.kind === "setup") ||
+    (stage === "needs-benchmark-command" && action.kind === "configure-benchmark")
   ) {
     return null;
   }
-  const loopContract = doctor?.resolvedDecision?.loopContract || doctor?.loopContract || {};
-  const canonicalNextAction =
-    doctor?.resolvedDecision?.canonicalNextAction || doctor?.canonicalNextAction || null;
-  const action = blockingLoopAction(loopContract, canonicalNextAction);
-  if (!action || action.kind === "next-packet") return null;
-  if (stage === "needs-baseline" && action.kind === "preflight" && explicitBenchmarkCommand) {
-    return null;
-  }
-  if (loopContract.canRunNextPacket !== false) return null;
   return action;
 }
 
@@ -1201,7 +1197,6 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
   };
   const canonicalGuideAction = canonicalActionForGuidedSetup({
     doctor,
-    explicitBenchmarkCommand: Boolean(args.benchmarkCommand || args.benchmark_command),
     stage,
   });
   let nextStep = guidedNextStep({
@@ -1239,8 +1234,10 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
       issues: doctor.issues,
       warnings: doctor.warnings,
       nextAction: doctor.nextAction,
-      canonicalNextAction: doctor.resolvedDecision?.canonicalNextAction || null,
-      loopContract: doctor.resolvedDecision?.loopContract || null,
+      decisionPlanProjection:
+        doctor.decisionPlan?.kind === "decision-plan"
+          ? projectCompactDecisionPlan(doctor.decisionPlan as DecisionPlan)
+          : null,
     },
     lastRun: lastRun
       ? {
@@ -1281,7 +1278,8 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
 
 async function compactGuidedSetup({ workDir, config, readCache }: LooseObject) {
   const state: LooseObject = await publicState({ cwd: workDir, compact: true, readCache });
-  const canonicalNextAction = state.resolvedDecision?.canonicalNextAction || null;
+  const compactPlan = compactRecord(state.decisionPlanProjection);
+  const canonicalNextAction = compactRecord(compactPlan?.action);
   const shouldReadLastRun =
     state.requiresLogDecision === true ||
     ["log-decision", "stale-packet"].includes(String(canonicalNextAction?.kind || ""));
@@ -1396,10 +1394,9 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
   const commands = continuationCommands(workDir);
   const guidePacket = guide as LooseObject;
   const nextPacket = next as LooseObject;
-  const resolvedDecision =
-    nextPacket.resolvedDecision ||
-    state.resolvedDecision ||
-    resolveSessionDecision({ state: nextPacket, commands: nextPacket.commands });
+  const resolvedDecision = nextPacket.resolvedDecision || state.resolvedDecision || null;
+  const decisionPlanProjection =
+    nextPacket.decisionPlanProjection || state.decisionPlanProjection || null;
   const stateStorage = await preflightAutoresearchPrivateState(workDir).catch((error: unknown) => ({
     storageMode: "unavailable",
     targets: [],
@@ -1431,6 +1428,7 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
     ],
     state,
     sessionDecisionCapsule: state.sessionDecisionCapsule || null,
+    decisionPlanProjection,
     resolvedDecision,
     guidedSetup: guidePacket,
     doctor: {
@@ -1477,6 +1475,7 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
     kind: full.kind,
     generatedAt: full.generatedAt,
     operatorSnapshot,
+    decisionPlanProjection,
     resolvedDecision,
     nextAction: operatorSnapshot.nextAction,
     nextStep: {
@@ -1492,143 +1491,82 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
 }
 
 async function recommendNext(args: LooseObject): Promise<LooseObject> {
-  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-  const readCache = args.readCache;
+  const requestedCwd = String(args.working_dir || args.cwd || "");
   if (boolOption(args.compact, false) && !boolOption(args.full, false)) {
     const compact = await publicState({
-      cwd: workDir,
+      cwd: requestedCwd,
       compact: true,
       codexGoalObjective: args.codexGoalObjective || args.codex_goal_objective,
-      readCache,
     });
+    const workDir = String(compact.workDir || requestedCwd);
     const response = buildCompactRecommendNextResponse({
       workDir,
       compactState: compact,
     });
     if (boolOption(args.operatorChecklist ?? args.operator_checklist, false)) {
-      const action = (response.action || {}) as LooseObject;
-      const canonicalNextAction = (compact.resolvedDecision?.canonicalNextAction ||
-        {}) as LooseObject;
-      const loopContract = (response.resolvedDecision?.loopContract || null) as LooseObject | null;
+      const compactPlan = (compact.decisionPlanProjection || null) as LooseObject | null;
+      const requiredEvidence = (compactPlan?.requiredEvidence || {}) as LooseObject;
       return {
         ...response,
-        operatorChecklist: buildOperatorChecklist(action, {
-          workDir,
-          pluginRoot: PLUGIN_ROOT,
+        operatorChecklist: buildOperatorChecklist(compactPlan, {
           primaryCommand: (response.commands as LooseObject)?.primary,
-          loopContract,
-          source: recommendNextChecklistSource(action, canonicalNextAction, loopContract),
+          actionReason: response.nextAction,
+          source:
+            Array.isArray(requiredEvidence.diagnosticCodes) &&
+            requiredEvidence.diagnosticCodes.length > 0
+              ? requiredEvidence.diagnosticCodes.join(",")
+              : "decision-plan",
         }),
       };
     }
     return response;
   }
-  const viewModel = await dashboardViewModel(workDir, config, {
-    deliveryMode: "cli",
-    sourceCwd: workDir,
-    pluginVersion: PLUGIN_VERSION,
+  const state: LooseObject = await publicState({
+    cwd: requestedCwd,
+    jsonFull: true,
+    codexGoalObjective: args.codexGoalObjective || args.codex_goal_objective,
   });
-  const compact: LooseObject = await publicState({ cwd: workDir, compact: true, readCache });
-  const authority = selectRecommendNextRuntimeAuthority({ viewModel, compact }) as LooseObject;
-  const canonicalNextAction = authority.canonicalNextAction || null;
-  const action = canonicalNextAction
-    ? canonicalActionForRecommendNext(
-        canonicalNextAction,
-        viewModel.nextBestAction,
-        compact.commands,
-      )
-    : ((viewModel.nextBestAction || {}) as LooseObject);
-  const nextAction =
-    canonicalNextAction?.reason ||
-    action.detail ||
-    viewModel.readout?.nextAction ||
-    compact.nextAction;
-  const baseEnvelope = authority.decisionEnvelope || null;
-  const decisionEnvelope = baseEnvelope
-    ? {
-        ...baseEnvelope,
-        finalizationReadiness: viewModel.finalizePreview
-          ? {
-              available: true,
-              ready: viewModel.finalizePreview.ready === true,
-              productGradeReady: viewModel.finalizePreview.productGradeReady !== false,
-              productGradeIssue: viewModel.finalizePreview.productGradeIssue || null,
-              nextAction: viewModel.finalizePreview.nextAction || "",
-              warnings: viewModel.finalizePreview.warnings || [],
-            }
-          : baseEnvelope.finalizationReadiness,
-        nextAction,
-        canonicalNextAction: action.kind
-          ? {
-              ...baseEnvelope.canonicalNextAction,
-              ...canonicalNextAction,
-              command: action.command || canonicalNextAction?.command || "",
-            }
-          : baseEnvelope.canonicalNextAction,
-      }
-    : null;
-  const loopContract = decisionEnvelope?.loopContract || authority.loopContract || null;
+  const workDir = String(state.workDir || requestedCwd);
+  const decisionPlan = state.decisionPlan as DecisionPlan | undefined;
+  if (!decisionPlan || decisionPlan.kind !== "decision-plan") {
+    throw new TypeError("full recommend-next requires a canonical decision plan.");
+  }
+  const resolvedProjection = projectResolvedDecision(decisionPlan);
+  const action = resolvedProjection.canonicalNextAction as LooseObject;
+  const loopContract = resolvedProjection.loopContract as LooseObject;
   const operatorChecklist = boolOption(args.operatorChecklist ?? args.operator_checklist, false)
-    ? buildOperatorChecklist(action, {
-        workDir,
-        pluginRoot: PLUGIN_ROOT,
-        loopContract,
-        source: recommendNextChecklistSource(action, canonicalNextAction, loopContract),
+    ? buildOperatorChecklist(decisionPlan as unknown as LooseObject, {
+        actionReason: decisionPlan.action.reason,
+        source: decisionPlan.requiredEvidence.diagnosticCodes.join(",") || "decision-plan",
       })
     : undefined;
   return buildRecommendNextResponse({
-    ok: true,
+    ok: state.ok !== false,
     workDir,
     action,
-    nextAction,
-    whySafe:
-      action.explanation?.evidence ||
-      action.utilityCopy ||
-      "Derived from state, doctor warnings, ASI memory, and dashboard trust state.",
-    avoids:
-      action.explanation?.avoids ||
-      "Avoids running a packet before setup, stale-last-run, or trust blockers are resolved.",
-    proof:
-      action.explanation?.proof || "The next command should update state or clear the blocker.",
-    blockers: viewModel.trustBlockers || compact.blockers || [],
+    nextAction: decisionPlan.action.reason,
+    whySafe: "Projected from the coherent session snapshot and canonical decision plan.",
+    avoids: "Avoids reinterpreting dashboard, prose, or compatibility projections.",
+    proof: `Decision ${decisionPlan.decisionId}.`,
+    blockers: Array.isArray(loopContract?.blockers) ? loopContract.blockers : [],
     commands: {
-      primary: action.command || action.primaryCommand?.command || "",
-      ...compact.commands,
+      primary: action.command || "",
+      ...state.commands,
     },
-    nextStep:
-      viewModel.guidedSetup?.nextStep || recommendedActionNextStep(action, viewModel, compact),
-    compactState: boolOption(args.compact, false) ? compact : undefined,
-    resumeAudit: decisionEnvelope,
-    decisionEnvelope,
+    nextStep: action.kind ? { stage: state.decisionPlan?.phase, action } : null,
     operatorChecklist,
-    runtimeProvenance: authority.runtimeProvenance,
-    loopContract,
-    approvalLedger: compact.approvalLedger,
-    resourcePreflight: compact.resourcePreflight,
-    evidenceMaturity: compact.evidenceMaturity,
-    laneOrchestration: compact.laneOrchestration,
-    finalizationRunway: compact.finalizationRunway,
-    operatorReadout: compact.operatorReadout || decisionEnvelope?.operatorReadout || null,
-    laneLifecycle: compact.laneLifecycle,
-    packetDiagnostics: compact.packetDiagnostics,
-    portfolioRecommendation: compact.portfolioRecommendation,
-    sessionDecisionCapsule:
-      decisionEnvelope?.sessionDecisionCapsule || compact.sessionDecisionCapsule || null,
-    resolvedDecision: resolveSessionDecision({
-      state: {
-        resolvedDecision: authority.resolvedDecision,
-        decisionEnvelope,
-        blockers: viewModel.trustBlockers || compact.blockers || [],
-        nextAction,
-      },
-      decisionEnvelope,
-      commands: {
-        primary: action.command || action.primaryCommand?.command || "",
-        ...compact.commands,
-      },
-      runtimeProvenance: authority.runtimeProvenance,
-      finalization: viewModel.finalizePreview,
-    }),
+    runtimeProvenance: state.runtimeProvenance,
+    approvalLedger: state.approvalLedger,
+    resourcePreflight: state.resourcePreflight,
+    evidenceMaturity: state.evidenceMaturity,
+    laneOrchestration: state.laneOrchestration,
+    finalizationRunway: state.finalizationRunway,
+    operatorReadout: state.operatorReadout,
+    laneLifecycle: state.laneLifecycle,
+    packetDiagnostics: state.packetDiagnostics,
+    portfolioRecommendation: state.portfolioRecommendation,
+    sessionDecisionCapsule: state.sessionDecisionCapsule || null,
+    decisionPlan,
   });
 }
 
@@ -1638,45 +1576,6 @@ function compactRecord(value: unknown): LooseObject | null {
     : null;
 }
 
-function recommendNextChecklistSource(
-  action: LooseObject,
-  canonicalNextAction: LooseObject | null,
-  loopContract: LooseObject | null,
-) {
-  const actionSource = String(action.source || "");
-  return (
-    (actionSource === "decision-envelope" ? "" : actionSource) ||
-    String(canonicalNextAction?.triggeredBy || "") ||
-    String(loopContract?.strongestAction?.triggeredBy || "") ||
-    actionSource ||
-    "recommend-next"
-  );
-}
-
-function canonicalActionForRecommendNext(
-  canonical: LooseObject,
-  existing: unknown,
-  commands: unknown,
-): LooseObject {
-  const base = existing && typeof existing === "object" ? (existing as LooseObject) : {};
-  const command = resolveActionCommand(canonical.kind, commands, {
-    explicitCommand: canonical.command,
-  });
-  return {
-    ...base,
-    kind: canonical.kind || base.kind || "next-packet",
-    priority: String(canonical.priority ?? base.priority ?? "Next"),
-    title: actionTitleForKind(canonical.kind, String(base.title || "Next action")),
-    detail: canonical.reason || base.detail || "",
-    utilityCopy: base.utilityCopy || "Decision envelope is the authoritative next-action source.",
-    safeAction:
-      base.safeAction || actionSafeActionForKind(canonical.kind, String(canonical.kind || "")),
-    command,
-    primaryCommand: command ? { label: "Run", command } : base.primaryCommand || null,
-    source: "decision-envelope",
-  };
-}
-
 async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = await publicState({ cwd: workDir, compact: false, readCache: args.readCache });
@@ -1684,11 +1583,25 @@ async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
   const commands = continuationCommands(workDir);
   const importedGoal = importedCodexGoal(args);
   const objectiveDraft = codexGoalObjectiveDraft(state, importedGoal);
+  const completionClaimRequired =
+    boolOption(args.completionConfirmed ?? args.completion_confirmed, false) &&
+    Boolean(String(args.completionEvidence || args.completion_evidence || "").trim());
+  const canonicalDecision = await loadCanonicalSessionDecision({
+    requestedCwd: workDir,
+    facts: {
+      finalization: (state.finalizationPressure || null) as LooseObject | null,
+      finalizationClaimRequired: completionClaimRequired,
+    },
+  });
+  if (!canonicalDecision.ok) {
+    throw new Error(canonicalDecision.diagnostic.message);
+  }
   const completionAudit = codexGoalCompletionAudit({
     args,
     compact,
     importedGoal,
     state,
+    decisionPlan: canonicalDecision.plan,
   });
   const completionBlocker = completionAudit.canMarkCodexGoalComplete
     ? null
@@ -1713,6 +1626,7 @@ async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
     objectiveDraft,
     objectiveLength: objectiveDraft.length,
     completionAudit,
+    decisionPlanProjection: projectCompactDecisionPlan(canonicalDecision.plan),
     commands: {
       codexSlashGoal: `/goal ${objectiveDraft}`,
       explicitGoalToolPrompt: [
@@ -1831,9 +1745,11 @@ function truncateGoalObjective(text: string): string {
 function codexGoalCompletionAudit({
   args,
   compact,
+  decisionPlan,
   importedGoal,
   state,
 }: LooseObject): LooseObject {
+  const plan = decisionPlan as DecisionPlan;
   const completionEvidence = String(
     args.completionEvidence || args.completion_evidence || "",
   ).trim();
@@ -1841,42 +1757,18 @@ function codexGoalCompletionAudit({
     args.completionConfirmed ?? args.completion_confirmed,
     false,
   );
-  const evidenceBlockers = [
-    ...(Array.isArray(compact.blockers) ? compact.blockers : []),
-    ...(Array.isArray(state.researchIntegrity?.notPromotableBecause)
-      ? state.researchIntegrity.notPromotableBecause
-      : []),
-  ].filter(Boolean);
   const limitReached = compact.limitReached === true;
-  const finalizationPressure = state.resolvedDecision?.finalizationPressure || null;
-  const finalizationReady = finalizationPressure?.ready === true;
+  const finalizationReady =
+    plan.capabilities.finalize === "allowed" && plan.action.kind === "finalize";
   const qualityRound = state.qualityRound || {};
   const completionRequested = completionConfirmed && Boolean(completionEvidence);
-  const blockers = [
-    ...new Set([
-      ...evidenceBlockers.map((blocker) => String(blocker)),
-      ...goalCompletionUnresolvedBlockers({
-        completionClaimed: completionRequested,
-        blockers: evidenceBlockers,
-        finalizationReadiness: finalizationPressure,
-        preflight: state.preflight,
-        qualityRound,
-        warningDetails: state.warningDetails,
-        workflowFriction: state.workflowFriction || compact.workflowFriction,
-      }),
-    ]),
-  ];
+  const blockers = plan.requiredEvidence.diagnosticCodes;
   const importedGoalCompletable = importedGoal?.status === "active";
   const hasMeasuredEvidence =
     Number(state.runs) > 0 &&
     (state.best != null || state.development?.best != null || state.promotion?.best != null);
   const hasLocalCompletionEvidence =
     hasMeasuredEvidence || finalizationReady || (qualityRound.active && qualityRound.done === true);
-  const completionBlockingIssues = blockers.filter(
-    (blocker) =>
-      !/finalize-current-tree|current non-session branch diff/i.test(blocker) &&
-      !/No benchmark command is available for future packets/i.test(blocker),
-  );
   let status = "active";
   if (importedGoal?.status === "budget_limited" || limitReached) {
     status = "budget_limited";
@@ -1886,13 +1778,15 @@ function codexGoalCompletionAudit({
     status = "no_codex_goal_imported";
   } else if (completionRequested && !importedGoalCompletable) {
     status = "codex_goal_not_active";
+  } else if (completionRequested && plan.parentDisposition.mayClaimCompletion !== true) {
+    status = "blocked";
   } else if (
     completionRequested &&
     hasLocalCompletionEvidence &&
-    completionBlockingIssues.length === 0
+    plan.parentDisposition.mayClaimCompletion === true
   ) {
     status = "complete";
-  } else if (blockers.length) {
+  } else if (plan.parentDisposition.mayAnswer !== true) {
     status = "blocked";
   } else if (completionRequested) {
     status = "completion_evidence_insufficient";
@@ -1958,47 +1852,6 @@ function recommendedCodexGoalAction(status: string, importedGoal: LooseObject | 
     return "Do not mark complete. Add local Autoresearch evidence such as a promotion-grade logged metric, ready finalization preview, or explicitly reviewed closed quality round before completion.";
   }
   return "Continue toward the active Codex Goal using Autoresearch next-action evidence.";
-}
-
-function recommendedActionNextStep(
-  action: LooseObject,
-  viewModel: LooseObject,
-  compact: LooseObject,
-) {
-  const kind = String(action.kind || action.safeAction || "");
-  const stage = kind.includes("finalize")
-    ? "finalization-preview"
-    : kind.includes("segment")
-      ? "segment-reset"
-      : kind.includes("log")
-        ? "log-decision"
-        : kind.includes("serve") || kind.includes("dashboard")
-          ? "dashboard-serve"
-          : kind.includes("doctor")
-            ? "doctor"
-            : (viewModel.trustBlockers || compact.blockers || []).length
-              ? "blocker"
-              : "baseline-packet";
-  return sharedNextStep({
-    stage,
-    title: action.title || "Run next safe action",
-    reason: action.detail || viewModel.readout?.nextAction || compact.nextAction,
-    command: action.command || action.primaryCommand?.command || "",
-    toolName:
-      stage === "log-decision"
-        ? "log_experiment"
-        : stage === "finalization-preview"
-          ? "finalize_preview"
-          : stage === "segment-reset"
-            ? "new_segment"
-            : stage === "doctor"
-              ? "doctor_session"
-              : stage === "blocker"
-                ? ""
-                : "next_experiment",
-    safety:
-      stage === "log-decision" ? "git_mutation" : stage === "blocker" ? "read" : "process_start",
-  });
 }
 
 function compactHazards({ doctor, guide, state }: LooseObject) {
@@ -3095,7 +2948,6 @@ async function researchStart(args: LooseObject) {
     skipInit,
     skip_init: skipInit,
   });
-  const benchmarkCommand = await defaultBenchmarkCommand(workDir);
   const runtimeConfig = preserveExecutableMetric
     ? await writeRuntimeConfig(setup.sessionCwd, {
         name: configuredBeforeStart.name || args.name || `Deep research: ${goal}`,
@@ -3111,73 +2963,89 @@ async function researchStart(args: LooseObject) {
         metricName: "quality_gap",
         metricUnit: "gaps",
         bestDirection: "lower",
-        benchmarkCommand,
       });
-  const lint = await benchmarkLint({ cwd: workDir, metricName: primaryMetricName });
-  const doctor = await doctorSession({
-    cwd: workDir,
-    checkBenchmark: true,
-    explain: true,
-    metricName: primaryMetricName,
-  });
-  let baselinePacket: LooseObject | null = null;
-  let baselineLogResult: LooseObject | null = null;
-  if (shouldLogBaseline) {
-    baselinePacket = await nextExperiment({ cwd: workDir, compact: true });
-    baselineLogResult = await logExperiment({
-      cwd: workDir,
-      fromLast: true,
-      status: "measure",
-      description: `Baseline ${primaryMetricName} measurement`,
-    });
-  }
-  const full = {
-    ...output,
-    dryRun: false,
-    setup,
-    runtimeConfig,
-    benchmarkLint: lint,
-    doctor,
-    baselinePacket,
-    baselineLog: baselineLogResult,
-    baselineLogged: Boolean(baselineLogResult),
-  };
-  if (boolOption(args.jsonFull ?? args.json_full, false)) return full;
+  return await withAcceptedWorkdirResolution(
+    {
+      sessionCwd: setup.sessionCwd,
+      workDir,
+      config: runtimeConfig,
+      sessionPaths: resolveSessionPaths({ sessionCwd: setup.sessionCwd, workDir }),
+    },
+    async () => {
+      const lint = await benchmarkLint({ cwd: workDir, metricName: primaryMetricName });
+      const doctor = await doctorSession({
+        cwd: workDir,
+        checkBenchmark: true,
+        explain: true,
+        metricName: primaryMetricName,
+      });
+      let baselinePacket: LooseObject | null = null;
+      let baselineLogResult: LooseObject | null = null;
+      if (shouldLogBaseline) {
+        baselinePacket = await nextExperiment({ cwd: workDir, compact: true });
+        baselineLogResult = await logExperiment({
+          cwd: workDir,
+          fromLast: true,
+          status: "measure",
+          description: `Baseline ${primaryMetricName} measurement`,
+        });
+      }
+      const full = {
+        ...output,
+        dryRun: false,
+        setup,
+        runtimeConfig,
+        benchmarkLint: lint,
+        doctor,
+        baselinePacket,
+        baselineLog: baselineLogResult,
+        baselineLogged: Boolean(baselineLogResult),
+      };
+      if (boolOption(args.jsonFull ?? args.json_full, false)) return full;
+      return {
+        ...output,
+        dryRun: false,
+        warnings: output.warnings.length ? output.warnings : undefined,
+        baselineSkippedReason: output.baselineSkippedReason || undefined,
+        baselineLogged: full.baselineLogged,
+        stateStorage: compactStateStorage(setup.stateStorage),
+        setup: {
+          slug: setup.slug,
+          qualityGap: setup.qualityGap,
+          checkpoint: setup.checkpoint,
+        },
+        benchmarkLint: {
+          ok: lint.ok,
+          metricName: lint.metricName,
+        },
+        ...(baselinePacket ? { baselinePacket } : {}),
+        ...(baselineLogResult
+          ? {
+              baselineLog: {
+                ok: baselineLogResult.ok,
+                experiment: baselineLogResult.experiment || null,
+                continuation: baselineLogResult.continuation
+                  ? {
+                      shouldContinue: baselineLogResult.continuation.shouldContinue,
+                      nextAction: baselineLogResult.continuation.nextAction,
+                      stopReason: baselineLogResult.continuation.stopReason || "",
+                    }
+                  : null,
+              },
+            }
+          : {}),
+      };
+    },
+  );
+}
+
+function compactStateStorage(value: unknown): LooseObject | null {
+  const storage = compactRecord(value);
+  if (!storage) return null;
   return {
-    ...output,
-    dryRun: false,
-    baselineLogged: full.baselineLogged,
-    stateStorage: setup.stateStorage || null,
-    setup: {
-      slug: setup.slug,
-      qualityGap: setup.qualityGap,
-      checkpoint: setup.checkpoint,
-    },
-    benchmarkLint: {
-      ok: lint.ok,
-      metricName: lint.metricName,
-      parsedMetrics: lint.parsedMetrics || null,
-    },
-    doctor: {
-      ok: doctor.ok,
-      issues: Array.isArray(doctor.issues) ? doctor.issues.slice(0, 5) : [],
-      warnings: Array.isArray(doctor.warnings) ? doctor.warnings.slice(0, 5) : [],
-      nextAction: doctor.nextAction || "",
-    },
-    baselinePacket,
-    baselineLog: baselineLogResult
-      ? {
-          ok: baselineLogResult.ok,
-          experiment: baselineLogResult.experiment || null,
-          continuation: baselineLogResult.continuation
-            ? {
-                shouldContinue: baselineLogResult.continuation.shouldContinue,
-                nextAction: baselineLogResult.continuation.nextAction,
-                stopReason: baselineLogResult.continuation.stopReason || "",
-              }
-            : null,
-        }
-      : null,
+    storageMode: storage.storageMode || "unavailable",
+    targetCount: Array.isArray(storage.targets) ? storage.targets.length : 0,
+    warnings: Array.isArray(storage.warnings) ? storage.warnings.slice(0, 3) : [],
   };
 }
 
@@ -3224,20 +3092,6 @@ async function measureQualityGap(args: any) {
     roundDecision: summary.roundDecision,
     gaps: summary.gaps,
     metricOutput,
-  };
-}
-
-function decisionSetupState(guided: any, plan: any) {
-  const blockers = [...listOption(plan?.missing), ...listOption(plan?.missingEssentials)];
-  if (!guided?.stage && blockers.length === 0) return null;
-  return {
-    stage: guided?.stage || "",
-    blockers,
-    nextAction:
-      guided?.nextStep?.nextAction?.reason ||
-      guided?.nextAction ||
-      plan?.nextStep?.nextAction?.reason ||
-      "",
   };
 }
 
@@ -3376,6 +3230,10 @@ function dashboardStateFromLedgerFold(
 }
 
 async function dashboardViewModel(workDir: string, config: any, context: LooseObject = {}) {
+  const canonicalState = await publicState({
+    cwd: context.requestedCwd || workDir,
+    jsonFull: true,
+  });
   const readCache = context.readCache || createSessionReadCache();
   const ledgerFold = dashboardLedgerFoldFromContext(context.ledgerFold);
   const records = ledgerFold?.analysisRecords || loadSessionRecords(workDir, readCache);
@@ -3428,9 +3286,6 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     : finalizePreview;
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const activeProgress = await readActiveProgressSnapshot(workDir, config);
-  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun, config) : null;
-  const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
-  const continuation = loopContinuation(workDir, state, config, "dashboard");
   const setupPlanResult = await setupPlan({ cwd: workDir, readCache }).catch((error: any) => ({
     ok: false,
     warnings: [error.message],
@@ -3523,85 +3378,25 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       lastRun?.packetEvidence?.progressSnapshot ||
       null,
   });
-  const readModel = buildSessionReadModel({
-    workDir,
-    config,
-    state,
-    records,
-    codexGoalObjective: context.codexGoalObjective || context.codex_goal_objective,
-    parallelLanes,
-    workflowFriction,
-    finalization: effectiveFinalizePreview,
-    commands: continuationCommands(workDir),
-    processProgress: activeProgress,
-    qualityGap,
-    laneLifecycle,
-    packetDiagnostics,
-    runtimeProvenance: currentRuntimeProvenance,
-    runtimeDriftSummary: guidance.runtimeDriftSummary,
-    sourceCleanliness,
+  const controlPlane = {
+    goalContract: canonicalState.goalContract || null,
+    approvalLedger: canonicalState.approvalLedger || null,
+    resourcePreflight: canonicalState.resourcePreflight || null,
+    evidenceMaturity: canonicalState.evidenceMaturity || null,
+    laneOrchestration: canonicalState.laneOrchestration || null,
+    finalizationRunway: canonicalState.finalizationRunway || null,
+  };
+  const commands = dashboardCommands(workDir, qualityGap);
+  const portfolioRecommendation = recommendPortfolioDirection({
+    runtimeDrift: guidance.runtimeDriftSummary,
     gateQuality: guidance.gateQuality,
     preflight: guidance.preflight,
-  });
-  const controlPlane = readModel.controlPlane;
-  const commands = dashboardCommands(workDir, qualityGap);
-  const guidedCommands = (dashboardGuidedSetup as LooseObject).commands || {};
-  const canonicalCommandHints = {
-    ...commandLookupObject(commands),
-    replaceLast: replaceLastRunCommand || guidedCommands.replaceLast || "",
-    logLast: guidedCommands.logLast || "",
-    setup: guidedCommands.setup || "",
-  };
-  const decisionInput = {
-    state: {
-      ...stateWithQualityGap,
-      ...controlPlane,
-      limit: iterationLimitInfo(state, config),
-    },
-    nextAction: continuation.nextAction,
-    lastRunFreshness,
-    warningDetails: warnings,
-    scaffoldHealth,
-    researchIntegrity,
-    qualityGap,
-    finalization: effectiveFinalizePreview,
-    experimentEconomics,
-    salvageCandidates: partialResults.candidates,
-    workflowFriction,
+    laneLifecycle,
+    laneResults: laneLifecycle.latestResults,
+    packetDiagnostics,
     experimentMemory: memory,
-    setupState: decisionSetupState(dashboardGuidedSetup, dashboardSetupPlan),
-    watchdog: watchdogSummary,
-  };
-  const preliminaryDecisionEnvelope = buildDecisionEnvelope(decisionInput);
-  const portfolioRecommendation =
-    preliminaryDecisionEnvelope.loopContract?.canRunNextPacket === false
-      ? null
-      : recommendPortfolioDirection({
-          runtimeDrift: guidance.runtimeDriftSummary,
-          gateQuality: guidance.gateQuality,
-          preflight: guidance.preflight,
-          laneLifecycle,
-          laneResults: laneLifecycle.latestResults,
-          packetDiagnostics,
-          experimentMemory: memory,
-          best: state.best,
-          current: state.current,
-        });
-  const decisionEnvelope = withCanonicalActionCommand(
-    portfolioRecommendation
-      ? buildDecisionEnvelope({
-          ...decisionInput,
-          state: { ...decisionInput.state, portfolioRecommendation },
-        })
-      : preliminaryDecisionEnvelope,
-    canonicalCommandHints,
-  );
-  const resolvedReadModel = withResolvedSessionDecision(readModel, {
-    state: { ...decisionInput.state, decisionEnvelope },
-    decisionEnvelope,
-    commands: canonicalCommandHints,
-    runtimeProvenance: currentRuntimeProvenance,
-    finalization: effectiveFinalizePreview,
+    best: state.best,
+    current: state.current,
   });
   const enrichedState = {
     ...state,
@@ -3622,8 +3417,11 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     workflowFriction,
     portfolioRecommendation,
     ...controlPlane,
-    decisionEnvelope,
-    resolvedDecision: resolvedReadModel.resolvedDecision,
+    decisionPlanProjection:
+      canonicalState.decisionPlan?.kind === "decision-plan"
+        ? projectDashboardDecisionPlan(canonicalState.decisionPlan as DecisionPlan)
+        : null,
+    resolvedDecision: canonicalState.resolvedDecision || null,
   };
   return buildDashboardViewModelLazy({
     state: enrichedState as any,
@@ -3823,6 +3621,8 @@ function redactLastRunPacketForStorage(packet: LooseObject): LooseObject {
   }
   redactRunPacketProcessEvidence(stored.run, context);
   redactBenchmarkContractForStorage(stored.run?.benchmarkContract, context);
+  redactAcceptedEvaluatorForStorage(stored.run?.acceptedEvaluator, context);
+  redactAcceptedChecksForStorage(stored.run?.acceptedChecks, context);
   if (stored.doctor) {
     redactKnownOptionFileFields(stored.doctor, context);
     stored.doctor = redactEvidenceObject(stored.doctor, context);
@@ -4005,6 +3805,57 @@ function redactBenchmarkContractForStorage(
   }
 }
 
+function redactAcceptedEvaluatorForStorage(
+  value: LooseObject | null | undefined,
+  context: LooseObject,
+) {
+  if (!value || typeof value !== "object") return;
+  redactAcceptedExecutionForStorage(value.execution, context);
+}
+
+function redactAcceptedChecksForStorage(value: unknown, context: LooseObject) {
+  if (!Array.isArray(value)) return;
+  for (const check of value) {
+    if (!check || typeof check !== "object") continue;
+    redactAcceptedExecutionForStorage((check as LooseObject).execution, context);
+  }
+}
+
+function redactAcceptedExecutionForStorage(
+  value: LooseObject | null | undefined,
+  context: LooseObject,
+) {
+  if (!value || typeof value !== "object") return;
+  const command = value.command as LooseObject | undefined;
+  if (command && typeof command === "object") {
+    if (typeof command.script === "string") {
+      command.script = redactCommandDisplay(command.script, context);
+    }
+    if (typeof command.executable === "string") {
+      command.executable = redactEvidenceText(command.executable, context);
+    }
+    if (Array.isArray(command.args)) {
+      command.args = command.args.map((argument) => redactEvidenceText(argument, context));
+    }
+  }
+  const environment = value.environment as LooseObject | undefined;
+  const source = environment?.source as LooseObject | undefined;
+  if (source?.kind === "file" && typeof source.path === "string") {
+    source.path = "<env-file>";
+  }
+  if (Array.isArray(value.protectedInputs)) {
+    for (const input of value.protectedInputs) {
+      if (!input || typeof input !== "object") continue;
+      const protectedInput = input as LooseObject;
+      if (typeof protectedInput.path !== "string") continue;
+      protectedInput.path =
+        protectedInput.role === "environment-file"
+          ? "<env-file>"
+          : redactPathDisplay(protectedInput.path, context.workDir);
+    }
+  }
+}
+
 const CLI_RESPONSE_TEXT_EVIDENCE_KEYS = new Set([
   "latestOutputTail",
   "outputPreview",
@@ -4040,6 +3891,8 @@ function redactCliResponseNode(value: unknown, context: LooseObject): void {
     redactBenchmarkContractForStorage(node.history.benchmarkContract, localContext);
   }
   redactBenchmarkContractForStorage(node.benchmarkContract, localContext);
+  redactAcceptedEvaluatorForStorage(node.acceptedEvaluator, localContext);
+  redactAcceptedChecksForStorage(node.acceptedChecks, localContext);
 
   for (const [key, child] of Object.entries(node)) {
     if (typeof child === "string") {
@@ -4242,20 +4095,6 @@ async function researchFanout(args: LooseObject) {
     fanoutPlan: plan,
     parallelLanes: lanes,
   };
-}
-
-function commandLookupObject(commands: unknown): LooseObject {
-  if (Array.isArray(commands)) {
-    const result: LooseObject = {};
-    for (const item of commands) {
-      const label = String(item?.label || "")
-        .replace(/\s+([a-z])/g, (_match, char) => String(char).toUpperCase())
-        .replace(/^[A-Z]/, (char) => char.toLowerCase());
-      if (label) result[label] = item.command || "";
-    }
-    return result;
-  }
-  return commands && typeof commands === "object" ? (commands as LooseObject) : {};
 }
 
 function actionMessage(value: unknown): string {
@@ -4724,20 +4563,23 @@ async function nextExperimentWithActiveProgress(args: any, markProgressOwned: ()
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const retainedProgress = await readActiveProgressSnapshot(workDir, config);
   if (retainedProgress?.exitState === "termination_failed") {
-    const state = currentState(workDir);
-    const decisionEnvelope = withCanonicalActionCommand(
-      buildDecisionEnvelope({
-        state,
-        nextAction: "Prove the prior process tree is gone before another packet.",
-        experimentEconomics: { progress: retainedProgress },
-      }),
-      continuationCommands(workDir),
-    );
-    const loopContract = compactRecord(decisionEnvelope.loopContract) || {};
-    const blockingAction = blockingLoopAction(
-      loopContract,
-      compactRecord(decisionEnvelope.canonicalNextAction),
-    );
+    const canonical = await loadCanonicalSessionDecision({
+      requestedCwd: String(args.working_dir || args.cwd || workDir),
+      allowOutsideWorkdir: boolOption(
+        args.allowOutsideWorkdir ?? args.allow_outside_workdir,
+        false,
+      ),
+    });
+    if (!canonical.ok) {
+      return {
+        ok: false,
+        workDir,
+        refused: true,
+        code: canonical.diagnostic.code,
+        diagnostic: canonical.diagnostic,
+      };
+    }
+    const decision = projectResolvedDecision(canonical.plan);
     return {
       ok: false,
       workDir,
@@ -4745,17 +4587,15 @@ async function nextExperimentWithActiveProgress(args: any, markProgressOwned: ()
       code: "termination_failed",
       run: null,
       decision: null,
-      blockingAction,
-      loopContract,
-      decisionEnvelope,
+      blockingAction: decision.canonicalNextAction,
+      decisionPlanProjection: projectCompactDecisionPlan(canonical.plan),
+      resolvedDecision: decision,
       progress: retainedProgress,
-      nextAction: blockingAction?.reason || "Prove the prior process tree is gone.",
+      nextAction: canonical.plan.action.reason,
       clearingCondition:
         "Verify the reported PID and descendants are absent, then clear the retained progress marker before retrying next.",
       commandHint: continuationCommands(workDir).state,
-      continuation: loopContinuation(workDir, state, config, "blocked", {
-        stopReason: blockingAction?.reason || "Prior process-tree termination is unproven.",
-      }),
+      continuation: projectLoopContinuation(canonical.plan),
     };
   }
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
@@ -4776,170 +4616,91 @@ async function nextExperimentWithActiveProgress(args: any, markProgressOwned: ()
     acceptedEvaluatorCommand,
     acceptedChecksCommand,
   );
-  markProgressOwned();
-  await writeNextPreflightProgressSnapshot(workDir, authorityArgs, config);
   const doctor = acceptedContractDoctorView(
     await doctorSession({
       ...authorityArgs,
       check_benchmark: false,
       checkBenchmark: false,
       jsonFull: true,
+      acceptedContractDigest: contractAuthority.contract.contractDigest,
     }),
   );
-  if (!doctor.ok) {
-    const loopContract = doctor.resolvedDecision?.loopContract || doctor.loopContract || {};
-    const blockingAction = blockingLoopAction(
-      loopContract,
-      doctor.resolvedDecision?.canonicalNextAction || doctor.canonicalNextAction,
-    );
-    if (
-      shouldRefuseBeforeRun({
-        blockingAction,
-        loopContract,
-        capsule: currentState(doctor.workDir).sessionDecisionCapsule || null,
-        args,
-      })
-    ) {
-      const state = currentState(doctor.workDir);
-      const capsule = state.sessionDecisionCapsule || null;
-      return {
+  const preflightPlan = doctor.decisionPlan as DecisionPlan | undefined;
+  if (!preflightPlan) {
+    return {
+      ok: false,
+      workDir: doctor.workDir || workDir,
+      refused: true,
+      code: "canonical_decision_unavailable",
+      doctor,
+      run: null as LooseObject | null,
+      decision: null as LooseObject | null,
+    };
+  }
+  if (preflightPlan.capabilities["run-packet"] === "blocked") {
+    const resolvedDecision = projectResolvedDecision(preflightPlan);
+    return withCommandDecisionDiagnostics(
+      {
         ok: false,
         workDir: doctor.workDir,
         refused: true,
-        code: "next_blocked_by_loop_contract",
+        code: "next_blocked_by_decision_plan",
         doctor,
         run: null as LooseObject | null,
         decision: null as LooseObject | null,
-        blockingAction,
-        loopContract,
-        sessionDecisionCapsule: capsule,
-        decisionEnvelope: {
-          loopContract,
-          canonicalNextAction: blockingAction,
-          finalizationReadiness: doctor.resolvedDecision?.finalizationPressure || null,
-        },
-        nextAction:
-          blockingAction.reason ||
-          capsule?.nextExperiment ||
-          "Resolve loop-governance blockers before running another packet.",
+        blockingAction: resolvedDecision.canonicalNextAction,
+        decisionPlanProjection: projectCompactDecisionPlan(preflightPlan),
+        resolvedDecision,
+        nextAction: preflightPlan.action.reason,
         clearingCondition:
-          capsule?.enforcement?.clearingCondition ||
-          "Resolve the loop-governance blocker or warning, then retry next.",
-        commandHint:
-          blockingAction.command ||
-          capsule?.enforcement?.commandHint ||
-          continuationCommands(doctor.workDir).state,
-        continuation: loopContinuation(doctor.workDir, state, config, "blocked", {
-          stopReason:
-            blockingAction.reason ||
-            capsule?.nextExperiment ||
-            "Loop contract blocked the next packet.",
-        }),
-      };
-    }
-    return {
-      ok: false,
-      workDir: doctor.workDir,
-      doctor,
-      run: null as LooseObject | null,
-      decision: null as LooseObject | null,
-      nextAction: doctor.nextAction,
-      continuation: loopContinuation(
-        doctor.workDir,
-        currentState(doctor.workDir),
-        config,
-        "blocked",
-        {
-          stopReason: doctor.nextAction,
-        },
-      ),
-    };
+          "Resolve the capability diagnostic recorded by the canonical decision, then retry next.",
+        commandHint: preflightPlan.action.command || continuationCommands(doctor.workDir).state,
+        continuation: projectLoopContinuation(preflightPlan),
+      },
+      commandDecisionDiagnosticsFrom(doctor),
+    );
   }
-  const stateBeforeRun = acceptedContractStateView(currentState(workDir));
-  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun, config) : null;
-  const preflightEnvelope = withCanonicalActionCommand(
-    buildDecisionEnvelope({
-      state: stateBeforeRun,
-      nextAction: "Run the next measured packet.",
-      lastRunFreshness,
-      finalization: doctor.resolvedDecision?.finalizationPressure || null,
-    }),
-    continuationCommands(workDir),
-  );
-  const loopContract = compactRecord(preflightEnvelope.loopContract) || {};
-  const blockingAction = blockingLoopAction(
-    loopContract,
-    compactRecord(preflightEnvelope.canonicalNextAction),
-  );
-  const capsule = stateBeforeRun.sessionDecisionCapsule || null;
-  const boundedNextAllowed =
-    blockingAction?.kind === "decision-capsule" && isBoundedNextAllowedByCapsule(capsule, args);
-  const loopBlockers = Array.isArray(loopContract.blockers) ? loopContract.blockers : [];
-  const stalePacketReplacementAllowed =
-    blockingAction?.kind === "stale-packet" &&
-    loopBlockers.length > 0 &&
-    loopBlockers.every((blocker: LooseObject) => blocker?.kind === "stale-packet");
-  if (
-    loopContract.canRunNextPacket === false &&
-    !boundedNextAllowed &&
-    !stalePacketReplacementAllowed
-  ) {
-    return {
-      ok: false,
-      workDir,
-      refused: true,
-      code: "next_blocked_by_loop_contract",
-      doctor,
-      run: null as LooseObject | null,
-      decision: null as LooseObject | null,
-      blockingAction,
-      loopContract,
-      sessionDecisionCapsule: capsule,
-      decisionEnvelope: preflightEnvelope,
-      nextAction:
-        blockingAction?.reason ||
-        capsule?.nextExperiment ||
-        "Resolve loop-governance blockers before running another packet.",
-      clearingCondition:
-        capsule?.enforcement?.clearingCondition ||
-        "Resolve the loop-governance blocker or warning, then retry next.",
-      commandHint:
-        blockingAction?.command ||
-        capsule?.enforcement?.commandHint ||
-        continuationCommands(workDir).state,
-      continuation: loopContinuation(workDir, stateBeforeRun, config, "blocked", {
-        stopReason:
-          blockingAction?.reason ||
-          capsule?.nextExperiment ||
-          "Loop contract blocked the next packet.",
-      }),
-    };
-  }
+  const fixedControlBlock = fixedControlBlockForCommand(acceptedEvaluatorCommand, config, args);
+  if (fixedControlBlock) throw fixedControlRerunError(fixedControlBlock);
   const preRunGit = await lastRunGitSnapshot(workDir, config).catch((error: any) => ({
     inside: null as boolean | null,
     error: error.message || String(error),
   }));
   if (gitSnapshotContainsDirtyFingerprintTruncation(preRunGit)) {
-    const nextAction =
-      "Clean or narrow the dirty tree before running next; dirty file fingerprints were truncated before packet freshness could be proven.";
-    return {
-      ok: false,
-      workDir,
-      refused: true,
-      code: "next_blocked_by_truncated_fingerprints",
-      doctor,
-      run: null as LooseObject | null,
-      decision: null as LooseObject | null,
-      git: preRunGit,
-      nextAction,
-      clearingCondition:
-        "Commit, stash, remove, or scope the dirty files so Autoresearch can fingerprint the packet inputs, then retry next.",
-      commandHint: continuationCommands(workDir).state,
-      continuation: loopContinuation(workDir, stateBeforeRun, config, "blocked", {
-        stopReason: nextAction,
-      }),
-    };
+    const dirtySourceDiagnostic = decisionDiagnostic("dirty-source", {
+      message:
+        "Clean or narrow the dirty tree before running next; dirty file fingerprints were truncated before packet freshness could be proven.",
+    });
+    const truncatedDecision = await loadCanonicalSessionDecision({
+      requestedCwd: String(args.working_dir || args.cwd || workDir),
+      facts: {
+        diagnostics: [dirtySourceDiagnostic],
+      },
+    });
+    const plan = truncatedDecision.ok ? truncatedDecision.plan : preflightPlan;
+    return withCommandDecisionDiagnostics(
+      {
+        ok: false,
+        workDir,
+        refused: true,
+        code: "next_blocked_by_truncated_fingerprints",
+        doctor,
+        run: null as LooseObject | null,
+        decision: null as LooseObject | null,
+        git: preRunGit,
+        decisionPlanProjection: projectCompactDecisionPlan(plan),
+        resolvedDecision: projectResolvedDecision(plan),
+        nextAction: plan.action.reason,
+        clearingCondition:
+          "Commit, stash, remove, or scope the dirty files so Autoresearch can fingerprint the packet inputs, then retry next.",
+        commandHint: continuationCommands(workDir).state,
+        continuation: projectLoopContinuation(plan),
+      },
+      [dirtySourceDiagnostic],
+    );
   }
+  markProgressOwned();
+  await writeNextPreflightProgressSnapshot(workDir, authorityArgs, config);
   const run = await runExperiment(args);
   const stateBeforeLog = currentState(run.workDir);
   const memory = buildExperimentMemory({
@@ -5022,12 +4783,12 @@ async function nextExperimentWithActiveProgress(args: any, markProgressOwned: ()
       : run.ok
         ? `Log this run as ${decision.safeSuggestedStatus || "keep/discard"} unless review evidence says otherwise, include ASI, then continue with the next ${memory.diversityGuidance?.label || "diversity"} lane.`
         : `Log this run as ${run.logHint.status} with rollback ASI before trying another change.`,
-    continuation: loopContinuation(workDir, currentState(workDir), config, "needs-log-decision", {
-      requiredStatus: run.logHint.status,
-    }),
   };
   await writeLastRunPacket(run.workDir, packet);
-  return boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet;
+  return withCommandDecisionDiagnostics(
+    boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet,
+    commandDecisionDiagnosticsFrom(doctor),
+  );
 }
 
 function acceptedContractAuthorityArgs(
@@ -5067,28 +4828,16 @@ function acceptedContractDoctorView(doctor: LooseObject): LooseObject {
   const warningDetails = (Array.isArray(doctor.warningDetails) ? doctor.warningDetails : []).filter(
     (detail: LooseObject) => detail?.code !== "benchmark_contract_changed",
   );
-  return {
-    ...doctor,
-    ok: issues.length === 0,
-    issues,
-    warnings,
-    warningDetails,
-  };
-}
-
-function acceptedContractStateView(state: LooseObject): LooseObject {
-  const warningDetails = (Array.isArray(state.warningDetails) ? state.warningDetails : []).filter(
-    (detail: LooseObject) => detail?.code !== "benchmark_contract_changed",
+  return withCommandDecisionDiagnostics(
+    {
+      ...doctor,
+      ok: issues.length === 0,
+      issues,
+      warnings,
+      warningDetails,
+    },
+    commandDecisionDiagnosticsFrom(doctor),
   );
-  const sourceCleanliness = compactRecord(state.sourceCleanliness);
-  const warningCodes = (
-    Array.isArray(sourceCleanliness?.warningCodes) ? sourceCleanliness.warningCodes : []
-  ).filter((code: unknown) => code !== "benchmark_contract_changed");
-  return {
-    ...state,
-    warningDetails,
-    ...(sourceCleanliness ? { sourceCleanliness: { ...sourceCleanliness, warningCodes } } : {}),
-  };
 }
 
 async function writeNextPreflightProgressSnapshot(
@@ -5123,37 +4872,6 @@ async function writeNextPreflightProgressSnapshot(
     () => progressWriter.close(),
     "Failed to close active progress writer",
   );
-}
-
-function blockingLoopAction(loopContract: LooseObject, canonicalNextAction: LooseObject | null) {
-  const strongestAction = loopContract?.strongestAction || null;
-  if (
-    strongestAction &&
-    canonicalNextAction &&
-    strongestAction.kind === canonicalNextAction.kind &&
-    canonicalNextAction.command &&
-    !strongestAction.command
-  ) {
-    return { ...strongestAction, command: canonicalNextAction.command };
-  }
-  return strongestAction || canonicalNextAction || null;
-}
-
-function shouldRefuseBeforeRun({
-  blockingAction,
-  loopContract,
-  capsule,
-  args,
-}: {
-  blockingAction: LooseObject | null;
-  loopContract: LooseObject;
-  capsule: LooseObject | null;
-  args: LooseObject;
-}) {
-  if (!blockingAction || loopContract.canRunNextPacket !== false) return false;
-  if (blockingAction.kind === "current-tree-finalization") return true;
-  if (blockingAction.kind !== "decision-capsule") return false;
-  return !isBoundedNextAllowedByCapsule(capsule as any, args);
 }
 
 function compactNextExperimentPacket(packet: LooseObject) {
@@ -5322,31 +5040,71 @@ async function executeAutoresearchCli(
       setupResearchSession,
       setupSession,
     });
-    const execute = async () => {
+    const requestedCwd = args.workingDir || args.working_dir || args.cwd;
+    const execute = async (lockedWorkDir = "", commandArgs: LooseObject = args) => {
       try {
-        const outcome = (await runCliCommand(command, args, handlers)) as LooseObject;
+        const outcome = (await runCliCommand(command, commandArgs, handlers)) as LooseObject;
         if (command !== "next") {
           const evidence = terminationFailureEvidence(outcome.result);
           if (evidence) {
-            const resolution = resolveWorkDir(args.workingDir || args.working_dir || args.cwd);
-            await persistTerminationFailure(resolution.workDir, command, evidence);
+            const workDir = lockedWorkDir || resolveWorkDir(requestedCwd).workDir;
+            await persistTerminationFailure(workDir, command, evidence);
           }
         }
         return outcome;
       } catch (error: any) {
         const evidence = terminationFailureEvidence(error);
         if (evidence) {
-          const resolution = resolveWorkDir(args.workingDir || args.working_dir || args.cwd);
-          await persistTerminationFailure(resolution.workDir, command, evidence);
+          const workDir = lockedWorkDir || resolveWorkDir(requestedCwd).workDir;
+          await persistTerminationFailure(workDir, command, evidence);
         }
         throw error;
       }
     };
     let outcome: LooseObject;
-    if (commandRequiresSessionMutationLock(command, args)) {
-      const resolution = resolveWorkDir(args.workingDir || args.cwd);
+    const requiresMutationLock = commandRequiresSessionMutationLock(command, args);
+    if (requiresMutationLock && !commandUsesSessionDecisionProtocol(command, args)) {
+      throw new Error(
+        `Command-table error: ${command} requires the session lock but does not declare the session decision protocol.`,
+      );
+    }
+    if (requiresMutationLock) {
+      // This first resolution selects the existing lock only. The protocol re-captures the
+      // routing config from requestedCwd while holding that lock and rejects any drift before
+      // the handler can mutate the session.
+      const resolution = resolveWorkDir(requestedCwd);
       const lock = await sessionMutationLockLocation(resolution.workDir);
-      outcome = await withSessionMutationLock(lock.root, command, execute, lock.path);
+      const protocol = await withSessionMutationLock(
+        lock.root,
+        command,
+        async () => {
+          return await runCommandDecisionProtocol({
+            command,
+            requestedCwd: String(requestedCwd || process.cwd()),
+            expectedWorkDir: resolution.workDir,
+            allowOutsideWorkdir: boolOption(args.allowOutsideWorkdir, false),
+            mutate: async (accepted) => {
+              const acceptedArgs: LooseObject = { ...args, cwd: accepted.sessionCwd };
+              delete acceptedArgs.workingDir;
+              delete acceptedArgs.working_dir;
+              return await withAcceptedWorkdirResolution(
+                {
+                  sessionCwd: accepted.sessionCwd,
+                  workDir: accepted.workDir,
+                  config: accepted.config,
+                  sessionPaths: resolveSessionPaths({
+                    sessionCwd: accepted.sessionCwd,
+                    workDir: accepted.workDir,
+                  }),
+                },
+                async () => await execute(accepted.workDir, acceptedArgs),
+              );
+            },
+          });
+        },
+        lock.path,
+      );
+      outcome = attachCommandDecisionProtocol(protocol);
     } else {
       outcome = await execute();
     }
@@ -5357,6 +5115,34 @@ async function executeAutoresearchCli(
     writeStdout(JSON.stringify(redactCliResponseForOutput(outcome.result), null, 2));
     if (outcome.keepAlive) return await new Promise(() => {});
   });
+}
+
+function attachCommandDecisionProtocol(
+  protocol: CommandDecisionProtocolResult<LooseObject>,
+): LooseObject {
+  const outcome = protocol.result;
+  const result =
+    outcome.result && typeof outcome.result === "object" && !Array.isArray(outcome.result)
+      ? outcome.result
+      : outcome.text != null
+        ? { output: outcome.text }
+        : { value: outcome.result ?? null };
+  const {
+    decisionPlanProjection: _decisionPlanProjection,
+    resolvedDecision: _resolvedDecision,
+    continuation: _continuation,
+    ...commandResult
+  } = result;
+  return {
+    ...outcome,
+    text: undefined,
+    result: {
+      ...commandResult,
+      preconditionDecision: protocol.preconditionDecision,
+      mutation: protocol.mutation,
+      resultingDecision: protocol.resultingDecision,
+    },
+  };
 }
 
 async function main() {

@@ -123,17 +123,28 @@ export async function serveHtml(html, failureHtml, livePayload) {
       liveRequestCount += 1;
       if (liveRequestCount === 2) {
         setTimeout(() => {
-          response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+          response.writeHead(200, {
+            "content-type": "application/json; charset=utf-8",
+          });
           response.end(JSON.stringify(livePayload));
         }, 300);
         return;
       }
       if (liveRequestCount >= 3) {
-        response.writeHead(503, { "content-type": "application/json; charset=utf-8" });
-        response.end(JSON.stringify({ message: "Fixture refresh failed.", retryable: false }));
+        response.writeHead(503, {
+          "content-type": "application/json; charset=utf-8",
+        });
+        response.end(
+          JSON.stringify({
+            message: "Fixture refresh failed.",
+            retryable: false,
+          }),
+        );
         return;
       }
-      response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      response.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+      });
       response.end(JSON.stringify(livePayload));
       return;
     }
@@ -161,6 +172,7 @@ function dashboardDocument(template, entries, meta, css, app) {
 
 function dashboardViewModel() {
   return {
+    decisionPlanProjection: canonicalDecisionPlanProjection(),
     decisionEnvelope: {
       resolvedStatus: "blocked",
       strongestBlocker: "Promotion proof is missing.",
@@ -175,12 +187,69 @@ function dashboardViewModel() {
       title: "Repeat the best packet",
       detail: "Confirm the kept path before promotion.",
     },
-    evidenceReadout: { label: "promotion_eligible", title: "Promotion eligible", promotable: true },
+    evidenceReadout: {
+      label: "promotion_eligible",
+      title: "Promotion eligible",
+      promotable: true,
+    },
     evidenceLedger: {
       counts: { accepted: 4_500, provisional: 1, rejected: 500, superseded: 0 },
       acceptedCurrent: 4_500,
     },
     finalizationPressure: { status: "medium", recommendation: "Repeat first." },
-    watchdogSummary: { status: "tracking", recommendation: "Continue from the decision." },
+    watchdogSummary: {
+      status: "tracking",
+      recommendation: "Continue from the decision.",
+    },
+  };
+}
+
+function canonicalDecisionPlanProjection() {
+  return {
+    kind: "dashboard-decision-plan-projection",
+    projection: "dashboard",
+    compilerSchemaVersion: 1,
+    generationId: "generation-browser-dashboard",
+    decisionId: "decision-browser-dashboard-quality-evidence",
+    phase: "direct-work",
+    action: {
+      kind: "collect-evidence",
+      command: "",
+      commandDigest: "redacted-command-digest",
+    },
+    primaryBlockerCode: "quality-evidence-required",
+    capabilities: {
+      "mutate-session": "allowed",
+      "run-packet": "allowed",
+      "authorize-keep": "blocked",
+      "transition-segment": "allowed",
+      finalize: "blocked",
+      "parent-final-answer": "blocked",
+    },
+    requiredEvidence: {
+      preconditionEpoch: "accepted-contract:browser-fixture",
+      acceptedCheckIdentities: ["checks@browser-fixture"],
+      diagnosticCodes: ["quality-evidence-required"],
+      capabilityEffectCodes: [
+        "quality-evidence-required:authorize-keep:blocked",
+        "quality-evidence-required:finalize:blocked",
+        "quality-evidence-required:parent-final-answer:blocked",
+      ],
+    },
+    loopDisposition: {
+      kind: "blocked",
+      canRunPacket: true,
+      shouldContinue: false,
+    },
+    parentDisposition: {
+      kind: "block-final-answer",
+      mayAnswer: false,
+      mayClaimCompletion: false,
+    },
+    contractDigest: "contract-browser-fixture",
+    evaluatorIdentity: "evaluator@browser-fixture",
+    outcome: "unknown",
+    learning: { kind: "none", consecutiveNoLearningCandidates: 0 },
+    display: { actionReason: "Confirm the kept path before promotion." },
   };
 }

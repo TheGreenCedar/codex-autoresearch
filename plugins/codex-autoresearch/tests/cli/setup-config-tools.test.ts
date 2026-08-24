@@ -195,18 +195,26 @@ test("checks-inspect catches malformed cargo checks and broad failures", async (
 
 test("promote-gate dry-runs and appends measurement gate metadata", async () => {
   await withTempDir("promote-gate", async (dir) => {
-    await setupFixture(dir, { name: "gate", metricName: "score" });
-    await runCli([
+    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')"`;
+    await setupFixture(dir, {
+      name: "gate",
+      metricName: "score",
+      acceptedContract: true,
+      benchmarkCommand,
+    });
+    const packet = await runCli(["next", "--cwd", dir]);
+    assert.equal(packet.code, 0, packet.stderr);
+    const logged = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Baseline",
     ]);
+    assert.equal(logged.code, 0, logged.stderr);
     const dryRun = await runCli([
       "promote-gate",
       "--cwd",
@@ -403,7 +411,14 @@ test("config updates and clears guardrails and budgets", async () => {
 
 test("log accepts ASI from a JSON file", async () => {
   await withTempDir("asi-file", async (dir) => {
-    await setupFixture(dir, { name: "asi file" });
+    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    await setupFixture(dir, {
+      name: "asi file",
+      acceptedContract: true,
+      benchmarkCommand,
+    });
+    const packet = await runCli(["next", "--cwd", dir]);
+    assert.equal(packet.code, 0, packet.stderr);
     await writeFile(
       path.join(dir, "asi.json"),
       JSON.stringify({
@@ -418,10 +433,9 @@ test("log accepts ASI from a JSON file", async () => {
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "3",
+      "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Baseline",
       "--asi-file",
@@ -441,7 +455,14 @@ test("log accepts ASI from a JSON file", async () => {
 
 test("log accepts ASI from --asi-json-file for PowerShell-safe logging", async () => {
   await withTempDir("asi-json-file", async (dir) => {
-    await setupFixture(dir, { name: "asi json file" });
+    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    await setupFixture(dir, {
+      name: "asi json file",
+      acceptedContract: true,
+      benchmarkCommand,
+    });
+    const packet = await runCli(["next", "--cwd", dir]);
+    assert.equal(packet.code, 0, packet.stderr);
     await writeFile(
       path.join(dir, "asi.json"),
       JSON.stringify(
@@ -461,10 +482,9 @@ test("log accepts ASI from --asi-json-file for PowerShell-safe logging", async (
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "3",
+      "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Baseline",
       "--asi-json-file",
@@ -672,7 +692,6 @@ test("tool schemas expose guidance and output contracts", async () => {
   assert.equal(next.outputSchema.properties.parsedMetrics, undefined);
   assert.equal(next.outputSchema.properties.decision.type, "object");
   for (const field of [
-    "continuation",
     "decision",
     "fullPacket",
     "history",
@@ -680,21 +699,24 @@ test("tool schemas expose guidance and output contracts", async () => {
     "nextAction",
     "ok",
     "packetEvidence",
+    "preconditionDecision",
     "report",
+    "resultingDecision",
     "run",
+    "mutation",
     "workDir",
   ]) {
     assert.ok(next.outputSchema.properties[field], `next schema should include ${field}`);
   }
   assert.equal(next.outputSchema.properties.code.type, "string");
-  assert.equal(next.outputSchema.properties.loopContract.type, "object");
+  assert.equal(next.outputSchema.properties.loopContract, undefined);
   assert.equal(next.outputSchema.properties.nextAction.type, "string");
   assert.equal(next.outputSchema.properties.clearingCondition.type, "string");
   assert.equal(next.outputSchema.properties.commandHint.type, "string");
   assert.equal(richDoctor.outputSchema.properties.state.type, "object");
   assert.equal(richDoctor.outputSchema.properties.git.type, "object");
   assert.equal(richDoctor.outputSchema.properties.benchmark.type, "object");
-  assert.equal(richDoctor.outputSchema.properties.resolvedDecision.type, "object");
+  assert.equal(richDoctor.outputSchema.properties.decisionPlan.type, "object");
   assert.equal(richDoctor.outputSchema.properties.runtimeProvenance.type, "object");
   assert.equal(richDoctor.outputSchema.properties.decisionEnvelope, undefined);
   assert.equal(richDoctor.outputSchema.properties.sessionDecisionCapsule.type, "object");
@@ -1085,9 +1107,13 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
 
 test("log rejects conflicting metrics inputs and invalid evidence status", async () => {
   await withTempDir("log-contract-edges", async (dir) => {
-    await setupFixture(dir, { name: "log contract" });
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
-    const packet = await runCli(["next", "--cwd", dir, "--command", command]);
+    await setupFixture(dir, {
+      name: "log contract",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
+    const packet = await runCli(["next", "--cwd", dir]);
     assert.equal(packet.code, 0, packet.stderr);
 
     const metricsConflict = await runCli([
@@ -1096,7 +1122,7 @@ test("log rejects conflicting metrics inputs and invalid evidence status", async
       dir,
       "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "conflict",
       "--metrics",
@@ -1113,7 +1139,7 @@ test("log rejects conflicting metrics inputs and invalid evidence status", async
       dir,
       "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "bad evidence",
       "--evidence-status",

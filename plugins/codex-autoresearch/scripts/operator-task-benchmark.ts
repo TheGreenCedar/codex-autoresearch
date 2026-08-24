@@ -157,29 +157,22 @@ const observationValidators: Record<
   (observations: Record<string, unknown>) => void
 > = {
   "decision-consistency": (observations) => {
-    const terminalActions = asRecordArray(
-      observations.terminalActions,
-      "terminal decision actions",
-    );
-    const dashboardAction = asRecord(observations.dashboardAction, "dashboard decision action");
-    const nextActions = stringArray(observations.resolvedNextActions, "resolved next actions");
-    const resolvedCommands = stringArray(observations.resolvedCommands, "resolved commands");
-    const [terminalAction] = terminalActions;
-    const { command: _terminalCommand, ...dashboardComparable } = terminalAction || {};
+    const terminalPlans = asRecordArray(observations.terminalPlans, "terminal decision plans");
+    const dashboardPlan = asRecord(observations.dashboardPlan, "dashboard decision plan");
+    const [terminalPlan] = terminalPlans;
     if (
-      terminalActions.length !== 3 ||
-      terminalActions.some(
-        (action) => !string(action.kind) || !string(action.reason) || !string(action.command),
+      terminalPlans.length !== 3 ||
+      terminalPlans.some(
+        (plan) =>
+          !string(plan.decisionId) ||
+          !string(plan.generationId) ||
+          !string(plan.phase) ||
+          !string(plan.actionKind) ||
+          !string(plan.commandDigest),
       ) ||
-      new Set(terminalActions.map((action) => JSON.stringify(action))).size !== 1 ||
-      JSON.stringify(dashboardAction) !== JSON.stringify(dashboardComparable) ||
-      observations.dashboardCommandOmitted !== true ||
-      nextActions.length !== 4 ||
-      nextActions.some((action) => !string(action)) ||
-      new Set(nextActions).size !== 1 ||
-      nextActions[0] !== terminalAction?.reason ||
-      resolvedCommands.length !== 3 ||
-      resolvedCommands.some((command) => command !== terminalAction?.command)
+      new Set(terminalPlans.map((plan) => JSON.stringify(plan))).size !== 1 ||
+      JSON.stringify(dashboardPlan) !== JSON.stringify(terminalPlan) ||
+      observations.dashboardCommandOmitted !== true
     ) {
       failCase("decision-consistency", "Public decision surfaces diverged.");
     }
@@ -226,19 +219,16 @@ const observationValidators: Record<
   },
   "session-friction-journey": (observations) => {
     const actionKinds = stringArray(observations.zeroRunActionKinds, "zero-run action kinds");
-    const actionCommands = stringArray(
-      observations.zeroRunActionCommands,
-      "zero-run action commands",
-    );
+    const decisionIds = stringArray(observations.zeroRunDecisionIds, "zero-run decision IDs");
     const forbidden = /finaliz|saturat|segment-transition/i;
     if (
       observations.runs !== 0 ||
       actionKinds.length !== 3 ||
       actionKinds.some((kind) => !kind || forbidden.test(kind)) ||
       new Set(actionKinds).size !== 1 ||
-      actionCommands.length !== 3 ||
-      actionCommands.some((command) => !/\bnext\b/.test(command)) ||
-      new Set(actionCommands).size !== 1 ||
+      decisionIds.length !== 3 ||
+      decisionIds.some((decisionId) => !decisionId) ||
+      new Set(decisionIds).size !== 1 ||
       observations.canMarkCodexGoalComplete !== false ||
       observations.rawChecklistAccepted === true ||
       observations.generatedGitAttributes === true
@@ -382,41 +372,34 @@ async function decisionConsistency(root: string): Promise<Record<string, unknown
   const doctor = await runNode(cli, ["doctor", "--cwd", cwd], pluginRoot, env);
   const dashboard = await runNode(cli, ["export", "--cwd", cwd, "--json-full"], pluginRoot, env);
   const payloads = [compact, recommend, doctor, dashboard].map(expectJsonSuccess);
-  const actions = [
-    nestedRecord(payloads[0], "resolvedDecision", "canonicalNextAction"),
-    nestedRecord(payloads[1], "resolvedDecision", "canonicalNextAction"),
-    nestedRecord(payloads[2], "resolvedDecision", "canonicalNextAction"),
-    nestedRecord(payloads[3], "viewModel", "decisionEnvelope", "canonicalNextAction"),
+  const plans = [
+    asRecord(payloads[0].decisionPlanProjection, "state decision plan"),
+    asRecord(payloads[1].decisionPlanProjection, "recommend decision plan"),
+    asRecord(payloads[2].decisionPlanProjection, "doctor decision plan"),
+    nestedRecord(payloads[3], "viewModel", "decisionPlanProjection"),
   ];
-  const terminalActions = actions.slice(0, 3).map((action) => publicActionFacts(action, cwd, true));
-  const dashboardAction = publicActionFacts(actions[3], cwd, false);
+  const terminalPlans = plans.slice(0, 3).map(publicPlanFacts);
+  const dashboardPlan = publicPlanFacts(plans[3]);
   return {
-    terminalActions,
-    dashboardAction,
-    dashboardCommandOmitted: !string(actions[3].command),
-    resolvedCommands: payloads
-      .slice(0, 3)
-      .map((payload) =>
-        normalizePublicText(nestedRecord(payload, "resolvedDecision").command, cwd),
-      ),
-    resolvedNextActions: [
-      nestedRecord(payloads[0], "resolvedDecision").nextAction,
-      nestedRecord(payloads[1], "resolvedDecision").nextAction,
-      nestedRecord(payloads[2], "resolvedDecision").nextAction,
-      nestedRecord(payloads[3], "viewModel", "decisionEnvelope").nextAction,
-    ].map((value) => normalizePublicText(value, cwd)),
+    terminalPlans,
+    dashboardPlan,
+    dashboardCommandOmitted: !string(nestedRecord(plans[3], "action").command),
   };
 }
 
-function publicActionFacts(
-  action: Record<string, unknown>,
-  cwd: string,
-  includeCommand: boolean,
-): Record<string, unknown> {
+function publicPlanFacts(plan: Record<string, unknown>): Record<string, unknown> {
+  const action = asRecord(plan.action, "decision action");
+  const parentDisposition = asRecord(plan.parentDisposition, "parent disposition");
   return {
-    kind: action.kind,
-    reason: normalizePublicText(action.reason, cwd),
-    ...(includeCommand ? { command: normalizePublicText(action.command, cwd) } : {}),
+    decisionId: plan.decisionId,
+    generationId: plan.generationId,
+    phase: plan.phase,
+    actionKind: action.kind,
+    primaryBlockerCode: plan.primaryBlockerCode ?? null,
+    parentDisposition: parentDisposition.kind,
+    contractDigest: plan.contractDigest,
+    evaluatorIdentity: plan.evaluatorIdentity,
+    commandDigest: action.commandDigest,
   };
 }
 
@@ -572,8 +555,8 @@ async function sessionFrictionJourney(root: string): Promise<Record<string, unkn
     await runNode(cli, ["doctor", "--cwd", cwd, "--json-full"], pluginRoot, env),
   ];
   const payloads = results.map(expectJsonSuccess);
-  const actions = payloads.map((payload) =>
-    nestedRecord(payload, "resolvedDecision", "canonicalNextAction"),
+  const plans = payloads.map((payload) =>
+    asRecord(payload.decisionPlanProjection || payload.decisionPlan, "decision plan"),
   );
   const goal = expectJsonSuccess(
     await runNode(
@@ -597,9 +580,8 @@ async function sessionFrictionJourney(root: string): Promise<Record<string, unkn
   const status = await git(cwd, ["status", "--porcelain=v1"]);
   return {
     runs: Number(state.runs || 0),
-    zeroRunActionKinds: actions.map((action) => String(action.kind || "")),
-    zeroRunActionCommands: actions.map((action) => normalizePublicText(action.command, cwd)),
-    zeroRunActionReasons: actions.map((action) => normalizePublicText(action.reason, cwd)),
+    zeroRunActionKinds: plans.map((plan) => String(nestedRecord(plan, "action").kind || "")),
+    zeroRunDecisionIds: plans.map((plan) => String(plan.decisionId || "")),
     canMarkCodexGoalComplete: nestedRecord(goal, "completionAudit").canMarkCodexGoalComplete,
     rawChecklistAccepted:
       qualityRound.accepted === true || qualityRound.evidenceStatus === "accepted",

@@ -28,7 +28,7 @@ const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
   action: stringSchema("Safe next action summary."),
   backupPath: stringSchema("Backup file path written before ledger repair."),
   checkedAt: stringSchema("ISO timestamp for a liveness check."),
-  clearingCondition: stringSchema("Condition that clears a refused loop-governance blocker."),
+  clearingCondition: stringSchema("Condition that clears a canonical decision blocker."),
   code: stringSchema("Machine-readable status or refusal code."),
   commandHint: stringSchema("Copyable command for resolving a blocker or continuing safely."),
   healthUrl: stringSchema("Dashboard health-check URL."),
@@ -38,7 +38,9 @@ const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
   output: stringSchema("Output file path or command output."),
   outputPreview: stringSchema("Bounded command output preview."),
   packetFingerprint: stringSchema("Freshness fingerprint from the packet evidence bundle."),
+  preconditionDecision: objectSchema("Canonical decision captured before a session mutation."),
   registryPath: stringSchema("Local dashboard registry path."),
+  resultingDecision: objectSchema("Canonical decision captured after a session mutation."),
   slug: stringSchema("Research slug."),
   stage: stringSchema("Setup or resume stage."),
   startedAt: stringSchema("ISO timestamp for when the process started."),
@@ -69,6 +71,7 @@ const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
   issues: stringArraySchema("Validation or readiness issues."),
   missing: stringArraySchema("Missing setup fields."),
   missingEssentials: stringArraySchema("Missing essentials for the first valid loop."),
+  mutation: objectSchema("Command-scoped mutation receipt."),
   openItems: stringArraySchema("Open quality-gap items."),
   plannedFiles: stringArraySchema("Planned file paths."),
   recipes: objectArraySchema("Available recipes."),
@@ -194,8 +197,14 @@ function commandSafety(command: CommandDefinition): string {
 }
 
 function outputSchemaFor(command: CommandDefinition): JsonSchema {
+  const outputFields = [
+    ...command.outputFields,
+    ...(command.decisionProtocol === "session-mutation"
+      ? ["preconditionDecision", "mutation", "resultingDecision"]
+      : []),
+  ];
   const properties = Object.fromEntries(
-    command.outputFields.map((field) => [
+    outputFields.map((field) => [
       field,
       command.outputSchemaOverrides?.[field] || schemaForOutputField(field),
     ]),
