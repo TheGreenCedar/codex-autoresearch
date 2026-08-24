@@ -179,7 +179,15 @@ export const decisionDiagnosticRegistry = {
   "evaluator-drift": blockedPolicy(15, "direct-work", "transition-segment", PACKET_AND_KEEP),
   "active-process": blockedPolicy(16, "recovery", "inspect-process", PACKET_ONLY),
   "pending-packet": blockedPolicy(17, "packet", "log-decision", PACKET_ONLY),
-  "packet-status-authority-invalid": blockedPolicy(17, "packet", "replace-packet", PACKET_AND_KEEP),
+  "packet-status-authority-invalid": {
+    priority: 17,
+    phase: "packet",
+    actionKind: "replace-packet",
+    blocked: KEEP_ONLY,
+    recoveryOnly: PACKET_ONLY,
+    primaryBlocker: true,
+    loop: "blocked",
+  },
   "packet-keep-not-authorized": {
     priority: 18,
     phase: "packet",

@@ -843,6 +843,7 @@ export const commandTable = [
     decisionCapability: "run-packet",
     recoveryForDiagnostics: [
       "stale-packet",
+      "packet-status-authority-invalid",
       "legacy-contract-acceptance-required",
       "legacy-contract-conflict",
     ],

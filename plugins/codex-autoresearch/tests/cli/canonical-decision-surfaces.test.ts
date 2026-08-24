@@ -249,6 +249,7 @@ test("fresh packets with malformed status authority fail closed on every decisio
       for (const plan of plans) {
         assert.equal(plan.action.kind, "replace-packet", fixture.name);
         assert.equal(plan.primaryBlockerCode, "packet-status-authority-invalid", fixture.name);
+        assert.equal(plan.capabilities["run-packet"], "recovery-only", fixture.name);
         assert.equal(plan.capabilities["authorize-keep"], "blocked", fixture.name);
         assert.ok(
           plan.requiredEvidence.diagnosticCodes.includes("packet-keep-not-authorized"),
@@ -288,6 +289,32 @@ test("fresh packets with malformed status authority fail closed on every decisio
         refusal.preconditionDecision.requiredEvidence.diagnosticCodes.includes(
           "packet-keep-not-authorized",
         ),
+        fixture.name,
+      );
+
+      const replacement = await runCli(["next", "--cwd", dir, "--compact"]);
+      assert.equal(replacement.code, 0, `${fixture.name}: ${replacement.stderr}`);
+      const replacementPacket = JSON.parse(await readFile(packetPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      const replacementDecision = replacementPacket.decision as Record<string, unknown>;
+      assert.ok(
+        Array.isArray(replacementDecision.allowedStatuses) &&
+          replacementDecision.allowedStatuses.length > 0 &&
+          replacementDecision.allowedStatuses.every(
+            (status) =>
+              typeof status === "string" &&
+              ["keep", "discard", "crash", "checks_failed", "measure"].includes(status),
+          ),
+        fixture.name,
+      );
+      const repaired = await runCli(["state", "--cwd", dir, "--compact"]);
+      assert.equal(repaired.code, 0, repaired.stderr);
+      const repairedPlan = JSON.parse(repaired.stdout).decisionPlanProjection;
+      assert.equal(
+        repairedPlan.requiredEvidence.diagnosticCodes.includes("packet-status-authority-invalid"),
+        false,
         fixture.name,
       );
     });
