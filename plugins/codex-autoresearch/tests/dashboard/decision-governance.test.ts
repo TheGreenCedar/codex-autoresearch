@@ -575,7 +575,7 @@ test("dashboard keeps static exports read-only when served over HTTP", async () 
   assert.equal(queryById("next-command-copy") === null, true);
   assert.equal(
     queryById("decision-next-command")?.textContent?.trim(),
-    "Continue in the CLI; this readout exposes no safe command.",
+    "Redacted here. Continue in the CLI.",
   );
   assert.doesNotMatch(queryById("decision-next-command")?.textContent || "", /finalize-preview/);
   assert.equal(dom.window.document.querySelector(".mission-command") === null, true);
@@ -717,7 +717,7 @@ test("served dashboard exposes live refresh but no command-center controls", asy
   assert.equal(queryById("mission-control") === null, true);
   assert.equal(
     getById("decision-next-command").textContent?.trim(),
-    "Continue in the CLI; this readout exposes no safe command.",
+    "Redacted here. Continue in the CLI.",
   );
   assert.doesNotMatch(getById("decision-next-command").textContent || "", /finalize-preview/);
 });
@@ -947,6 +947,23 @@ test("dashboard keeps one canonical decision first in operate and audit views", 
         (id) => getById(id).textContent?.trim(),
       ),
     );
+    assert.equal(
+      getById("decision-plan-decision-id").textContent,
+      decisionPlanProjection.decisionId,
+    );
+    assert.equal(getById("decision-plan-phase").textContent, decisionPlanProjection.phase);
+    assert.equal(getById("decision-plan-action-kind").textContent, "collect-evidence");
+    assert.equal(getById("decision-plan-blocker-code").textContent, "quality-evidence-required");
+    assert.equal(getById("decision-plan-parent-disposition").textContent, "block-final-answer");
+    assert.equal(
+      getById("decision-plan-contract-digest").textContent,
+      decisionPlanProjection.contractDigest,
+    );
+    assert.equal(
+      getById("decision-plan-evaluator-identity").textContent,
+      decisionPlanProjection.evaluatorIdentity,
+    );
+    assert.doesNotMatch(decision.textContent || "", /finalize-preview|scripts\/autoresearch/i);
     if (view === "operate") {
       assert.equal(queryById("workspace-grid") === null, true);
       assert.equal(queryById("strategy-memory") === null, true);
@@ -959,7 +976,7 @@ test("dashboard keeps one canonical decision first in operate and audit views", 
     "Blocked",
     "quality-evidence-required",
     "Confirm the kept path before promotion.",
-    "Continue in the CLI; this readout exposes no safe command.",
+    "Redacted here. Continue in the CLI.",
   ]);
 });
 

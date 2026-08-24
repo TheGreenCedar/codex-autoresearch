@@ -212,7 +212,7 @@ function loopDecision(
     nextAction: {
       kind: "contract-candidate",
       message:
-        "This is an in-memory candidate only; do not execute or persist it until the contract acceptance path is available.",
+        "This is an in-memory candidate only. Establish it through setup or an explicit segment transition, then execute only after state reports an accepted contract.",
     },
   };
 }

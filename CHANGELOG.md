@@ -8,6 +8,23 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased
 
+### Added
+
+- Added fit-first routing with explicit `continue-direct`, `needs-user`, and `run-loop` results. Direct architecture, documentation, UX, product, research, and one-shot work now uses a bounded evidence capsule without creating or changing an Autoresearch session.
+- Added typed accepted experiment contracts for metric semantics, canonical evaluator and checks execution, repository and scope identity, noise, keep and stop rules, and truthful budget enforcement. Accepted-contract evidence is now required mechanically for keeps.
+- Added coherent version-vector snapshots and one canonical `DecisionPlan` shared by state, doctor, recommendation, continuation, finalization, terminal reports, and the read-only dashboard.
+
+### Changed
+
+- Existing sessions match only on compatible repository, checkout, goal, metric, evaluator, checks, and scope; replacement requires explicit intent. Incomplete explicit loops ask for exact missing or conflicting inputs before discovery or setup.
+- Dashboard and terminal readouts now share decision identity, phase, action kind, blocker code, parent disposition, contract digest, and evaluator identity while executable commands remain redacted from the dashboard.
+- Repeated candidates pause after two eligible no-learning outcomes or same-layer failures unless relevant preconditions change. Pauses hand control back to direct work and do not automatically fan out or start a new segment.
+
+### Fixed
+
+- Replaced warning-only pending-log receipts with resumable status-specific transactions. Retrying the same log verifies completed Git and ledger stages, resumes tracked and untracked cleanup independently, and converges to at most one commit and one ledger event.
+- Removed metric-name heuristics, override paths that could bypass the accepted evaluator identity, split read-surface policy ladders, and compatibility projections as decision inputs.
+
 ## 2.7.2 - 2026-07-16
 
 ### Changed

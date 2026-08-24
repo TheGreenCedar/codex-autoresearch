@@ -221,8 +221,17 @@ const observationValidators: Record<
   "session-friction-journey": (observations) => {
     const actionKinds = stringArray(observations.zeroRunActionKinds, "zero-run action kinds");
     const decisionIds = stringArray(observations.zeroRunDecisionIds, "zero-run decision IDs");
+    const incompleteMissing = stringArray(
+      observations.incompleteLoopMissing,
+      "incomplete loop missing fields",
+    );
     const forbidden = /finaliz|saturat|segment-transition/i;
     if (
+      observations.directFitDisposition !== "continue-direct" ||
+      observations.incompleteFitDisposition !== "needs-user" ||
+      JSON.stringify(incompleteMissing) !==
+        JSON.stringify(["direction", "checks_command", "scope"]) ||
+      observations.fitCallsCreatedFiles !== false ||
       observations.runs !== 0 ||
       actionKinds.length !== 3 ||
       actionKinds.some((kind) => !kind || forbidden.test(kind)) ||
@@ -236,7 +245,7 @@ const observationValidators: Record<
     ) {
       failCase(
         "session-friction-journey",
-        "The zero-run qualitative journey still permits premature completion or setup-artifact leakage.",
+        "Fit routing or the zero-run qualitative journey permits session leakage or premature completion.",
       );
     }
   },
@@ -523,6 +532,41 @@ async function sessionFrictionJourney(root: string): Promise<Record<string, unkn
   await git(cwd, ["add", "README.md"]);
   await git(cwd, ["commit", "-m", "base"]);
 
+  const filesBeforeFit = (await fsp.readdir(cwd)).sort();
+  const directFit = expectJsonSuccess(
+    await runNode(
+      cli,
+      [
+        "prompt-plan",
+        "--cwd",
+        cwd,
+        "--prompt",
+        "Review this product architecture and recommend the smallest direct correction.",
+      ],
+      pluginRoot,
+      env,
+    ),
+  );
+  const incompleteFit = expectJsonSuccess(
+    await runNode(
+      cli,
+      [
+        "prompt-plan",
+        "--cwd",
+        cwd,
+        "--prompt",
+        [
+          "Run 5 repeated measured optimization iterations for checkout latency.",
+          "Benchmark: node scripts/checkout-benchmark.mjs",
+          "Metric: seconds",
+        ].join("\n"),
+      ],
+      pluginRoot,
+      env,
+    ),
+  );
+  const filesAfterFit = (await fsp.readdir(cwd)).sort();
+
   expectJsonSuccess(
     await runNode(
       cli,
@@ -579,7 +623,13 @@ async function sessionFrictionJourney(root: string): Promise<Record<string, unkn
   const state = payloads[0];
   const qualityRound = asRecord(state.qualityRound || {}, "quality round");
   const status = await git(cwd, ["status", "--porcelain=v1"]);
+  const directFitDecision = asRecord(directFit.fit, "direct fit decision");
+  const incompleteFitDecision = asRecord(incompleteFit.fit, "incomplete fit decision");
   return {
+    directFitDisposition: String(directFitDecision.disposition || ""),
+    incompleteFitDisposition: String(incompleteFitDecision.disposition || ""),
+    incompleteLoopMissing: stringArray(incompleteFitDecision.missing, "missing contract fields"),
+    fitCallsCreatedFiles: JSON.stringify(filesBeforeFit) !== JSON.stringify(filesAfterFit),
     runs: Number(state.runs || 0),
     zeroRunActionKinds: plans.map((plan) => String(nestedRecord(plan, "action").kind || "")),
     zeroRunDecisionIds: plans.map((plan) => String(plan.decisionId || "")),

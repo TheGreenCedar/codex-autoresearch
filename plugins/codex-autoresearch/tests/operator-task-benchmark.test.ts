@@ -62,6 +62,10 @@ const validObservations: Record<OperatorTaskCase, Record<string, unknown>> = {
     after: repoSnapshot,
   },
   "session-friction-journey": {
+    directFitDisposition: "continue-direct",
+    incompleteFitDisposition: "needs-user",
+    incompleteLoopMissing: ["direction", "checks_command", "scope"],
+    fitCallsCreatedFiles: false,
     runs: 0,
     zeroRunActionKinds: ["run-packet", "run-packet", "run-packet"],
     zeroRunDecisionIds: ["decision-a", "decision-a", "decision-a"],
@@ -120,6 +124,8 @@ test("every portable case rejects realistic faulty public-output facts with a st
     },
     "session-friction-journey": {
       ...validObservations["session-friction-journey"],
+      directFitDisposition: "run-loop",
+      fitCallsCreatedFiles: true,
       zeroRunActionKinds: ["metric-saturation", "finalization", "finalization"],
       zeroRunDecisionIds: ["decision-a", "decision-b", "decision-c"],
       rawChecklistAccepted: true,

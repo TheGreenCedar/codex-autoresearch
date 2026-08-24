@@ -1,63 +1,97 @@
 # Workflow diagrams
 
-These diagrams show the normal route and the points where Autoresearch deliberately stops.
+These diagrams show the normal route and the points where Autoresearch deliberately hands control back.
 
-## First baseline
+## Fit before setup
 
 ```mermaid
 flowchart TD
-  A["Goal, benchmark, metric, checks, scope"] --> B{"Enough detail?"}
-  B -- "No" --> C["prompt-plan or setup-plan"]
-  B -- "Yes" --> D["setup"]
-  C --> R["Review proposal and fill missing essentials"]
-  R -- "Still incomplete" --> C
-  R -- "Ready" --> D
-  D --> E["doctor --check-benchmark --explain"]
-  E --> F{"Benchmark and trust checks pass?"}
-  F -- "No" --> G["Repair the named layer"]
-  G --> E
-  F -- "Yes" --> H["next"]
-  H --> I["log as measure"]
-  I --> J["state or recommend-next"]
+  A["User request"] --> B["prompt-plan: read-only fit"]
+  B --> C{"Disposition"}
+  C -- "continue-direct" --> D["Direct evidence capsule"]
+  D --> E["Do and verify the bounded task"]
+  C -- "needs-user" --> F["Ask for exact missing fields or conflicts"]
+  F --> B
+  C -- "run-loop" --> G["Inspect owning repository"]
+  G --> H["Accept complete experiment contract"]
+  H --> I["Compile canonical state decision"]
 ```
+
+The direct path creates no Autoresearch files, packets, commits, dashboard, or finalization state. Architecture, documentation, UX, product study, open-ended research, taste, and one-shot fixes take this path unless repeated evaluation is explicit and complete. An unrelated active session remains untouched.
+
+## First accepted baseline
+
+```mermaid
+flowchart TD
+  A["Complete candidate contract"] --> B{"Inputs complete and compatible?"}
+  B -- "No" --> C["needs-user"]
+  B -- "Yes" --> D["setup or explicit segment transition"]
+  D --> E["state --report"]
+  E --> F{"Decision allows packet?"}
+  F -- "No" --> G["Repair the named capability blocker"]
+  G --> E
+  F -- "Yes" --> H["next: accepted evaluator and checks"]
+  H --> I["log as measure"]
+  I --> J["Resulting DecisionPlan"]
+```
+
+Unknown noise permits qualification baselines but blocks a keep until the required repeats establish a valid comparison.
 
 ## Active packet loop
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Inspect
-  Inspect --> Blocked: state names a blocker
-  Blocked --> Inspect: blocker resolved
-  Inspect --> Edit: one bounded hypothesis
-  Edit --> Packet: next
-  Packet --> Decide: inspect metric, checks, and diff
-  Decide --> Log: keep / discard / measure / failure
-  Log --> Inspect: continuation says continue
-  Log --> Segment: benchmark semantics changed
-  Log --> Finalize: useful kept work is ready
-  Segment --> Inspect: new-segment and doctor
+  [*] --> Decision
+  Decision --> Direct: parent handback or pause
+  Decision --> Blocked: capability blocker
+  Blocked --> Decision: named precondition repaired
+  Decision --> Edit: run-packet allowed
+  Edit --> Packet: one bounded candidate
+  Packet --> Log: accepted metric, checks, artifacts
+  Log --> Decision: resulting decision
+  Decision --> Segment: explicit replacement contract
+  Decision --> Finalize: accepted keeps ready
+  Direct --> [*]
+  Segment --> Decision
   Finalize --> [*]
 ```
 
-## Qualitative research
+Two eligible no-learning candidates or two same-layer failures pause packet work unless that failure class's relevant preconditions changed. A remaining budget does not authorize another packet. Pausing never triggers automatic fanout, diversification, or a segment transition.
+
+## Explicit qualitative loop
 
 ```mermaid
 flowchart TD
-  A["Docs, UX, product, or architecture goal"] --> B["research-start"]
-  B --> C["Collect dated sources"]
-  C --> D["Write synthesis and reject weak claims"]
-  D --> E["Accept quality gaps"]
-  E --> F["quality_gap benchmark"]
-  F --> G{"Current checklist closed?"}
-  G -- "No" --> H["Implement or reject a gap"]
-  H --> F
-  G -- "Yes" --> I["Check research integrity and missing proof"]
-  I --> J{"Question still alive?"}
-  J -- "Yes" --> C
-  J -- "No" --> K["finalize-preview"]
+  A["Qualitative request"] --> B{"Explicit repeated checklist contract?"}
+  B -- "No" --> C["Direct evidence capsule"]
+  B -- "Yes" --> D["Accept stable sources, checks, scope, and gap metric"]
+  D --> E["research-start"]
+  E --> F["Collect dated sources and separate synthesis"]
+  F --> G["Accept stable gap IDs"]
+  G --> H["Evaluate one candidate against accepted checklist and checks"]
+  H --> I{"Current round closed?"}
+  I -- "No" --> H
+  I -- "Yes" --> J["Check research integrity and claim boundary"]
 ```
 
-Use `gap-candidates` to preview source-backed checklist changes. Closing a round is not the same as proving the whole product is finished.
+Use `gap-candidates` to preview source-backed checklist changes and `gap-decide` to accept evidence-bearing outcomes. `quality_gap=0` closes one accepted round; it does not prove the larger subject is exhausted.
+
+## Exactly-once logging
+
+```mermaid
+flowchart TD
+  A["Prepared receipt"] --> B{"Keep?"}
+  B -- "Yes" --> C["Commit applied or verified"]
+  C --> D["Ledger event present"]
+  B -- "No" --> E["Ledger event present"]
+  E --> F["Tracked cleanup"]
+  F --> G["Untracked cleanup"]
+  D --> H["Packet cleanup"]
+  G --> H
+  H --> I["Done; remove receipt"]
+```
+
+An interrupted command resumes only with the same arguments. Completed stages are verified rather than repeated, so retries converge to at most one commit and one ledger event.
 
 ## Review branches
 
@@ -75,4 +109,4 @@ flowchart LR
   J --> K["Cleanup is now safe"]
 ```
 
-Use the CLI for setup, packet runs, logging, gap review, export, and finalization. The dashboard displays the same state but does not advance it. Serve it with `serve --cwd <project>` when a live visual view helps.
+Use the CLI for setup, packets, logging, gap review, export, and finalization. The dashboard is a read-only projection of the same decision and may redact executable commands.

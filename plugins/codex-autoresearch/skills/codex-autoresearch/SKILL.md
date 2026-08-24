@@ -1,175 +1,149 @@
 ---
 name: codex-autoresearch
-description: Run or resume a measured improvement loop in a local project. Use for benchmark-driven optimization, qualitative quality-gap research, packet logging, dashboard readouts, recovery, and review-branch finalization backed by autoresearch session files.
+description: Triage improvement work and run or resume accepted measured loops in a local project. Architecture, documentation, UX, product study, open research, taste, and one-shot fixes stay direct unless the user explicitly requests repeated measurement with a complete experiment contract.
 ---
 
 # Codex Autoresearch
 
-Route the request before doing repository discovery, default inference, setup, or session mutation. Most requests are direct work; use an Autoresearch loop only for an explicit, complete repeated measurement contract.
-
-```text
-fit triage -> direct handback | clarification | in-memory loop candidate
-```
+Decide fit before exploring the repository. Autoresearch governs repeated measured experiments; it does not take over every task that mentions research, quality, or improvement.
 
 Use this as the only Codex-facing Autoresearch skill. Do not route to retired subskills, slash commands, or MCP surfaces.
 
-## Triage fit first
+## Route before discovery
 
-Classify the prompt with `prompt-plan` before scanning a repository or proposing setup:
+Make one read-only fit call before benchmark discovery, recipe lookup, repository scanning, default inference, or setup:
 
 ```bash
 node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt "<request>"
 ```
 
-1. Return direct work for architecture, documentation, UX, product study, open-ended research, generic bugs, quality, delight, or improvement language unless the user explicitly requests a repeated measured loop.
-2. For direct work, hand back the evidence capsule: outcome, main uncertainty, cheapest discriminating evidence, direct action, verification, and claim boundary. Do not create a session or infer a benchmark, metric, scope, retrieval constraint, repository files, or session name.
-3. For an incomplete loop request, ask only for its printed missing fields. Do not infer defaults from the repository.
-4. Treat an existing session as matching only with explicit, complete compatibility. Shared words are not a match. Leave unrelated sessions untouched; replacement requires an explicit replace, abandon, or start-new-session instruction.
-5. A `run-loop` result is only an in-memory contract candidate in this release. It neither accepts the contract nor authorizes packet execution.
+Follow its typed disposition:
 
-## Establish the working truth for a selected loop
+- `continue-direct`: use the direct evidence capsule below. Create no Autoresearch files, packets, commits, dashboards, research folders, or finalization state. Leave an unrelated session untouched.
+- `needs-user`: ask only for the reported missing fields or conflicts. Do not fill them from plausible repository files or inferred defaults.
+- `run-loop`: treat the returned contract as an in-memory candidate. Only now inspect the owning repository and establish or resume the accepted contract through setup or an explicit segment transition.
 
-1. Identify the repository or child package that owns the selected loop.
-2. Run `git status --short --branch`; preserve unrelated changes.
-3. When changing Autoresearch itself, use the checkout in this repository:
-   - wrapper root: `node plugins/codex-autoresearch/scripts/autoresearch.mjs ...`
-   - package root: `node scripts/autoresearch.mjs ...`
-4. Treat source and installed-plugin behavior as different until their version and built-entrypoint fingerprint match.
+An existing session is `matching` only when repository, checkout, goal, metric semantics, evaluator, checks, and scope are compatible. Shared words are not evidence of a match. Replacing or abandoning a session requires explicit user intent.
 
-## Start or resume after contract acceptance
+An explicit loop request with an incomplete contract is `needs-user`, never a half-configured loop.
 
-For a new session:
+## Continue directly when the loop does not fit
 
-1. Get the goal, benchmark, primary metric, direction, correctness checks, editable scope, and any real budget.
-2. Use `prompt-plan` or `setup-plan` when one of those is unclear. Both are read-only.
-3. Run `setup` only after the contract is clear enough to create files.
-4. Configure `commitPaths` before a keep may commit source changes.
-5. Run `doctor --cwd <project> --check-benchmark --explain` before trusting the first packet.
-6. Record the baseline with `next`, then `log --from-last --status measure`.
+Use this evidence capsule:
 
-For an existing session:
+1. State the requested outcome.
+2. Identify the main uncertainty.
+3. Gather the cheapest evidence that can resolve it.
+4. Perform the direct task.
+5. Verify the result and bound the claim.
 
-1. Read [loop operations](references/loop-operations.md).
-2. Read `autoresearch.md`, `autoresearch.jsonl`, `autoresearch.ideas.md`, and the active `autoresearch.research/<slug>/` folder when present.
-3. Run `state --report`, `recommend-next --compact --operator-checklist`, and `doctor --explain`.
-   These defaults are bounded and share one `resolvedDecision`; use `state --json-full` or `doctor --json-full` only for complete machine diagnostics.
-4. Keep `goalFrame.authoritativeGoal` authoritative unless the user deliberately replaces it. If a new request would change the benchmark, metric, edit scope, or final claim, treat it as a possible replacement and resolve that choice before packet work.
-5. Follow the printed blocker or command. If the CLI, report, and dashboard disagree, stop mutation and diagnose the shared state.
+Direct work may finish an implementation, explanation, review, or ordinary correctness check. It may not claim measured improvement or authorize a keep without accepted evaluator and checks evidence.
 
-Happy path from the package root:
+Architecture, documentation, UX, product study, open-ended research, taste, bugs, quality, delight, and generic improvement language do not independently select a loop. A qualitative gap loop is appropriate only when the user explicitly wants repeated evaluation against a stable, accepted checklist.
+
+## Establish the accepted experiment
+
+Once fit is `run-loop`:
+
+1. Identify the repository and child package that own the work.
+2. Run `git status --short --branch` and preserve unrelated changes.
+3. Establish one complete contract: goal, repository and worktree identity, metric semantics, evaluator, independent checks, editable and protected scope, noise model, keep rule, stop rule, and enforceable budgets.
+4. Use `setup` for a new session or an explicit segment transition for a replacement contract. Do not execute a packet until `state --report` shows an accepted contract.
+5. Configure `commitPaths` before a keep may commit changes.
+
+The accepted evaluator and checks are the only execution authority. CLI, config, wrapper, separator, command-file, or environment-file overrides may run only when they reproduce the accepted execution digest exactly. Otherwise stop and transition the contract explicitly.
+
+Metric names carry no semantics. A name containing `quality`, `score`, `precision`, or similar text does not imply a direction, threshold, target, or perfect value.
+
+Unknown noise permits qualification baselines. It does not permit a keep until the required repeats establish a valid comparison. Estimated model tokens or calls are advisory unless trusted host telemetry makes them enforceable.
+
+## Resume from one canonical decision
+
+For an existing matching session, run one bounded read:
 
 ```bash
-node scripts/autoresearch.mjs setup --cwd <project> --name "<session>" --metric-name <metric> --direction lower --benchmark-command "<command>" --checks-command "<checks>"
-node scripts/autoresearch.mjs config --cwd <project> --commit-paths "<editable-paths>"
-node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
-node scripts/autoresearch.mjs next --cwd <project>
-node scripts/autoresearch.mjs log --cwd <project> --from-last --status measure --description "Baseline measurement"
 node scripts/autoresearch.mjs state --cwd <project> --report
 ```
 
-After the baseline, implement one bounded hypothesis inside the configured paths, then run and log one packet:
+Do not reread raw session files and separately ask state, recommendation, doctor, watchdog, portfolio advice, and finalization to vote on the next step. The report projects one `DecisionPlan` with:
 
-```bash
-node scripts/autoresearch.mjs next --cwd <project>
-node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "<what changed>" --asi-json-file <path>
-node scripts/autoresearch.mjs state --cwd <project> --report
+- phase and canonical action
+- blocker code and capability-scoped diagnostics
+- loop and parent dispositions
+- contract digest and evaluator identity
+- required evidence
+
+Follow that decision. Use `doctor` only when the decision asks for a diagnostic or when the user explicitly requests one. If terminal and dashboard semantic fields disagree, stop mutation and diagnose the projection.
+
+Read [loop operations](references/loop-operations.md) only when the canonical action requires packet, recovery, budget, Git-scope, or segment detail.
+
+## Run one bounded packet
+
+The usual accepted loop is:
+
+```text
+setup -> state -> next -> log -> state -> finalize-preview
 ```
 
-The ASI file must contain the real hypothesis, evidence, rollback reason when rejected, and next action. Use `discard`, `crash`, or `checks_failed` instead of `keep` when the evidence requires it. Run `finalize-preview` only when canonical state routes to finalization.
-
-## Run one packet at a time
-
-Use `next` for a reusable packet. Use `benchmark-inspect` for a bounded diagnostic probe; the old `run` name fails fast with that migration and is scheduled for removal after 2026-10-01.
-
-After `next`:
+`next` may execute only the accepted evaluator and accepted checks, using their accepted execution specifications. After it returns:
 
 1. Inspect the metric, checks, artifacts, diff, and Git state.
-2. Log with `--from-last`; do not copy parsed metrics back into the command.
-3. Add a structured experiment note (ASI) with the hypothesis, evidence, rollback reason for rejected work, and useful next action. Use `--asi-json-file <path>` when inline JSON would be fragile in the current shell.
-4. Read the returned continuation before doing anything else.
-
-When accepted work was committed outside Autoresearch, verify the commit and log the keep with `--commit <hash>` so finalization retains real commit evidence.
+2. Log with `--from-last`; do not retype parsed metrics.
+3. Record the real hypothesis and learning assessment. Learning defaults to `none`; `causal` or `discriminating` requires evidence and a concrete changed belief.
+4. Read the resulting decision before doing more work.
 
 | Status | Use it for |
 | --- | --- |
-| `measure` | Baselines, no-change checks, environment probes, and diagnostics. Never stage, commit, revert, or finalize it. |
-| `keep` | A finite primary metric, passing required checks, and a change worth preserving inside safe Git scope. |
-| `discard` | A finite metric and a change not worth keeping; logging may clean the configured or explicit experiment paths. |
-| `crash` | A benchmark that failed before usable metric evidence existed. Do not invent a sentinel value; logging may clean the configured or explicit experiment paths. |
-| `checks_failed` | A metric exists, but the required correctness proof failed; logging may clean the configured or explicit experiment paths. |
+| `measure` | Baselines, qualification repeats, no-change checks, and diagnostics. Never authorize a keep. |
+| `keep` | A candidate evaluated by the accepted contract, with all checks, metric comparison, and noise qualification satisfied. |
+| `discard` | A finite candidate result that is not worth keeping. |
+| `crash` | Evaluation failed before usable metric evidence existed. Do not invent a sentinel metric. |
+| `checks_failed` | A metric exists, but accepted correctness checks failed. |
 
-Obey these brakes:
+Baselines and accepted candidate packets consume packet budget. Manual observations and read-only diagnostics do not. An imported commit can authorize a keep only after the accepted evaluator and checks evaluate that commit.
 
-- Keep packet processes on the default minimal environment. Use `--packet-env-mode inherit` only when the benchmark genuinely needs the caller's full environment.
-- Treat `termination_failed` as a hard stop. Preserve partial packet evidence, verify the reported PID and descendants are absent, then remove only the retained progress marker before another `next`.
-- Treat typed `process_lifecycle` blockers as process truth: verify absence before recording a later terminal row. Never infer active residue from historical prose, and never repair a malformed lifecycle row by weakening validation.
-- Keep a configured working directory inside `--cwd`; require the user's explicit intent before passing `--allow-outside-workdir`.
-- Ordinary `doctor` runs must not refresh remote catalogs. Use `doctor --revalidate-catalog` only for an explicit public-HTTPS provenance check; internal catalogs stay local files.
-- Continue the active session when `continuation.shouldContinue=true`, but run a packet only when `loopContract.canRunNextPacket=true`; do not report completion when `continuation.forbidFinalAnswer=true`.
-- Let blockers, budget stops, segment changes, and finalization outrank another packet.
-- Treat `benchmark-lint` as a parser check, not proof that the benchmark represents the product.
-- Require the checks implied by the claim: accuracy, behavior, accessibility, safety, data integrity, or performance.
-- Keep `review_required` results provisional until the structured note records the review.
-- Treat benchmark-keyed fixes, static citations, scorer edits, and row-specific detectors as diagnostic until repeat, holdout, breadth, or a promotion gate supports the broader claim.
+Run at most one packet per decision. Remaining budget is never a reason to run another. Two eligible no-learning candidates pause packet work. Two failures in the same registered layer pause packet work unless that failure class's relevant preconditions changed. A pause hands control back to direct work; it does not trigger fanout, diversification, or an automatic segment transition.
 
-Use [loop operations](references/loop-operations.md) for partial results, failed checks, ledger repair, budgets, Git scope, and segment changes. Use [dashboard and trust](references/dashboard-trust.md) for fixed controls, runtime drift, protected paths, redaction, and promotion claims.
+## Recover logging exactly once
 
-## Research broad or qualitative work
+`log` is a staged transaction. If it is interrupted, rerun the same `log` arguments. Do not reconstruct the transaction by hand or change the status, description, candidate, or evidence while its receipt is pending.
 
-Use a quality-gap loop for docs, UX, product study, architecture, or research:
+The retry verifies completed Git and ledger stages, resumes unfinished tracked and untracked cleanup independently, and converges to at most one commit and one ledger event. A pending or inconsistent transaction blocks unsafe mutation, finalization, and session-dependent final claims.
 
-```bash
-node scripts/autoresearch.mjs research-start --cwd <project> --slug <slug> --goal "<goal>"
-```
+Evidence outputs must stay under the approved artifact root, outside editable and protected scope, and resolve without symlink or junction escape.
 
-Keep dated claims in `sources.md`, judgment in `synthesis.md`, and accepted work in `quality-gaps.md`. Preview additions with `gap-candidates`, then log implementation or rejection with ASI.
+## Keep execution boundaries intact
 
-Each gap has a stable ID. A checked Markdown box is only a provisional candidate; record the evidence-bearing outcome with `gap-decide --gap-id <id> --decision implemented|rejected --evidence <ref> --validation <result>`. The append-only decision ledger is the acceptance authority.
+- Packet processes receive the minimal environment by default. Inherit the caller environment only when the accepted contract requires it.
+- A configured working directory stays inside `--cwd` unless the user explicitly authorizes otherwise.
+- Protected evaluator, check, fixture, parser, dataset, environment-file, or runner drift blocks packet execution and keep authorization.
+- `benchmark-lint` checks parsing; it does not prove the benchmark represents the product.
+- The dashboard is read-only. It may redact executable commands, but its decision ID, phase, action kind, blocker code, parent disposition, contract digest, and evaluator identity must agree with the terminal.
+- Direct handback after a pause may finish ordinary work, but it must not make a measured-improvement claim outside accepted evidence.
 
-If the project already has an executable outcome metric, `research-start` preserves it as primary and uses `quality_gap` as secondary acceptance evidence. Treat `quality_gap=0` as closure of the accepted checklist for this round only after its decisions are accepted. Read `researchIntegrity` and its missing-proof warnings before deciding whether the wider question is finished or needs another discovery round.
-
-Read [research, lanes, and finalization](references/research-finalize.md) before fanout, parallel implementation, or review-branch work.
-
-## Show the dashboard only when it helps
-
-```bash
-node scripts/autoresearch.mjs serve --cwd <project>
-```
-
-Verify the server and give the user its `http://127.0.0.1:<port>/` URL. Use `export` for a portable snapshot.
-
-Keep both forms read-only. Run setup, packets, logging, gap work, export, and finalization through the CLI. A static export cannot prove current packet freshness.
+Use [dashboard and trust](references/dashboard-trust.md) for runtime drift, protected paths, redaction, and dashboard semantics.
 
 ## Finalize accepted work
 
-1. Run `finalize-preview --cwd <project>` before branch creation.
-2. For normal finalization, include only accepted, current keeps and exclude session artifacts by default.
-3. Compare the intended claim with the accepted checks and measurements. If proof is missing, say: "Experimental review branch only: product-grade proof is missing."
-4. When canonical state reports `current-tree-finalization`, treat it as a separate recovery contract: review the entire clean non-session branch diff, exact file set, exclusions, claim evidence, and generated plan, then use `finalize-current-tree --cwd <project> --exclude-session-artifacts`.
-5. Ask before creating branches unless the user already approved finalization.
-6. Verify the branch union, exclusions, summaries, metrics, and checks before handoff.
+Run `finalize-preview --cwd <project>` only when the canonical decision permits finalization. Normal finalization includes accepted current keeps and excludes session artifacts. `finalize-current-tree` remains a separate recovery contract for an explicitly reviewed clean non-session diff.
 
-Report the real runway: preview, approved, branches created, locally verified, pushed or PR, CI, merged, merge verified, then cleanup. Do not collapse those stages or suggest cleanup before the merge is verified.
+Ask before creating branches unless the user already approved finalization. Report preview, local branch creation, push or PR, CI, merge, merge verification, and cleanup as separate states.
 
-## Keep parent ownership clear
+Read [research, lanes, and finalization](references/research-finalize.md) only when an accepted loop explicitly requires qualitative gap work, parallel lanes, or branch finalization.
 
-Run `codex-goal-brief` and inspect top-level `canMarkCodexGoalComplete` and `completionBlocker` before the parent calls `update_goal(status="complete")`. Use `--enforce-completion` when an invalid completion claim must fail the command. Keep Goal state in Codex; use Autoresearch only for the evidence.
+## Load only what the decision requires
 
-When subagents are explicitly used, give every lane a scope, evidence source, decision, artifact, and test. Scout commands must match `lane-runner`'s strict Git read-only argv allowlist; do not use shell or interpreter escapes. Treat Git porcelain and write-scope checks as best-effort detection, not process/filesystem containment, and use disposable worktrees for implementation lanes. Do not nest subagents or overlap write scopes. Keep the benchmark, packet decision, integration, and final verification in the parent.
-
-## Load only the documentation you need
-
-- first run: [Start](../../docs/start.md)
-- normal operation or resume: [Operate](../../docs/operate.md)
-- safety or runtime questions: [Trust](../../docs/trust.md)
+- first accepted loop: [Start](../../docs/start.md)
+- packet, recovery, or resume detail: [Operate](../../docs/operate.md)
+- safety and runtime trust: [Trust](../../docs/trust.md)
 - review branches: [Finish](../../docs/finish.md)
 - symptom lookup: [Troubleshooting](../../docs/troubleshooting.md)
 - cross-surface disagreement: [Control plane](../../docs/control-plane.md)
 
-Before claiming plugin work is done, run from `plugins/codex-autoresearch`:
+Before claiming plugin work complete, run from `plugins/codex-autoresearch`:
 
 ```bash
 npm run check
 ```
 
-For docs-only work, also inspect the rendered Markdown and command text, then run `git diff --check`. The package gate checks local Markdown links.
+Dashboard-visible changes also require a served or exported visual inspection and `npm run test:dashboard:browser`. Run `git diff --check` for every change.

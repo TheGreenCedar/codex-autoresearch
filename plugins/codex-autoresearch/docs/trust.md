@@ -4,7 +4,7 @@ The point of Autoresearch is not to produce more numbers. It is to keep the numb
 
 ## What the plugin can change
 
-Setup and configuration write session files. `next` runs the benchmark and checks, which means it can do anything those local commands do. Logging a keep can create a commit limited to configured paths. Logging `discard`, `crash`, or `checks_failed` can restore and clean the explicit `--revert-paths`, or the configured experiment scope when no explicit cleanup scope is supplied. Logging a measurement records evidence without staging, committing, or reverting source. Finalization preview is read-only, while branch creation happens later and requires approval.
+Fit routing is read-only. Its direct path creates no Autoresearch state. Setup and configuration write session files only after a complete loop is selected. `next` runs the evaluator and checks accepted by that contract, which means it can do anything those local commands do. Logging a keep can create a commit limited to configured paths. Logging `discard`, `crash`, or `checks_failed` can restore and clean the explicit `--revert-paths`, or the configured experiment scope when no explicit cleanup scope is supplied. Logging a measurement records evidence without staging, committing, or reverting source. Finalization preview is read-only, while branch creation happens later and requires approval.
 
 Check `git status --short --branch` before setup, logging, failure cleanup, or finalization. Unrelated work in the same tree is not merely untidy; it can fall inside configured experiment paths and makes it harder to prove which change produced the result.
 
@@ -12,7 +12,7 @@ Check `git status --short --branch` before setup, logging, failure cleanup, or f
 
 ## A parsed metric is only the beginning
 
-The benchmark must print the configured primary metric:
+The accepted evaluator must print the configured primary metric:
 
 ```text
 METRIC seconds=12.34
@@ -30,7 +30,7 @@ Benchmark files and fixtures can be protected so a change cannot quietly make th
 node scripts/autoresearch.mjs config --cwd <project> --protected-benchmark-paths "bench.mjs,fixtures/"
 ```
 
-Keep that set small enough to fingerprint reliably. If an intentional change alters the meaning of the benchmark, start a new segment instead of comparing the new number with the old one.
+Accepted evaluator, check, parser, fixture, dataset, environment-file, and runner inputs must sit outside editable scope or in protected scope. Keep that set small enough to fingerprint reliably. If an intentional change alters their meaning, accept a complete replacement contract in a new segment instead of comparing the new number with the old one.
 
 Some sessions use a fixed control artifact. In config and detailed output this appears as `fixedControl`. Reuse that artifact rather than rerunning a command matched by its forbidden patterns unless the user explicitly approves `--allow-fixed-control-rerun`.
 
@@ -44,7 +44,7 @@ A speed improvement without the required accuracy, recall, accessibility, safety
 
 ## Keep the evidence fresh
 
-`log --from-last` works only while the packet still matches the current segment, benchmark and checks commands, checks policy, protected paths, fixed control, secondary constraints, packet environment mode, commit scope, working directory, recipe provenance, and Git fingerprint. If any of those changed after `next`, run a fresh packet. Use `benchmark-inspect` for bounded diagnostic probes; the legacy `run` name fails fast with that migration.
+`log --from-last` works only while the packet still matches the accepted contract, segment, protected inputs, commit scope, candidate fingerprint, and Git identity. Command, command-file, separator, config, wrapper, and environment overrides cannot bypass the accepted execution digest. Intentional evaluator or checks changes require a complete replacement contract. Use `benchmark-inspect` for bounded diagnostic probes; the legacy `run` name fails fast with that migration.
 
 Source and installed plugin behavior can drift too. A change in the repository is not proof about the installed marketplace copy until the active version and built-entrypoint fingerprint match. It is fine to keep working from the source checkout; just describe the result as source-checkout evidence until the installed runtime has been refreshed.
 
@@ -64,13 +64,13 @@ Be suspicious of changes keyed to known benchmark rows, static citations, protec
 
 Configure `commitPaths` before allowing a keep to create a commit. Pass explicit `--revert-paths` for cleanup after `discard`, `crash`, or `checks_failed`; otherwise configured commit paths may define the cleanup scope. Git paths are literal: wildcard pathspec characters are rejected. Use `--commit <hash>` when the change was already committed outside Autoresearch. Use `--allow-add-all` only when every dirty file belongs to the experiment. A scoped keep leaves unrelated staged files staged and excludes them from the Autoresearch commit.
 
-Only one command may mutate a session at a time. If the owner process dies, the next mutation reclaims its lock; a live owner's lock is never stolen. If a keep or cleanup is interrupted halfway through, Autoresearch leaves a pending receipt. Resolve it before another mutation so the ledger cannot drift away from Git state.
+Only one command may mutate a session at a time. If the owner process dies, the next mutation reclaims its lock; a live owner's lock is never stolen. If logging is interrupted, the version-2 receipt records its completed stages. Rerun the exact same `log` arguments: Autoresearch verifies any existing commit and ledger event, resumes tracked and untracked cleanup independently, and keeps the receipt until every required stage is done. Different arguments reject while it is pending.
 
 Session notes and research scratchpads are excluded from review branches by default. Include them only when the reviewer actually needs them.
 
 ## Commands and local data
 
-Autoresearch does not sandbox benchmark or checks commands. They run as local child processes with your permissions and a minimal environment by default. Review generated commands and recipes before running them. Prefer project-local wrappers or `--command-file` for long commands. Use `--packet-env-mode inherit` only when the benchmark genuinely needs the caller's full environment, because that may expose credentials to the child process.
+Autoresearch does not sandbox evaluator or checks commands. They run as local child processes with your permissions and the environment policy captured by the accepted contract. Review the complete contract before accepting it. Raw secret values are never persisted; declared variable values contribute only locally salted digests to execution identity. Inheriting the caller environment may still expose credentials to the child process.
 
 A configured `workingDir` must stay inside the session `--cwd`. Use `--allow-outside-workdir` only when the external directory is intentional and trusted.
 

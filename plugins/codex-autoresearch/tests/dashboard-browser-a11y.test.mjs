@@ -86,6 +86,13 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
         "() => document.querySelector('#ledger-body')?.textContent?.includes('#5001')",
         "Live refresh did not render run #5001.",
       );
+      await evaluate(client, page.sessionId, "document.querySelector('#live-toggle').click()");
+      await waitForFunction(
+        client,
+        page.sessionId,
+        "() => document.querySelector('#live-toggle')?.getAttribute('aria-pressed') === 'false'",
+        "Live refresh did not pause after proving the initial automatic update.",
+      );
       const desktopChart = await dashboardScaleState(client, page.sessionId);
       assert.ok(desktopChart.chartPoints <= 48, JSON.stringify(desktopChart));
       assert.equal(desktopChart.chartRanges, 1);
@@ -179,8 +186,18 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
         "document.querySelector('#last-good-status strong')?.textContent?.trim() || ''",
       );
       assert.notEqual(lastGood, "Initial snapshot");
+      assert.equal(
+        server.liveRequestCount(),
+        2,
+        "The automatic and first manual refreshes should consume exactly two fixture responses.",
+      );
 
       await evaluate(client, page.sessionId, "document.querySelector('#refresh-now').click()");
+      await waitForNodeValue(
+        server.liveRequestCount,
+        (count) => count === 3,
+        "The failed manual refresh did not reach the fixture server.",
+      );
       await waitForFunction(
         client,
         page.sessionId,
@@ -284,6 +301,17 @@ test("real browser covers dashboard focus, live refresh, motion, mobile, and lar
       );
       const rangeMs = Date.now() - rangeStartedAt;
       assert.ok(rangeMs <= 200, "Chart range interaction exceeded 200ms");
+      const rangeBeforeOpen = await activeElement(client, page.sessionId, "#trend-chart-range");
+      assert.equal(
+        rangeBeforeOpen.matches,
+        true,
+        `Chart range lost focus before opening details: ${rangeBeforeOpen.summary}`,
+      );
+      assert.notEqual(
+        rangeBeforeOpen.run,
+        priorRun,
+        "Chart range focus did not retain the newly selected run.",
+      );
 
       await pressKey(client, page.sessionId, "Enter");
       await waitForSelector(client, page.sessionId, '[role="dialog"][aria-modal="true"]');
@@ -1306,6 +1334,15 @@ async function waitForFunction(client, sessionId, fn, message, args = [], timeou
   throw new Error(message);
 }
 
+async function waitForNodeValue(readValue, accepts, message, timeoutMs = 5000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (accepts(readValue())) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(message);
+}
+
 async function evaluate(client, sessionId, expression) {
   const result = await client.send(
     "Runtime.evaluate",
@@ -1370,14 +1407,13 @@ async function pressKey(client, sessionId, key, options = {}) {
     nativeVirtualKeyCode: keySpec.windowsVirtualKeyCode,
     modifiers,
   };
-  await client.send("Input.dispatchKeyEvent", { ...params, type: "rawKeyDown" }, sessionId);
-  if (key === "Enter") {
-    await client.send(
-      "Input.dispatchKeyEvent",
-      { ...params, type: "char", text: "\r", unmodifiedText: "\r" },
-      sessionId,
-    );
-  }
+  await client.send(
+    "Input.dispatchKeyEvent",
+    key === "Enter"
+      ? { ...params, type: "keyDown", text: "\r", unmodifiedText: "\r" }
+      : { ...params, type: "rawKeyDown" },
+    sessionId,
+  );
   await client.send("Input.dispatchKeyEvent", { ...params, type: "keyUp" }, sessionId);
 }
 

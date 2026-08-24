@@ -156,6 +156,7 @@ export async function serveHtml(html, failureHtml, livePayload) {
   assert.ok(address && typeof address === "object");
   return {
     url: `http://127.0.0.1:${address.port}/`,
+    liveRequestCount: () => liveRequestCount,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }

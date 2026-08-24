@@ -542,7 +542,7 @@ export const commandTable = [
       { name: "scope", key: "filesInScope", kind: "list" },
     ],
     description:
-      "Create autoresearch session files from templates and append an initial config header.",
+      "Accept a complete loop contract, then create session files and the initial config record.",
     inputSchema: {
       type: "object",
       properties: {
@@ -597,7 +597,7 @@ export const commandTable = [
       "node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>]",
     ],
     description:
-      "Create a deep-research scratchpad and initialize a quality_gap autoresearch session.",
+      "Create an explicitly selected qualitative-loop scratchpad and initialize quality_gap evidence.",
     inputSchema: {
       type: "object",
       properties: {
@@ -640,7 +640,8 @@ export const commandTable = [
     ],
     conditionallyMutating: true,
     cliOptions: [{ name: "json-full", key: "jsonFull", kind: "boolean" }],
-    description: "Start a quality_gap scratchpad with validation and optional baseline.",
+    description:
+      "Start an explicitly selected quality_gap loop with contract validation and an optional baseline.",
     inputSchema: {
       type: "object",
       properties: {
