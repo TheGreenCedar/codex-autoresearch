@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { access, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
@@ -11,8 +12,10 @@ import {
 import { createCoalescingProgressWriter } from "../../lib/active-progress-writer.js";
 import { createActiveProgressWriter } from "../../lib/active-progress-store.js";
 import { createProgressSnapshot } from "../../lib/runner-progress.js";
+import { runProcess } from "../../lib/runner.js";
 import { runWithRequiredCleanup } from "../../lib/required-cleanup.js";
 import { DASHBOARD_LEDGER_MAX_ENTRIES } from "../../lib/dashboard-ledger-bounds.js";
+import { createExecutionSpec, createExperimentContract } from "../../lib/experiment-contract.js";
 import { parseLedger, writeLedger } from "../helpers/ledger.js";
 import { pathExists } from "../helpers/cli-session.js";
 import { quoteForShell } from "../helpers/process.js";
@@ -30,40 +33,24 @@ async function setupRunnerFixture(
   options: Parameters<typeof setupFixture>[1],
   checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
 ) {
-  const usesContractSetup = options.acceptedContract || options.completeContract;
   const setup = await setupFixture(dir, {
     ...options,
-    ...(usesContractSetup
-      ? {
-          checksCommand,
-          packetBudget: 100,
-          scope: "src",
-        }
-      : {}),
+    acceptedContract: true,
+    completeContract: false,
+    checksCommand,
+    packetBudget: 100,
+    scope: "src",
   });
   assert.equal(setup.code, 0, setup.stderr);
   await mkdir(path.join(dir, "src"), { recursive: true });
-  if (usesContractSetup) return;
-  await writeFile(
-    path.join(dir, "autoresearch.config.json"),
-    `${JSON.stringify(
-      {
-        checksCommand,
-        commitPaths: ["src"],
-        maxIterations: 100,
-      },
-      null,
-      2,
-    )}\n`,
-  );
 }
 
 test("next reports missing primary metric as a failed experiment", async () => {
   await withTempDir("missing-metric", async (dir) => {
-    await setupRunnerFixture(dir, { name: "missing metric" });
-
     const command = `${quoteForShell(process.execPath)} -e "console.log('no metric here')"`;
-    const result = await runCli(["next", "--cwd", dir, "--command", command]);
+    await setupRunnerFixture(dir, { name: "missing metric", benchmarkCommand: command });
+
+    const result = await runCli(["next", "--cwd", dir]);
     assert.equal(result.code, 0, result.stderr);
 
     const payload = JSON.parse(result.stdout).run;
@@ -148,6 +135,88 @@ test("partial-results records diagnostic measure evidence from a failed packet a
       "utf8",
     );
     assert.match(evidenceIndex, /benchmark-artifact/);
+  });
+});
+
+test("partial-results refuses to record or clear a packet after trust configuration drifts", async () => {
+  await withTempDir("partial-results-stale-trust", async (dir) => {
+    const script = path.join(dir, "partial-stale.mjs");
+    await writeFile(
+      script,
+      [
+        "import { mkdirSync, writeFileSync } from 'node:fs';",
+        "mkdirSync('out', { recursive: true });",
+        "writeFileSync('out/rows.json', JSON.stringify({ schemaVersion: 1, metricName: 'seconds', formulaVersion: 'v1', rows: [{ seconds: 3.5 }] }));",
+        "console.log('ARTIFACT rows=out/rows.json');",
+        "process.exit(1);",
+      ].join("\n"),
+    );
+    await setupRunnerFixture(dir, {
+      name: "partial stale trust",
+      acceptedContract: true,
+      benchmarkCommand: `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+    });
+    const packet = await runCli(["next", "--cwd", dir]);
+    assert.equal(packet.code, 0, packet.stderr);
+    const packetPath = JSON.parse(packet.stdout).lastRunPath;
+    const list = await runCli(["partial-results", "--cwd", dir, "--from-last"]);
+    assert.equal(list.code, 0, list.stderr);
+    const candidateId = JSON.parse(list.stdout).candidates[0].id;
+    await mkdir(path.join(dir, "other"));
+    const configured = await runCli(["config", "--cwd", dir, "--commit-paths", "other"]);
+    assert.equal(configured.code, 0, configured.stderr);
+    const ledgerBefore = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
+
+    const record = await runCli(["partial-results", "--cwd", dir, "--record", candidateId]);
+
+    assert.equal(record.code, 1);
+    const refusal = JSON.parse(record.stderr);
+    assert.equal(refusal.code, "mutation-precondition-blocked");
+    assert.equal(refusal.preconditionDecision.primaryBlockerCode, "stale-packet");
+    assert.equal(refusal.preconditionDecision.capabilities["run-packet"], "recovery-only");
+    assert.equal(refusal.mutation, undefined);
+    assert.equal(await readFile(path.join(dir, "autoresearch.jsonl"), "utf8"), ledgerBefore);
+    await access(packetPath);
+  });
+});
+
+test("partial-results treats missing accepted packet trust metadata as stale", async () => {
+  await withTempDir("partial-results-missing-trust", async (dir) => {
+    const script = path.join(dir, "partial-missing-trust.mjs");
+    await writeFile(
+      script,
+      [
+        "import { mkdirSync, writeFileSync } from 'node:fs';",
+        "mkdirSync('out', { recursive: true });",
+        "writeFileSync('out/rows.json', JSON.stringify({ schemaVersion: 1, metricName: 'seconds', formulaVersion: 'v1', rows: [{ seconds: 3.5 }] }));",
+        "console.log('ARTIFACT rows=out/rows.json');",
+        "process.exit(1);",
+      ].join("\n"),
+    );
+    await setupRunnerFixture(dir, {
+      name: "partial missing trust",
+      acceptedContract: true,
+      benchmarkCommand: `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+    });
+    const packetResult = await runCli(["next", "--cwd", dir]);
+    assert.equal(packetResult.code, 0, packetResult.stderr);
+    const packetPath = JSON.parse(packetResult.stdout).lastRunPath;
+    const listed = await runCli(["partial-results", "--cwd", dir, "--from-last"]);
+    assert.equal(listed.code, 0, listed.stderr);
+    const candidateId = JSON.parse(listed.stdout).candidates[0].id;
+    const packet = JSON.parse(await readFile(packetPath, "utf8"));
+    delete packet.history.trustConfig;
+    await writeFile(packetPath, `${JSON.stringify(packet, null, 2)}\n`, "utf8");
+    const ledgerBefore = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
+
+    const record = await runCli(["partial-results", "--cwd", dir, "--record", candidateId]);
+
+    assert.equal(record.code, 1);
+    const refusal = JSON.parse(record.stderr);
+    assert.equal(refusal.code, "mutation-precondition-blocked");
+    assert.equal(refusal.preconditionDecision.primaryBlockerCode, "stale-packet");
+    assert.equal(await readFile(path.join(dir, "autoresearch.jsonl"), "utf8"), ledgerBefore);
+    await access(packetPath);
   });
 });
 
@@ -265,7 +334,6 @@ test("partial-results rejects outside and linked artifact paths", async (t) => {
 
 test("state surfaces active runner progress while next is still executing", async () => {
   await withTempDir("active-progress", async (dir) => {
-    await setupRunnerFixture(dir, { name: "active progress" });
     const script = path.join(dir, "slow-packet.mjs");
     const releaseFile = path.join(dir, "release-packet");
     await writeFile(
@@ -282,15 +350,10 @@ test("state surfaces active runner progress while next is still executing", asyn
         "}, 100);",
       ].join("\n"),
     );
+    const benchmarkCommand = `${quoteForShell(process.execPath)} ${quoteForShell(script)} ${quoteForShell(releaseFile)}`;
+    await setupRunnerFixture(dir, { name: "active progress", benchmarkCommand });
 
-    const child = spawn(process.execPath, [
-      cli,
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      `${quoteForShell(process.execPath)} ${quoteForShell(script)} ${quoteForShell(releaseFile)}`,
-    ]);
+    const child = spawn(process.execPath, [cli, "next", "--cwd", dir]);
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => {
@@ -435,7 +498,7 @@ test("required cleanup preserves falsy failures and both aggregate identities", 
   assert.deepEqual(caught.errors, [0, ""]);
 });
 
-test("next reports command-file ENOENT without mutating existing progress", async () => {
+test("next preserves existing active progress before resolving its command file", async () => {
   await withTempDir("standalone-progress-cleanup", async (dir) => {
     await setupRunnerFixture(dir, { name: "cleanup" });
     const progressPath = path.join(dir, "autoresearch.progress.json");
@@ -453,7 +516,11 @@ test("next reports command-file ENOENT without mutating existing progress", asyn
     ]);
 
     assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /ENOENT/);
+    const refusal = JSON.parse(result.stderr);
+    assert.equal(refusal.code, "mutation-precondition-blocked");
+    assert.equal(refusal.preconditionDecision.primaryBlockerCode, "active-process");
+    assert.equal(refusal.preconditionDecision.capabilities["run-packet"], "blocked");
+    assert.equal(refusal.mutation, undefined);
     assert.equal(await pathExists(progressPath), true);
   });
 });
@@ -508,7 +575,6 @@ test("chatty completion and failure cannot resurrect active progress", async () 
     ["failed", 7, "failed"],
   ] as const) {
     await withTempDir(`chatty-progress-${name}`, async (dir) => {
-      await setupRunnerFixture(dir, { name });
       const script = path.join(dir, "chatty.mjs");
       await writeFile(
         script,
@@ -518,14 +584,10 @@ test("chatty completion and failure cannot resurrect active progress", async () 
           `process.exitCode = ${exitCode};`,
         ].join("\n"),
       );
+      const benchmarkCommand = `${quoteForShell(process.execPath)} ${quoteForShell(script)}`;
+      await setupRunnerFixture(dir, { name, benchmarkCommand });
 
-      const result = await runCli([
-        "next",
-        "--cwd",
-        dir,
-        "--command",
-        `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
-      ]);
+      const result = await runCli(["next", "--cwd", dir]);
       assert.equal(result.code, 0, result.stderr);
       const payload = JSON.parse(result.stdout);
       assert.equal(payload.packetEvidence.progressSnapshot.exitState, expectedState);
@@ -537,7 +599,6 @@ test("chatty completion and failure cannot resurrect active progress", async () 
 
 test("checks-phase timeout flushes its newest generation before cleanup", async () => {
   await withTempDir("checks-progress-timeout", async (dir) => {
-    await setupRunnerFixture(dir, { name: "checks timeout" });
     const checks = path.join(dir, "checks.mjs");
     await writeFile(
       checks,
@@ -547,22 +608,25 @@ test("checks-phase timeout flushes its newest generation before cleanup", async 
       ].join("\n"),
     );
     const checksCommand = `${quoteForShell(process.execPath)} ${quoteForShell(checks)}`;
+    const benchmarkCommand = `${quoteForShell(process.execPath)} -e ${quoteForShell("console.log('METRIC seconds=1')")}`;
+    await setupRunnerFixture(dir, { name: "checks timeout", benchmarkCommand }, checksCommand);
+    const configPath = path.join(dir, "autoresearch.config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
     await writeFile(
-      path.join(dir, "autoresearch.config.json"),
-      `${JSON.stringify({ checksCommand, commitPaths: ["src"], maxIterations: 100 }, null, 2)}\n`,
+      configPath,
+      `${JSON.stringify({ ...config, checksTimeoutSeconds: 1 }, null, 2)}\n`,
     );
-
-    const result = await runCli([
-      "next",
+    const accepted = await runCli([
+      "new-segment",
       "--cwd",
       dir,
-      "--command",
-      `${quoteForShell(process.execPath)} -e ${quoteForShell("console.log('METRIC seconds=1')")}`,
-      "--checks-command",
-      checksCommand,
-      "--checks-timeout-seconds",
-      "1",
+      "--reason",
+      "Accept the checks timeout fixture",
+      "--yes",
     ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
+
+    const result = await runCli(["next", "--cwd", dir]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     const progress = payload.packetEvidence.progressSnapshot;
@@ -628,13 +692,169 @@ test("unproven process-tree termination blocks state and next", async () => {
     const next = await runCli(["next", "--cwd", dir, "--command", command]);
     assert.equal(next.code, 1);
     assert.equal(next.stdout.trim(), "");
-    assert.match(
-      next.stderr,
-      /mutation-precondition-blocked: The canonical precondition permits recovery only; next is not the typed recovery command\./,
-    );
+    const refusal = JSON.parse(next.stderr);
+    assert.equal(refusal.code, "mutation-precondition-blocked");
+    assert.equal(refusal.preconditionDecision.primaryBlockerCode, "process-integrity");
+    assert.equal(refusal.preconditionDecision.capabilities["mutate-session"], "recovery-only");
+    assert.equal(refusal.preconditionDecision.action.kind, "recover-session");
+    assert.match(refusal.preconditionDecision.action.command, /process-recover/);
+    assert.equal(refusal.mutation, undefined);
 
     assert.equal(await pathExists(progressPath), true);
     assert.equal(await pathExists(sideEffect), false);
+  });
+});
+
+test("process recovery proves the recorded tree is dead and removes only its marker", async () => {
+  await withTempDir("termination-failed-recovery", async (dir) => {
+    await setupRunnerFixture(dir, { name: "termination recovery", acceptedContract: true });
+    const progressPath = path.join(dir, "autoresearch.progress.json");
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const configPath = path.join(dir, "autoresearch.config.json");
+    const preservedPath = path.join(dir, "preserved.txt");
+    await writeFile(preservedPath, "preserve me\n");
+    const beforeLedger = await readFile(ledgerPath, "utf8");
+    const beforeConfig = await readFile(configPath, "utf8");
+    const deadPid = 2_147_483_647;
+    await writeFile(
+      progressPath,
+      `${JSON.stringify({
+        generation: 9,
+        packetId: "packet-dead-tree",
+        commandClass: "node script",
+        startedAt: new Date().toISOString(),
+        exitState: "termination_failed",
+        terminationFailed: true,
+        termination: {
+          pid: deadPid,
+          trackedPids: [deadPid],
+          remainingPids: [deadPid],
+          proven: false,
+          reason: "injected_termination_failure",
+        },
+      })}\n`,
+    );
+
+    const recovered = await runCli(["process-recover", "--cwd", dir]);
+    assert.equal(recovered.code, 0, recovered.stderr);
+    const payload = JSON.parse(recovered.stdout);
+    assert.equal(payload.mutation.command, "process-recover");
+    assert.equal(payload.recovered, true);
+    assert.deepEqual(payload.provenDeadPids, [deadPid]);
+    assert.equal(await pathExists(progressPath), false);
+    assert.equal(await readFile(ledgerPath, "utf8"), beforeLedger);
+    assert.equal(await readFile(configPath, "utf8"), beforeConfig);
+    assert.equal(await readFile(preservedPath, "utf8"), "preserve me\n");
+
+    await writeFile(
+      progressPath,
+      `${JSON.stringify({
+        generation: 10,
+        packetId: "packet-live-tree",
+        commandClass: "node script",
+        startedAt: new Date().toISOString(),
+        exitState: "termination_failed",
+        terminationFailed: true,
+        termination: {
+          pid: process.pid,
+          trackedPids: [process.pid],
+          remainingPids: [process.pid],
+          proven: false,
+          reason: "injected_live_process",
+        },
+      })}\n`,
+    );
+    const refused = await runCli(["process-recover", "--cwd", dir]);
+    assert.equal(refused.code, 1);
+    assert.match(refused.stderr, /recorded process tree is still live/i);
+    assert.equal(await pathExists(progressPath), true);
+  });
+});
+
+test("process recovery requires producer-captured failed-before-spawn authority for zero-PID markers", async () => {
+  await withTempDir("termination-missing-root-pid", async (dir) => {
+    await setupRunnerFixture(dir, { name: "missing root pid recovery", acceptedContract: true });
+    const progressPath = path.join(dir, "autoresearch.progress.json");
+    const marker = {
+      generation: 11,
+      packetId: "packet-missing-root-pid",
+      commandClass: "node script",
+      startedAt: new Date().toISOString(),
+      exitState: "termination_failed",
+      terminationFailed: true,
+      termination: {
+        attempted: false,
+        escalated: false,
+        method: "none",
+        pid: null,
+        platform: process.platform,
+        proven: false,
+        reason: "missing_root_pid",
+        remainingPids: [],
+        trackedPids: [],
+      },
+    };
+    const hostileMarkers = [
+      marker,
+      { ...marker, spawnState: "unknown", spawnError: "spawn outcome unavailable" },
+      { ...marker, spawnState: "pending", spawnError: "spawn still pending" },
+      { ...marker, spawnState: "timed-out", spawnError: "spawn outcome timed out" },
+      { ...marker, spawnState: "failed-before-spawn", spawnError: "" },
+      {
+        ...marker,
+        spawnState: "failed-before-spawn",
+        spawnError: "spawn failed",
+        termination: { ...marker.termination, attempted: true },
+      },
+      {
+        ...marker,
+        spawnState: "failed-before-spawn",
+        spawnError: "spawn failed",
+        termination: { ...marker.termination, reason: "runner_rejected_before_start" },
+      },
+    ];
+    for (const hostileMarker of hostileMarkers) {
+      const bytes = `${JSON.stringify(hostileMarker)}\n`;
+      await writeFile(progressPath, bytes);
+      const refused = await runCli(["process-recover", "--cwd", dir]);
+      assert.equal(refused.code, 1);
+      assert.match(
+        refused.stderr,
+        /cannot prove a dead tree|failed-before-spawn|no-process-started proof/i,
+      );
+      assert.equal(await readFile(progressPath, "utf8"), bytes);
+    }
+
+    await writeFile(
+      progressPath,
+      `${JSON.stringify({
+        ...marker,
+        spawnState: "failed-before-spawn",
+        spawnError: "spawn /missing/autoresearch-runner ENOENT",
+      })}\n`,
+    );
+    const recovered = await runCli(["process-recover", "--cwd", dir]);
+    assert.equal(recovered.code, 0, recovered.stderr);
+    const payload = JSON.parse(recovered.stdout);
+    assert.equal(payload.recovered, true);
+    assert.deepEqual(payload.provenDeadPids, []);
+    assert.equal(payload.proof.kind, "no-process-started");
+    assert.equal(payload.proof.spawnState, "failed-before-spawn");
+    assert.equal(await pathExists(progressPath), false);
+  });
+});
+
+test("runner records failed-before-spawn authority from a real spawn error", async () => {
+  await withTempDir("failed-before-spawn-authority", async (dir) => {
+    const result = await runProcess(path.join(dir, "missing-autoresearch-runner"), [], {
+      cwd: dir,
+      timeoutSeconds: 1,
+    });
+
+    assert.equal(result.exitCode, null);
+    assert.equal((result as any).spawnState, "failed-before-spawn");
+    assert.match(String((result as any).spawnError || ""), /\S/);
+    assert.equal(result.termination, null);
   });
 });
 
@@ -682,10 +902,13 @@ test("non-packet termination failure persists the same packet brake", async () =
     ]);
     assert.equal(next.code, 1);
     assert.equal(next.stdout.trim(), "");
-    assert.match(
-      next.stderr,
-      /mutation-precondition-blocked: The canonical precondition permits recovery only; next is not the typed recovery command\./,
-    );
+    const refusal = JSON.parse(next.stderr);
+    assert.equal(refusal.code, "mutation-precondition-blocked");
+    assert.equal(refusal.preconditionDecision.primaryBlockerCode, "process-integrity");
+    assert.equal(refusal.preconditionDecision.capabilities["mutate-session"], "recovery-only");
+    assert.equal(refusal.preconditionDecision.action.kind, "recover-session");
+    assert.match(refusal.preconditionDecision.action.command, /process-recover/);
+    assert.equal(refusal.mutation, undefined);
     assert.equal(await pathExists(path.join(dir, "autoresearch.progress.json")), true);
   });
 });
@@ -828,27 +1051,58 @@ test("packet lifecycle records keep state doctor and dashboard process trust ali
   });
 });
 
-test("unknown packet runner rejection retains a termination-failed brake", async () => {
+test("a pre-spawn runner rejection proves no process started and leaves no recovery brake", async () => {
   await withTempDir("runner-rejection-process-brake", async (dir) => {
-    await setupRunnerFixture(dir, { name: "runner rejection" });
-    await writeFile(path.join(dir, "hostile.command"), "node\0unexpected", "utf8");
-
-    const run = await runCli(["next", "--cwd", dir, "--command-file", "hostile.command"]);
-    assert.notEqual(run.code, 0);
-    const progress = JSON.parse(
-      await readFile(path.join(dir, "autoresearch.progress.json"), "utf8"),
+    await setupRunnerFixture(dir, { name: "runner rejection", acceptedContract: true });
+    const records = parseLedger(await readFile(path.join(dir, "autoresearch.jsonl"), "utf8"));
+    const acceptedIndex = records.findLastIndex(
+      (record) => record.type === "experiment-contract-accepted",
     );
-    assert.equal(progress.exitState, "termination_failed");
-    assert.equal(progress.termination.proven, false);
-    assert.equal(progress.termination.reason, "runner_rejected_before_outcome");
+    assert.notEqual(acceptedIndex, -1);
+    const accepted = records[acceptedIndex] as any;
+    const originalContract = accepted.contract;
+    const { executionDigest: _executionDigest, ...executionInput } =
+      originalContract.evaluator.execution;
+    const envName = "AUTORESEARCH_PRESPAWN_PROOF";
+    const envValue = "accepted-value";
+    const valueDigest = createHash("sha256")
+      .update(
+        `environment-value\0${originalContract.repository.worktreeIdentity}\0${envName}\0${envValue}`,
+      )
+      .digest("hex");
+    const execution = createExecutionSpec({
+      ...executionInput,
+      environment: {
+        inheritance: "minimal",
+        declared: [{ name: envName, valueDigest }],
+        source: { kind: "process" },
+      },
+    });
+    const { contractDigest: _contractDigest, ...contractInput } = originalContract;
+    const contract = createExperimentContract({
+      ...contractInput,
+      evaluator: { ...contractInput.evaluator, execution },
+    });
+    records[acceptedIndex] = {
+      ...accepted,
+      eventId: `experiment-contract-accepted:${accepted.segment}:${contract.contractDigest}`,
+      contract,
+    };
+    await writeLedger(dir, records);
+
+    const childEnv = { ...process.env };
+    delete childEnv[envName];
+    const run = await runSpawnedCli(["next", "--cwd", dir], { env: childEnv });
+    assert.notEqual(run.code, 0);
+    assert.match(run.stderr, /Accepted environment value is unavailable/);
+    assert.equal(await pathExists(path.join(dir, "autoresearch.progress.json")), false);
 
     const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
-    assert.equal(payload.resourcePreflight.canStart, false);
-    assert.equal(payload.resourcePreflight.residue[0].status, "termination-failed");
-    assert.equal(payload.decisionPlan.primaryBlockerCode, "process-integrity");
-    assert.equal(payload.decisionPlan.capabilities["run-packet"], "blocked");
-    assert.equal(payload.decisionPlan.loopDisposition.canRunPacket, false);
+    assert.equal(
+      payload.decisionPlan.requiredEvidence.diagnosticCodes.includes("process-integrity"),
+      false,
+    );
   });
 });

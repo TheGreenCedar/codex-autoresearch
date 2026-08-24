@@ -67,6 +67,7 @@ import {
   readLastRunPacket,
 } from "../last-run-store.js";
 import { parsePorcelainV1Z } from "../git-paths.js";
+import { failureLayerPreconditions, type FailureLayer } from "../decision-compiler.js";
 import { resolvePackageRoot } from "../runtime-paths.js";
 import {
   FAILURE_STATUSES,
@@ -84,7 +85,10 @@ import {
 import { isMetricEligibleStatus } from "../run-status.js";
 import { buildProcessLifecycleRecord, rekeyProcessLifecycleRecords } from "../process-governor.js";
 import { parseJsonlRecords } from "../session-records.js";
-import { pendingLogTransactionStateSpec } from "../pending-log-transaction-store.js";
+import {
+  inspectPendingLogLedgerRelation,
+  pendingLogTransactionStateSpec,
+} from "../pending-log-transaction-store.js";
 import {
   AUTORESEARCH_DASHBOARD_FILE,
   AUTORESEARCH_RESEARCH_DIR,
@@ -211,6 +215,28 @@ export async function logExperiment(
   }
   const asiFromFile = await parseJsonFileOption(asiFilePath, workDir, asiFileOptionName);
   const asi = record(asiFromFile ?? args.asi ?? packetDecision.asiTemplate);
+  const learningFilePath = optionalString(args.learning_json_file ?? args.learningJsonFile);
+  if (learningFilePath && args.learning != null) {
+    throw new Error("Use either --learning or --learning-json-file, not both.");
+  }
+  const learningFromFile = await parseJsonFileOption(
+    learningFilePath,
+    workDir,
+    "--learning-json-file",
+  );
+  const learning = validateLearningInput(
+    learningFromFile ?? args.learning ?? packetRun.learning ?? packetDecision.learning,
+  );
+  const failureFilePath = optionalString(args.failure_json_file ?? args.failureJsonFile);
+  if (failureFilePath && args.failure != null) {
+    throw new Error("Use either --failure or --failure-json-file, not both.");
+  }
+  const failureFromFile = await parseJsonFileOption(
+    failureFilePath,
+    workDir,
+    "--failure-json-file",
+  );
+  const rawFailure = failureFromFile ?? args.failure ?? packetRun.failure ?? null;
   const evidenceContract =
     Object.keys(artifacts).length > 0
       ? acceptedExperimentContractForEvidenceValidation(workDir)
@@ -234,6 +260,7 @@ export async function logExperiment(
   const stateBefore = currentState(workDir);
   let contractEvaluationEvidence: ContractEvaluationEvidence | null = null;
   let acceptedContract: ExperimentContract | null = null;
+  let acceptedCandidateFingerprint = "";
   let preconditionEpoch = "";
   let runPurpose: RunPurpose = manualRunPurpose(status, stateBefore);
   let evaluationAuthority: EvaluationAuthority = "manual";
@@ -259,6 +286,7 @@ export async function logExperiment(
     acceptedContract = accepted;
     preconditionEpoch = String(authority.event.eventId || "");
     const candidateFingerprint = await contractCandidateFingerprintForWorkDir(workDir, accepted);
+    acceptedCandidateFingerprint = candidateFingerprint;
     const packetCandidateFingerprint = packetRun.contractCandidateFingerprint;
     const evaluatedMetric = finiteMetric(packetRun.parsedPrimary);
     const checkRuns = Array.isArray(packetChecks.runs) ? packetChecks.runs : [];
@@ -368,6 +396,14 @@ export async function logExperiment(
     throw new Error(protectedBenchmarkGuardError(protectedBenchmarkGuard));
   }
   const logWarnings: string[] = [];
+  const failure = validateFailureInput(rawFailure, {
+    acceptedContract,
+    acceptedCandidateFingerprint,
+    packetHistory,
+    packetProcessLifecycle,
+    preconditionEpoch,
+    status,
+  });
   const mutationPlan = await prepareLogMutation({
     acceptedEditablePaths: acceptedContract?.scope.editable || [],
     args,
@@ -394,8 +430,10 @@ export async function logExperiment(
     runPurpose,
     evaluationAuthority,
     candidateOrigin,
-    learning: { kind: "none" },
+    learning,
   };
+  if (acceptedContract) experiment.experimentContractDigest = acceptedContract.contractDigest;
+  if (failure) experiment.failure = failure;
   if (preconditionEpoch) experiment.preconditionEpoch = preconditionEpoch;
   if (contractEvaluationEvidence) {
     experiment.contractEvaluationEvidence = contractEvaluationEvidence;
@@ -502,13 +540,17 @@ export async function logExperiment(
     experiment,
     baseline: stateAfter.baseline,
     best: stateAfter.best,
-    confidence: stateAfter.confidence,
-    limit,
+    ...(stateAfter.confidence == null ? {} : { confidence: stateAfter.confidence }),
+    limit: publicLogLimit(limit),
     git: mutation.gitMessage,
-    revert: mutation.revertMessage,
-    recovery: logWarnings.join(" "),
-    warnings: logWarnings,
-    warningDetails: [],
+    ...(mutation.revertMessage ? { revert: mutation.revertMessage } : {}),
+    ...(logWarnings.length > 0
+      ? {
+          recovery: logWarnings.join(" "),
+          warnings: logWarnings,
+          warningDetails: [],
+        }
+      : {}),
     lastRunCleared: Boolean(lastPacket),
   };
 }
@@ -1179,14 +1221,54 @@ async function resumePendingLogTransaction({
     experiment,
     baseline: stateAfter.baseline,
     best: stateAfter.best,
-    confidence: stateAfter.confidence,
-    limit: iterationLimitInfo(stateAfter, config),
+    ...(stateAfter.confidence == null ? {} : { confidence: stateAfter.confidence }),
+    limit: publicLogLimit(iterationLimitInfo(stateAfter, config)),
     git: receipt.result.gitMessage,
-    revert: receipt.result.revertMessage,
-    recovery: warnings.join(" "),
-    warnings,
-    warningDetails: [],
+    ...(receipt.result.revertMessage ? { revert: receipt.result.revertMessage } : {}),
+    ...(warnings.length > 0
+      ? {
+          recovery: warnings.join(" "),
+          warnings,
+          warningDetails: [],
+        }
+      : {}),
     lastRunCleared: receipt.packet.required,
+  };
+}
+
+function publicLogLimit(limit: UnknownRecord): UnknownRecord {
+  const budget = record(limit.budgetStatus);
+  const stopReason = String(limit.stopReason || budget.stopReason || "").trim();
+  const warnings = Array.isArray(budget.warnings)
+    ? budget.warnings.map(String).filter(Boolean)
+    : [];
+  return {
+    ...(limit.maxIterations == null ? {} : { maxIterations: limit.maxIterations }),
+    ...(limit.remainingIterations == null
+      ? {}
+      : { remainingIterations: limit.remainingIterations }),
+    limitReached: limit.limitReached === true,
+    ...(stopReason ? { stopReason } : {}),
+    budgetStatus: {
+      configured: budget.configured === true,
+      exhausted: budget.exhausted === true,
+      ...(budget.packetBudget == null ? {} : { packetBudget: budget.packetBudget }),
+      ...(budget.packetsUsed == null ? {} : { packetsUsed: budget.packetsUsed }),
+      ...(budget.packetsRemaining == null ? {} : { packetsRemaining: budget.packetsRemaining }),
+      ...(budget.wallClockBudgetSeconds == null
+        ? {}
+        : { wallClockBudgetSeconds: budget.wallClockBudgetSeconds }),
+      ...(budget.wallClockElapsedSeconds == null
+        ? {}
+        : { wallClockElapsedSeconds: budget.wallClockElapsedSeconds }),
+      ...(budget.wallClockRemainingSeconds == null
+        ? {}
+        : { wallClockRemainingSeconds: budget.wallClockRemainingSeconds }),
+      ...(String(budget.budgetNote || "").trim()
+        ? { budgetNote: String(budget.budgetNote).trim() }
+        : {}),
+      ...(warnings.length > 0 ? { warnings } : {}),
+    },
   };
 }
 
@@ -2310,35 +2392,15 @@ type TransactionLedgerSuffix =
 async function inspectTransactionLedgerSuffix(
   workDir: string,
   receipt: LogTransactionReceipt,
-  expectedRows: UnknownRecord[],
+  _expectedRows: UnknownRecord[],
 ): Promise<TransactionLedgerSuffix> {
   const current = await readLedgerBytes(workDir);
-  const prefixByteLength = receipt.ledgerEvent.prefixByteLength;
-  if (current.byteLength < prefixByteLength) {
-    throw new Error("The ledger changed before the pending transaction prefix.");
-  }
-  const prefix = current.subarray(0, prefixByteLength);
-  if (sha256Bytes(prefix) !== receipt.ledgerEvent.prefixDigest) {
-    throw new Error("The ledger prefix changed while the log transaction was pending.");
-  }
-  const requiredDelimiter =
-    prefix.byteLength > 0 && prefix[prefix.byteLength - 1] !== 0x0a ? "\n" : "";
-  if (receipt.ledgerEvent.prefixDelimiter !== requiredDelimiter) {
-    throw new Error("The receipt-owned ledger row delimiter does not match the prepared prefix.");
-  }
-  const suffix = current.subarray(prefixByteLength);
-  const expected = ledgerSuffixBytes(receipt, expectedRows);
-  if (suffix.equals(expected)) return { state: "complete", prefix };
-  if (suffix.byteLength === 0) return { state: "absent", prefix };
-  if (
-    suffix.byteLength < expected.byteLength &&
-    expected.subarray(0, suffix.byteLength).equals(suffix)
-  ) {
-    return { state: "torn", prefix };
-  }
-  throw new Error(
-    "The ledger suffix is not an unambiguous partial write owned by the pending transaction.",
-  );
+  const relation = inspectPendingLogLedgerRelation(receipt, current);
+  if (relation.kind === "unrelated") throw new Error(relation.reason);
+  const prefix = current.subarray(0, relation.prefixByteLength);
+  if (relation.kind === "complete") return { state: "complete", prefix };
+  if (relation.kind === "absent") return { state: "absent", prefix };
+  return { state: "torn", prefix };
 }
 
 async function snapshotLedgerPrefix(
@@ -2574,10 +2636,26 @@ function logRequestIdentity(
   config: UnknownRecord,
   workDir: string,
 ): { requestDigest: string; configDigest: string } {
-  const request = { ...args };
-  delete request.cwd;
-  delete request.working_dir;
-  delete request.workingDir;
+  const incidentalKeys = new Set([
+    "_",
+    "allowOutsideWorkdir",
+    "allow_outside_workdir",
+    "canonicalDecisionFacts",
+    "canonicalDecisionPlan",
+    "coherentSnapshot",
+    "cwd",
+    "readCache",
+    "workingDir",
+    "working_dir",
+  ]);
+  const request = Object.fromEntries(
+    Object.entries(args)
+      .filter(([key, value]) => !incidentalKeys.has(key) && value != null)
+      .map(([key, value]) => [
+        key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
+        value,
+      ]),
+  );
   return {
     requestDigest: sha256Json({ workDir: path.resolve(workDir), request }),
     configDigest: sha256Json(config),
@@ -3734,6 +3812,145 @@ function copyIfPresent(
   targetKey = sourceKey,
 ): void {
   if (source[sourceKey]) target[targetKey] = source[sourceKey];
+}
+
+function validateLearningInput(value: unknown): UnknownRecord {
+  if (value == null) return { kind: "none" };
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("learning must be a structured JSON object.");
+  }
+  const learning = value as UnknownRecord;
+  if (learning.kind === "none") return { kind: "none" };
+  if (learning.kind !== "causal" && learning.kind !== "discriminating") {
+    throw new Error("learning.kind must be none, causal, or discriminating.");
+  }
+  const changedBelief =
+    typeof learning.changedBelief === "string" ? learning.changedBelief.trim() : "";
+  if (!changedBelief) {
+    throw new Error(`${learning.kind} learning requires changedBelief as a nonempty string.`);
+  }
+  const rawEvidence = Array.isArray(learning.evidence) ? learning.evidence : [];
+  const evidence = rawEvidence.map((item) => (typeof item === "string" ? item.trim() : ""));
+  if (evidence.some((item) => !item) || evidence.length !== rawEvidence.length) {
+    throw new Error(`${learning.kind} learning evidence must contain only nonempty strings.`);
+  }
+  if (evidence.length === 0) {
+    throw new Error(`${learning.kind} learning requires non-empty evidence.`);
+  }
+  return { kind: learning.kind, changedBelief, evidence: [...new Set(evidence)] };
+}
+
+function validateFailureInput(
+  value: unknown,
+  {
+    acceptedContract,
+    acceptedCandidateFingerprint,
+    packetHistory,
+    packetProcessLifecycle,
+    preconditionEpoch,
+    status,
+  }: {
+    acceptedContract: ExperimentContract | null;
+    acceptedCandidateFingerprint: string;
+    packetHistory: UnknownRecord;
+    packetProcessLifecycle: UnknownRecord[];
+    preconditionEpoch: string;
+    status: string;
+  },
+): UnknownRecord | null {
+  if (value == null) return null;
+  if (!FAILURE_STATUSES.has(status)) {
+    throw new Error("failure evidence is allowed only for crash or checks_failed logs.");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("failure must be a structured JSON object.");
+  }
+  const failure = value as UnknownRecord;
+  const layer =
+    typeof failure.layer === "string"
+      ? (failure.layer.trim() as FailureLayer)
+      : ("" as FailureLayer);
+  if (!Object.hasOwn(failureLayerPreconditions, layer)) {
+    throw new Error(
+      `failure.layer must be one of ${Object.keys(failureLayerPreconditions).sort().join(", ")}.`,
+    );
+  }
+  const code = typeof failure.code === "string" ? failure.code.trim() : "";
+  if (!code) throw new Error("failure.code must be a nonempty string.");
+  const preconditions = record(failure.preconditions);
+  const required = failureLayerPreconditions[layer];
+  for (const name of required) {
+    if (typeof preconditions[name] !== "string" || !String(preconditions[name]).trim()) {
+      throw new Error(`failure.preconditions.${name} is required for layer ${layer}.`);
+    }
+  }
+  if (
+    required.includes("preconditionEpoch") &&
+    (!preconditionEpoch || preconditions.preconditionEpoch !== preconditionEpoch)
+  ) {
+    throw new Error("failure.preconditions.preconditionEpoch does not match accepted authority.");
+  }
+  if (
+    required.includes("contractDigest") &&
+    (!acceptedContract || preconditions.contractDigest !== acceptedContract.contractDigest)
+  ) {
+    throw new Error("failure.preconditions.contractDigest does not match accepted authority.");
+  }
+  if (layer === "evaluator" && acceptedContract) {
+    const evaluatorIdentity = `${acceptedContract.evaluator.id}@${acceptedContract.evaluator.execution.executionDigest}`;
+    const provided = `${preconditions.acceptedEvaluatorIdentity}@${preconditions.acceptedEvaluatorExecutionDigest}`;
+    if (provided !== evaluatorIdentity) {
+      throw new Error("failure evaluator preconditions do not match accepted authority.");
+    }
+  }
+  if (layer === "accepted-check" && acceptedContract) {
+    const provided = `${preconditions.acceptedCheckIdentity}@${preconditions.acceptedCheckExecutionDigest}`;
+    const accepted = acceptedContract.checks.some(
+      (check) => `${check.id}@${check.execution.executionDigest}` === provided,
+    );
+    if (!accepted) throw new Error("failure check preconditions do not match accepted authority.");
+  }
+  if (layer === "repository") {
+    const packetGit = record(packetHistory.git);
+    const acceptedAuthority = acceptedContract
+      ? {
+          expectedHead: String(packetGit.head || ""),
+          acceptedEditableScopeDigest: sha256Json(acceptedContract.scope.editable),
+          candidateFingerprint: acceptedCandidateFingerprint,
+        }
+      : null;
+    if (
+      !acceptedAuthority ||
+      Object.entries(acceptedAuthority).some(
+        ([name, expected]) => !expected || preconditions[name] !== expected,
+      )
+    ) {
+      throw new Error("failure repository preconditions do not match captured authority.");
+    }
+  }
+  if (layer === "process") {
+    const terminalRecords = packetProcessLifecycle.filter(
+      (entry) => entry.event === "terminated" || entry.event === "termination-failed",
+    );
+    const acceptedAuthority =
+      packetProcessLifecycle.length > 0 && terminalRecords.length > 0
+        ? {
+            processLifecycleIdentity: sha256Json(packetProcessLifecycle),
+            terminationProof: sha256Json(terminalRecords),
+          }
+        : null;
+    if (
+      !acceptedAuthority ||
+      Object.entries(acceptedAuthority).some(([name, expected]) => preconditions[name] !== expected)
+    ) {
+      throw new Error("failure process preconditions do not match captured authority.");
+    }
+  }
+  return {
+    layer,
+    code,
+    preconditions: Object.fromEntries(required.map((name) => [name, preconditions[name]])),
+  };
 }
 
 function record(value: unknown): UnknownRecord {

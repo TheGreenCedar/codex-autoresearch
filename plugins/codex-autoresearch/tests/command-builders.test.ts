@@ -180,8 +180,10 @@ test("command table derives schemas, registry, handlers, help, and compatibility
 
 test("table lock policy covers every mutating and conditional command", () => {
   const conditionalArgs: Record<string, Record<string, unknown>> = {
+    clear: { confirm: true },
     guide: { startDashboard: true },
     "session-forensics": { apply: true },
+    "research-start": {},
     "research-fanout": { yes: true },
     "lane-runner": { command: "git status --short" },
     "partial-results": { record: "candidate-1" },
@@ -191,6 +193,8 @@ test("table lock policy covers every mutating and conditional command", () => {
     "benchmark-lint": { command: "node bench.mjs" },
     "checks-inspect": { command: "npm test" },
     doctor: { checkBenchmark: true },
+    "new-segment": { confirm: true },
+    "promote-gate": { confirm: true },
   };
   assert.deepEqual(
     Object.keys(conditionalArgs).sort(),

@@ -6,6 +6,11 @@ import { StringDecoder } from "node:string_decoder";
 import { renderShellCommand } from "./command-rendering.js";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { productGradeFinalizationIssue } from "./finalization-acceptance.js";
+import {
+  blockedFinalizationDecisionFact,
+  buildFinalizationDecisionFact,
+  type FinalizationDecisionFact,
+} from "./finalization-decision-fact.js";
 import { classifyFinalizationRunwayFromFacts } from "./finalization-runway.js";
 import { parseNameStatusZ } from "./git-paths.js";
 import {
@@ -71,6 +76,7 @@ export async function finalizePreview(args: LooseObject) {
   emitProgress(args, "finalize-preview", `checking Git state in ${workDir}`);
   const inside = await gitOk(["rev-parse", "--is-inside-work-tree"], workDir);
   if (!inside.ok || inside.stdout.trim() !== "true") {
+    captureFinalizationDecisionFact(args, blockedFinalizationDecisionFact());
     return await withProgress(
       {
         ok: true,
@@ -82,13 +88,17 @@ export async function finalizePreview(args: LooseObject) {
       },
       startedAt,
       "blocked",
+      "finalize-preview",
+      args.canonicalDecisionProjection !== false,
     );
   }
 
   const branch = (await git(["branch", "--show-current"], workDir)).stdout.trim();
   const dirty = (await git(["status", "--porcelain=v1", "-z"], workDir)).stdout;
   emitProgress(args, "finalize-preview", "reading autoresearch ledger and kept commits");
-  const ledgerEntries = await readLedgerEntries(workDir);
+  const ledgerEntries = Array.isArray(args.capturedRecords)
+    ? args.capturedRecords
+    : await readLedgerEntries(workDir);
   const ledgerRuns = ledgerEntries.filter((entry: LooseObject) => entry.run != null) as KeptRun[];
   const keptRuns = ledgerEntries.filter(isAcceptedCurrentRun) as KeptRun[];
   const productClaimCoverage = buildFinalizationProductClaimCoverageFromLedger(ledgerEntries);
@@ -161,6 +171,14 @@ export async function finalizePreview(args: LooseObject) {
     keptRuns,
     missingCommitCount,
   });
+  captureFinalizationDecisionFact(
+    args,
+    buildFinalizationDecisionFact({
+      ready,
+      currentTreeRecovery: actionCode === "current-tree-finalization",
+      acceptedEvidenceCount: groups.length,
+    }),
+  );
   return await withProgress(
     {
       ok: true,
@@ -172,7 +190,6 @@ export async function finalizePreview(args: LooseObject) {
       groups,
       missingCommitCount,
       excludedCommits: finalTreePlan.excludedCommits,
-      excludedHistoryCommits: finalTreePlan.excludedCommits,
       excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
       finalTreeCoverage: finalTreePlan.finalTreeCoverage,
       semanticSafety,
@@ -208,7 +225,14 @@ export async function finalizePreview(args: LooseObject) {
     },
     startedAt,
     ready ? "completed" : "blocked",
+    "finalize-preview",
+    args.canonicalDecisionProjection !== false,
   );
+}
+
+function captureFinalizationDecisionFact(args: LooseObject, fact: FinalizationDecisionFact): void {
+  const capture = args.captureCanonicalDecisionFact;
+  if (typeof capture === "function") capture(fact);
 }
 
 async function buildFinalizationRunwaySummary({
@@ -731,22 +755,27 @@ async function withProgress(
   startedAt: number,
   status: string,
   kind: ProgressKind = "finalize-preview",
+  projectDecision = true,
 ): Promise<LooseObject> {
   const durationSeconds = Number(((Date.now() - startedAt) / 1000).toFixed(3));
   const label =
     kind === "finalize-current-tree"
       ? "Preview current final tree review unit"
       : "Preview review branch readiness";
-  const decision = await loadCanonicalSessionDecision({
-    requestedCwd: String(result.workDir || process.cwd()),
-    facts: { finalization: result },
-  });
+  const decision = projectDecision
+    ? await loadCanonicalSessionDecision({
+        requestedCwd: String(result.workDir || process.cwd()),
+        facts: { finalization: result },
+      })
+    : null;
   return {
     ...result,
-    ...(decision.ok
+    ...(decision?.ok
       ? { decisionPlanProjection: projectCompactDecisionPlan(decision.plan) }
-      : { snapshotDiagnostic: decision.diagnostic }),
-    ...(decision.ok ? { resolvedDecision: projectResolvedDecision(decision.plan) } : {}),
+      : decision
+        ? { snapshotDiagnostic: decision.diagnostic }
+        : {}),
+    ...(decision?.ok ? { resolvedDecision: projectResolvedDecision(decision.plan) } : {}),
     progress: {
       mode: "synchronous",
       status,

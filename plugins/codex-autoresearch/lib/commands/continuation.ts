@@ -39,6 +39,7 @@ export function buildContinuationCommands({
     measureLast: `node ${script} log --cwd ${cwd} --from-last --status measure --description "Baseline measurement"`,
     discardLast: `node ${script} log --cwd ${cwd} --from-last --status discard --description "Describe the discarded change"`,
     ledgerDoctor: `node ${script} ledger-doctor --cwd ${cwd} --json`,
+    processRecover: `node ${script} process-recover --cwd ${cwd}`,
     partialResults: `node ${script} partial-results --cwd ${cwd} --from-last`,
     laneRunner: `node ${script} lane-runner --cwd ${cwd} --dry-run`,
     gapCandidates: `node ${script} gap-candidates --cwd ${cwd} --research-slug ${slug}`,

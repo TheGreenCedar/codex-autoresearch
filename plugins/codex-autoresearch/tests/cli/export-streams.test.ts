@@ -120,7 +120,7 @@ test("large benchmark output is capped and marked truncated", async () => {
     const command = `${quoteForShell(process.execPath)} -e "console.log('x'.repeat(30000)); console.log('METRIC seconds=1')"`;
     await setupFixture(dir, {
       name: "large output",
-      completeContract: true,
+      acceptedContract: true,
       benchmarkCommand: command,
     });
     const result = await runCli(["next", "--cwd", dir]);
@@ -137,7 +137,7 @@ test("large no-newline benchmark tails do not hide early metrics", async () => {
     const command = `${quoteForShell(process.execPath)} -e "process.stdout.write('METRIC seconds=2\\n'); process.stdout.write('x'.repeat(300000))"`;
     await setupFixture(dir, {
       name: "large no newline",
-      completeContract: true,
+      acceptedContract: true,
       benchmarkCommand: command,
     });
     const result = await runCli(["next", "--cwd", dir]);
@@ -154,7 +154,7 @@ test("large metric streams retain bounded metrics and primary evidence", async (
     const command = `${quoteForShell(process.execPath)} -e "for (let i = 0; i < 20000; i++) console.log('METRIC m' + i + '=' + i); console.log('METRIC seconds=1')"`;
     await setupFixture(dir, {
       name: "large metric stream",
-      completeContract: true,
+      acceptedContract: true,
       benchmarkCommand: command,
     });
     const result = await runCli(["next", "--cwd", dir]);
@@ -190,7 +190,7 @@ test("large metric streams keep a primary metric outside retained output tails",
     const command = `${quoteForShell(process.execPath)} ${quoteForShell(emitter)}`;
     await setupFixture(dir, {
       name: "large primary stream",
-      completeContract: true,
+      acceptedContract: true,
       benchmarkCommand: command,
     });
     const result = await runCli(["next", "--cwd", dir]);

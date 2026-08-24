@@ -63,6 +63,8 @@ type ProgressStageResult = {
   outputTail: string;
   stage: string;
   status: string;
+  spawnError?: string | null;
+  spawnState?: string;
   termination?: unknown;
   terminationFailed?: boolean;
   timedOut: boolean;
@@ -170,16 +172,17 @@ async function runExperimentWithProgressWriter(
     } catch (error) {
       progressSnapshot = finishProgressSnapshot(progressSnapshot, {
         exitCode: null,
-        timedOut: true,
-        terminationFailed: true,
+        timedOut: false,
+        crashed: true,
+        terminationFailed: false,
         termination: {
           attempted: false,
           escalated: false,
           method: "none",
           pid: null,
           platform: process.platform,
-          proven: false,
-          reason: "runner_rejected_before_outcome",
+          proven: true,
+          reason: "runner_rejected_before_start",
           remainingPids: [],
           trackedPids: [],
         },
@@ -256,11 +259,12 @@ async function runExperimentWithProgressWriter(
   const terminationFailed = Boolean(
     benchmark.terminationFailed || checkRuns.some(({ result }) => result.terminationFailed),
   );
+  const terminationResult =
+    checkRuns.find(({ result }) => result.terminationFailed || result.timedOut)?.result ??
+    (benchmark.terminationFailed || benchmark.timedOut ? benchmark : checkRuns.at(-1)?.result) ??
+    benchmark;
   const termination =
-    checkRuns.find(({ result }) => result.terminationFailed || result.timedOut)?.result
-      .termination ??
-    checkRuns.at(-1)?.result.termination ??
-    benchmark.termination;
+    terminationResult.termination ?? checkRuns.at(-1)?.result.termination ?? benchmark.termination;
   const metricError =
     benchmarkPassed && !primaryPresent
       ? `Benchmark completed but did not print primary metric METRIC ${state.config.metricName}=<number>.`
@@ -322,6 +326,8 @@ async function runExperimentWithProgressWriter(
       timedOut: true,
       terminationFailed: true,
       termination,
+      spawnState: terminationResult.spawnState,
+      spawnError: terminationResult.spawnError,
       timeoutPhase: benchmark.terminationFailed ? "benchmark" : "checks",
       completedAt: checks?.finishedAt || benchmark.finishedAt,
       artifacts,
@@ -333,6 +339,8 @@ async function runExperimentWithProgressWriter(
       exitCode: checks?.exitCode ?? benchmark.exitCode,
       timedOut: benchmark.timedOut || Boolean(checks?.timedOut),
       termination,
+      spawnState: terminationResult.spawnState,
+      spawnError: terminationResult.spawnError,
       timeoutPhase: benchmark.timedOut ? "benchmark" : checks?.timedOut ? "checks" : "none",
       completedAt: checks?.finishedAt || benchmark.finishedAt,
       artifacts,
@@ -378,6 +386,8 @@ async function runExperimentWithProgressWriter(
     timedOut: benchmark.timedOut || Boolean(checks?.timedOut),
     termination,
     terminationFailed,
+    spawnState: terminationResult.spawnState,
+    spawnError: terminationResult.spawnError,
     timeoutPhase: benchmark.timedOut ? "benchmark" : checks?.timedOut ? "checks" : "none",
     durationSeconds: benchmark.durationSeconds,
     parsedMetrics,
@@ -408,6 +418,8 @@ async function runExperimentWithProgressWriter(
           timedOut: checks.timedOut,
           termination: checks.termination,
           terminationFailed: checks.terminationFailed,
+          spawnState: checks.spawnState,
+          spawnError: checks.spawnError,
           durationSeconds: checks.durationSeconds,
           passed: checksPassed,
           tailOutput: tailText(checks.output, 80, 16000),
@@ -418,6 +430,8 @@ async function runExperimentWithProgressWriter(
             exitCode: result.exitCode,
             timedOut: result.timedOut,
             terminationFailed: result.terminationFailed,
+            spawnState: result.spawnState,
+            spawnError: result.spawnError,
             durationSeconds: result.durationSeconds,
             passed: result.exitCode === 0 && !result.timedOut,
             tailOutput: tailText(result.output, 80, 16000),
@@ -515,6 +529,8 @@ function aggregateCheckRuns(runs: Array<{ result: ShellRunResult }>): ShellRunRe
       .map((result) => result.retainedMetricOutput)
       .filter(Boolean)
       .join("\n"),
+    spawnError: failed?.spawnError ?? last.spawnError,
+    spawnState: failed?.spawnState ?? last.spawnState,
     startedAt: first.startedAt,
     termination:
       results.find((result) => result.terminationFailed || result.timedOut)?.termination ??
@@ -629,6 +645,8 @@ function progressStage(stage: string, label: string, result: ShellRunResult): Pr
     timedOut: Boolean(result.timedOut),
     termination: result.termination || null,
     terminationFailed: Boolean(result.terminationFailed),
+    spawnState: result.spawnState,
+    spawnError: result.spawnError,
     outputTail: tailText(result.output || ""),
   };
 }

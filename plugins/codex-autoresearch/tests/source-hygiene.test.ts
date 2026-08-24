@@ -127,7 +127,7 @@ test("source hygiene keeps canonical decisions downstream-only and retired autho
     },
     {
       path: "plugins/codex-autoresearch/lib/session-decision.ts",
-      content: "const reason = finalization.nextAction;\n",
+      content: "const reason = finalization.nextAction;\nconst code = finalization.actionCode;\n",
     },
     {
       path: "plugins/codex-autoresearch/lib/finalize-preview.ts",
@@ -157,6 +157,22 @@ test("source hygiene keeps canonical decisions downstream-only and retired autho
   assert.match(offenders[3].reason, /capsule|display/i);
   assert.match(offenders[4].reason, /retired/i);
   assert.match(offenders[5].reason, /projection|nextAction/i);
+});
+
+test("public finalization fixtures cannot overwrite planner groups and self-sign the result", () => {
+  const fixtureSources = [
+    path.join(pluginRoot, "tests", "finalize", "helpers.ts"),
+    path.join(pluginRoot, "tests", "finalize", "review-branches.test.ts"),
+  ]
+    .map((sourcePath) => readFileSync(sourcePath, "utf8"))
+    .join("\n");
+
+  assert.doesNotMatch(fixtureSources, /\battachCurrentFinalizationAuthority\b/);
+  assert.doesNotMatch(fixtureSources, /\bgroups\s*:\s*requestedPlan\.groups\b/);
+  assert.doesNotMatch(
+    fixtureSources,
+    /\bplan_fingerprint\s*=\s*finalizationPlanFingerprint\s*\(\s*authorizedPlan\s*\)/,
+  );
 });
 
 test("plugin metadata keeps the public product boundary", () => {

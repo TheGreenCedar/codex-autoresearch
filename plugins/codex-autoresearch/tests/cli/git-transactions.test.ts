@@ -23,10 +23,14 @@ async function prepareAcceptedKeep(
     commitPaths,
     editableScope,
     mutate,
+    prepareAcceptedTree,
+    preparePacketHead,
   }: {
     commitPaths: string[];
     editableScope: string[];
     mutate: () => Promise<void>;
+    prepareAcceptedTree?: () => Promise<void>;
+    preparePacketHead?: () => Promise<void>;
   },
 ): Promise<void> {
   await mkdir(path.join(dir, "contract"), { recursive: true });
@@ -35,14 +39,29 @@ async function prepareAcceptedKeep(
     "console.log('METRIC seconds=1');\n",
   );
   await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n");
+  const benchmarkCommand = `${quoteForShell(process.execPath)} contract/evaluator.mjs`;
+  const checksCommand = `${quoteForShell(process.execPath)} contract/checks.mjs`;
+  const setup = await setupFixture(dir, {
+    name: "accepted Git transaction fixture",
+    goal: "Keep only contract-qualified repository changes.",
+    metricName: "seconds",
+    direction: "lower",
+    completeContract: true,
+    benchmarkCommand,
+    checksCommand,
+    packetBudget: 20,
+    scope: "src",
+  });
+  assert.equal(setup.code, 0, setup.stderr);
+  const configPath = path.join(dir, "autoresearch.config.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
   await writeFile(
-    path.join(dir, "autoresearch.config.json"),
+    configPath,
     `${JSON.stringify(
       {
-        benchmarkCommand: `${quoteForShell(process.execPath)} contract/evaluator.mjs`,
+        ...config,
         checkImplementationPaths: ["contract/checks.mjs"],
         checksAuthoritative: true,
-        checksCommand: `${quoteForShell(process.execPath)} contract/checks.mjs`,
         commitPaths,
         editableScope,
         maxIterations: 20,
@@ -54,6 +73,31 @@ async function prepareAcceptedKeep(
       2,
     )}\n`,
   );
+  const sessionScripts =
+    process.platform === "win32"
+      ? ["autoresearch.ps1", "autoresearch.checks.ps1"]
+      : ["autoresearch.sh", "autoresearch.checks.sh"];
+  await git(dir, [
+    "add",
+    "autoresearch.jsonl",
+    "autoresearch.config.json",
+    "autoresearch.md",
+    "autoresearch.ideas.md",
+    ...sessionScripts,
+    "contract",
+  ]);
+  await git(dir, ["commit", "-m", "accepted contract fixture"]);
+  await prepareAcceptedTree?.();
+  await preparePacketHead?.();
+  const accepted = await runCli([
+    "new-segment",
+    "--cwd",
+    dir,
+    "--reason",
+    "Accept the Git transaction fixture contract",
+    "--yes",
+  ]);
+  assert.equal(accepted.code, 0, accepted.stderr);
   const baseline = await runCli([
     "log",
     "--cwd",
@@ -66,8 +110,6 @@ async function prepareAcceptedKeep(
     "Manual reference observation",
   ]);
   assert.equal(baseline.code, 0, baseline.stderr);
-  await git(dir, ["add", "autoresearch.jsonl", "autoresearch.config.json", "contract"]);
-  await git(dir, ["commit", "-m", "accepted contract fixture"]);
   await mutate();
   const packet = await runCli(["next", "--cwd", dir]);
   assert.equal(packet.code, 0, packet.stderr);
@@ -89,9 +131,11 @@ test("keep commits can be scoped to experiment paths", async () => {
     await prepareAcceptedKeep(dir, {
       commitPaths: ["tracked.txt"],
       editableScope: ["tracked.txt"],
+      prepareAcceptedTree: async () => {
+        await writeFile(path.join(dir, "scratch.txt"), "do not commit\n", "utf8");
+      },
       mutate: async () => {
         await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
-        await writeFile(path.join(dir, "scratch.txt"), "do not commit\n", "utf8");
       },
     });
 
@@ -215,26 +259,26 @@ test("keep logs reject Git pathspec magic in commit paths", async () => {
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "pathspec commit" });
-    await writeFile(
-      path.join(dir, "autoresearch.config.json"),
-      JSON.stringify({ commitPaths: [":(top)"] }, null, 2),
-      "utf8",
-    );
-    await git(dir, ["add", "autoresearch.jsonl", "autoresearch.config.json"]);
-    await git(dir, ["commit", "-m", "session"]);
-    await writeFile(path.join(dir, "a.txt"), "after\n", "utf8");
-    await writeFile(path.join(dir, "b.txt"), "after\n", "utf8");
+    await prepareAcceptedKeep(dir, {
+      commitPaths: ["a.txt", "b.txt"],
+      editableScope: ["a.txt", "b.txt"],
+      mutate: async () => {
+        await writeFile(path.join(dir, "a.txt"), "after\n", "utf8");
+        await writeFile(path.join(dir, "b.txt"), "after\n", "utf8");
+      },
+    });
 
     const result = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
       "keep",
       "--description",
       "Blocked pathspec keep",
+      "--commit-paths",
+      ":(top)",
     ]);
 
     assert.notEqual(result.code, 0);
@@ -618,10 +662,12 @@ test("scoped keep commits preserve unrelated staged files", async () => {
     await prepareAcceptedKeep(dir, {
       commitPaths: ["scoped.txt"],
       editableScope: ["scoped.txt"],
-      mutate: async () => {
-        await writeFile(path.join(dir, "scoped.txt"), "after\n");
+      prepareAcceptedTree: async () => {
         await writeFile(path.join(dir, "unrelated.txt"), "staged elsewhere\n");
         await git(dir, ["add", "unrelated.txt"]);
+      },
+      mutate: async () => {
+        await writeFile(path.join(dir, "scoped.txt"), "after\n");
       },
     });
     const logged = await runCli([
@@ -822,7 +868,8 @@ test("keep logs can record an existing commit without staging dirty work", async
     await prepareAcceptedKeep(dir, {
       commitPaths: ["tracked.txt"],
       editableScope: ["tracked.txt"],
-      mutate: async () => {
+      mutate: async () => {},
+      preparePacketHead: async () => {
         await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
         await git(dir, ["add", "tracked.txt"]);
         await git(dir, ["commit", "-m", "manual experiment"]);

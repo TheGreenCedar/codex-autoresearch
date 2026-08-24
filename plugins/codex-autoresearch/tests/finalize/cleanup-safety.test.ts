@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { finalizer, git, run, testWithTempRoot, withTempRoot, writeFile } from "./helpers.js";
+import {
+  finalizer,
+  git,
+  run,
+  testWithTempRoot,
+  withTempRoot,
+  writeCompleteFinalizationEvidenceFixture,
+  writeFile,
+} from "./helpers.js";
 
 testWithTempRoot(
   "finalizer treats wildcard characters in filenames as literal paths",
@@ -14,51 +22,36 @@ testWithTempRoot(
     await git(["init", "-b", "main"], repo);
     await git(["config", "user.email", "codex@example.invalid"], repo);
     await git(["config", "user.name", "Codex Test"], repo);
-    await writeFile(path.join(repo, "a.txt"), "base\n");
-    await writeFile(path.join(repo, "b.txt"), "base\n");
+    await writeFile(path.join(repo, "fixtures", "a.txt"), "base\n");
+    await writeFile(path.join(repo, "fixtures", "b.txt"), "base\n");
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "base"], repo);
     const base = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
 
     await git(["switch", "-c", "codex/pathspec-plan"], repo);
-    await writeFile(path.join(repo, "[ab].txt"), "literal wildcard filename\n");
+    await writeFile(path.join(repo, "fixtures", "[ab].txt"), "literal wildcard filename\n");
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "keep literal wildcard filename"], repo);
     const finalTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: finalTree });
 
     const groupsPath = path.join(root, "groups.json");
-    await fsp.writeFile(
-      groupsPath,
-      JSON.stringify(
-        {
-          base,
-          trunk: "main",
-          final_tree: finalTree,
-          goal: "pathspec-plan",
-          groups: [
-            {
-              title: "Pathspec plan",
-              body: "Should never expand wildcard characters as a pathspec.",
-              last_commit: finalTree,
-              slug: "pathspec-plan",
-              files: ["[ab].txt"],
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf8",
+    await run(
+      process.execPath,
+      [finalizer, "plan", "--cwd", repo, "--output", groupsPath, "--goal", "pathspec-plan"],
+      repo,
     );
+    const generatedPlan = JSON.parse(await fsp.readFile(groupsPath, "utf8"));
+    assert.deepEqual(generatedPlan.groups[0].files, ["fixtures/[ab].txt"]);
 
     const result = await run(process.execPath, [finalizer, groupsPath], repo);
-    assert.match(result.stdout, /autoresearch-review\/pathspec-plan\/01-pathspec-plan/);
-    const branch = "autoresearch-review/pathspec-plan/01-pathspec-plan";
+    const branch = `autoresearch-review/pathspec-plan/01-${generatedPlan.groups[0].slug}`;
+    assert.ok(result.stdout.includes(branch));
     const files = (await git(["diff", "--name-only", "-z", base, branch], repo)).stdout
       .split("\0")
       .filter(Boolean);
-    assert.deepEqual(files, ["[ab].txt"]);
-    assert.equal((await git(["show", `${branch}:b.txt`], repo)).stdout, "base\n");
+    assert.deepEqual(files, ["fixtures/[ab].txt"]);
+    assert.equal((await git(["show", `${branch}:fixtures/b.txt`], repo)).stdout, "base\n");
     assert.equal(
       (await git(["branch", "--show-current"], repo)).stdout.trim(),
       "codex/pathspec-plan",
@@ -89,6 +82,7 @@ test("finalizer refuses cleanup through linked directory parents", async (t) => 
     await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
     await git(["commit", "-am", "keep value"], repo);
     const finalTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: finalTree });
 
     try {
       await fsp.symlink(outside, linkPath, process.platform === "win32" ? "junction" : "dir");
@@ -153,6 +147,7 @@ testWithTempRoot(
     await writeFile(path.join(repo, "src", "value.txt"), "planned\n");
     await git(["commit", "-am", "planned value"], repo);
     const finalTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: finalTree });
 
     const hooks = path.join(root, "hooks");
     const postCommit = path.join(hooks, "post-commit");
@@ -220,6 +215,7 @@ testWithTempRoot(
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "keep value"], repo);
     const head = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: head });
 
     const groupsPath = path.join(root, "groups.json");
     await fsp.writeFile(

@@ -48,10 +48,15 @@ async function appendLegacyLedgerRows(dir: string, rows: Record<string, unknown>
 
 test("next returns only mechanically eligible decision options instead of a fake status", async () => {
   await withTempDir("decision-hint", async (dir) => {
-    await setupFixture(dir, { name: "decision hint" });
-
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.25')"`;
-    const result = await runCli(["next", "--cwd", dir, "--command", command]);
+    const setup = await setupSessionFixture(dir, {
+      acceptedContract: true,
+      benchmarkCommand: command,
+      name: "decision hint",
+    });
+    assert.equal(setup.code, 0, setup.stderr);
+
+    const result = await runCli(["next", "--cwd", dir]);
     assert.equal(result.code, 0, result.stderr);
 
     const payload = JSON.parse(result.stdout).run;
@@ -59,6 +64,339 @@ test("next returns only mechanically eligible decision options instead of a fake
     assert.equal(payload.logHint.status, null);
     assert.equal(payload.logHint.needsDecision, true);
     assert.deepEqual(payload.logHint.allowedStatuses, ["discard", "measure"]);
+  });
+});
+
+test("structured log learning reaches the canonical compiler and invalid claims fail closed", async () => {
+  await withTempDir("structured-learning-log", async (dir) => {
+    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=5')"`;
+    const setup = await setupSessionFixture(dir, {
+      acceptedContract: true,
+      benchmarkCommand: benchmark,
+      name: "structured learning",
+      packetBudget: 10,
+    });
+    assert.equal(setup.code, 0, setup.stderr);
+    const baseline = await runCli(["next", "--cwd", dir]);
+    assert.equal(baseline.code, 0, baseline.stderr);
+    const baselineLog = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "Accepted baseline",
+    ]);
+    assert.equal(baselineLog.code, 0, baselineLog.stderr);
+
+    const candidate = await runCli(["next", "--cwd", dir]);
+    assert.equal(candidate.code, 0, candidate.stderr);
+    const learningPath = path.join(dir, "target", "autoresearch", "learning.json");
+    await mkdir(path.dirname(learningPath), { recursive: true });
+    await writeFile(
+      learningPath,
+      JSON.stringify({
+        kind: "discriminating",
+        changedBelief: "The accepted evaluator isolates the candidate effect from the baseline.",
+        evidence: ["same evaluator isolated the candidate from the baseline"],
+      }),
+    );
+    const learned = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "discard",
+      "--description",
+      "Discriminating candidate",
+      "--learning-json-file",
+      learningPath,
+    ]);
+    assert.equal(learned.code, 0, learned.stderr);
+    const learnedPayload = JSON.parse(learned.stdout);
+    assert.equal(learnedPayload.experiment.learning.kind, "discriminating");
+    assert.equal(
+      learnedPayload.experiment.learning.changedBelief,
+      "The accepted evaluator isolates the candidate effect from the baseline.",
+    );
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
+    assert.equal(state.code, 0, state.stderr);
+    const decisionPlan = JSON.parse(state.stdout).decisionPlan;
+    assert.equal(decisionPlan.learning.latest.kind, "discriminating");
+    assert.equal(
+      decisionPlan.learning.latest.changedBelief,
+      "The accepted evaluator isolates the candidate effect from the baseline.",
+    );
+    assert.deepEqual(decisionPlan.learning.latest.evidence, [
+      "same evaluator isolated the candidate from the baseline",
+    ]);
+
+    const next = await runCli(["next", "--cwd", dir]);
+    assert.equal(next.code, 0, next.stderr);
+    await writeFile(
+      learningPath,
+      JSON.stringify({ kind: "causal", changedBelief: true, evidence: ["guess"] }),
+    );
+    const invalid = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "discard",
+      "--description",
+      "Invalid learning claim",
+      "--learning-json-file",
+      learningPath,
+    ]);
+    assert.equal(invalid.code, 1);
+    assert.match(invalid.stderr, /learning.*changedBelief.*nonempty.*string/i);
+
+    await writeFile(
+      learningPath,
+      JSON.stringify({
+        kind: "causal",
+        changedBelief: "A numeric payload is not an auditable evidence reference.",
+        evidence: [42],
+      }),
+    );
+    const invalidEvidence = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "discard",
+      "--description",
+      "Invalid learning evidence type",
+      "--learning-json-file",
+      learningPath,
+    ]);
+    assert.equal(invalidEvidence.code, 1);
+    assert.match(invalidEvidence.stderr, /learning.*evidence.*nonempty.*string/i);
+  });
+});
+
+test("typed failure layer preconditions reach the real ledger and pause repeated failures", async () => {
+  await withTempDir("structured-failure-log", async (dir) => {
+    const script = [
+      "const fs=require('node:fs')",
+      "const ledger=fs.readFileSync('autoresearch.jsonl','utf8')",
+      'if (/\\"run\\":/.test(ledger)) process.exit(7)',
+      "console.log('METRIC seconds=5')",
+    ].join(";");
+    const benchmark = `${quoteForShell(process.execPath)} -e ${quoteForShell(script)}`;
+    const setup = await setupSessionFixture(dir, {
+      acceptedContract: true,
+      benchmarkCommand: benchmark,
+      name: "structured failures",
+      packetBudget: 10,
+    });
+    assert.equal(setup.code, 0, setup.stderr);
+    const baseline = await runCli(["next", "--cwd", dir]);
+    assert.equal(baseline.code, 0, baseline.stderr);
+    const baselineLog = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "Accepted baseline",
+    ]);
+    assert.equal(baselineLog.code, 0, baselineLog.stderr);
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
+    assert.equal(state.code, 0, state.stderr);
+    const plan = JSON.parse(state.stdout).decisionPlan;
+    const failurePath = path.join(dir, "target", "autoresearch", "failure.json");
+    await mkdir(path.dirname(failurePath), { recursive: true });
+    await writeFile(
+      failurePath,
+      JSON.stringify({
+        layer: "contract",
+        code: 42,
+        preconditions: {
+          contractDigest: plan.contractDigest,
+          preconditionEpoch: plan.requiredEvidence.preconditionEpoch,
+        },
+      }),
+    );
+    const firstPacket = await runCli(["next", "--cwd", dir]);
+    assert.equal(firstPacket.code, 0, firstPacket.stderr);
+    const invalidCode = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "crash",
+      "--description",
+      "Invalid numeric failure code",
+      "--failure-json-file",
+      failurePath,
+    ]);
+    assert.equal(invalidCode.code, 1);
+    assert.match(invalidCode.stderr, /failure\.code.*nonempty.*string/i);
+    await writeFile(
+      failurePath,
+      JSON.stringify({
+        layer: "contract",
+        code: "accepted-evaluator-exit",
+        preconditions: {
+          contractDigest: plan.contractDigest,
+          preconditionEpoch: plan.requiredEvidence.preconditionEpoch,
+        },
+      }),
+    );
+
+    for (let index = 0; index < 2; index += 1) {
+      if (index > 0) {
+        const packet = await runCli(["next", "--cwd", dir]);
+        assert.equal(packet.code, 0, packet.stderr);
+      }
+      const logged = await runCli([
+        "log",
+        "--cwd",
+        dir,
+        "--from-last",
+        "--status",
+        "crash",
+        "--description",
+        `Accepted evaluator failure ${index + 1}`,
+        "--failure-json-file",
+        failurePath,
+      ]);
+      assert.equal(logged.code, 0, logged.stderr);
+      assert.equal(JSON.parse(logged.stdout).experiment.failure.layer, "contract");
+    }
+    const paused = await runCli(["state", "--cwd", dir, "--json-full"]);
+    assert.equal(paused.code, 0, paused.stderr);
+    const pausedPlan = JSON.parse(paused.stdout).decisionPlan;
+    assert.equal(pausedPlan.failures.layer, "contract");
+    assert.equal(pausedPlan.failures.consecutive, 2);
+    assert.equal(pausedPlan.primaryBlockerCode, "same-layer-failure-pause");
+    assert.equal(pausedPlan.capabilities["run-packet"], "blocked");
+  });
+});
+
+test("failed accepted logs without typed failure evidence conservatively vote as invalid no-learning", async () => {
+  await withTempDir("untyped-failure-log", async (dir) => {
+    const script = [
+      "const fs=require('node:fs')",
+      "const ledger=fs.readFileSync('autoresearch.jsonl','utf8')",
+      'if (/\\"run\\":/.test(ledger)) process.exit(7)',
+      "console.log('METRIC seconds=5')",
+    ].join(";");
+    const benchmark = `${quoteForShell(process.execPath)} -e ${quoteForShell(script)}`;
+    const setup = await setupSessionFixture(dir, {
+      acceptedContract: true,
+      benchmarkCommand: benchmark,
+      name: "untyped failures",
+      packetBudget: 10,
+    });
+    assert.equal(setup.code, 0, setup.stderr);
+    assert.equal((await runCli(["next", "--cwd", dir])).code, 0);
+    const baseline = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "Accepted baseline",
+    ]);
+    assert.equal(baseline.code, 0, baseline.stderr);
+
+    for (let index = 0; index < 2; index += 1) {
+      const packet = await runCli(["next", "--cwd", dir]);
+      assert.equal(packet.code, 0, packet.stderr);
+      const logged = await runCli([
+        "log",
+        "--cwd",
+        dir,
+        "--from-last",
+        "--status",
+        "crash",
+        "--description",
+        `Untyped evaluator failure ${index + 1}`,
+      ]);
+      assert.equal(logged.code, 0, logged.stderr);
+      assert.equal(JSON.parse(logged.stdout).experiment.failure, undefined);
+    }
+
+    const state = await runCli(["state", "--cwd", dir, "--json-full"]);
+    assert.equal(state.code, 0, state.stderr);
+    const plan = JSON.parse(state.stdout).decisionPlan;
+    assert.equal(plan.learning.consecutiveNoLearningCandidates, 2);
+    assert.equal(plan.failures.layer, null);
+    assert.equal(plan.failures.consecutive, 0);
+    assert.equal(plan.outcome.kind, "invalid");
+    assert.equal(plan.requiredEvidence.diagnosticCodes.includes("no-learning-pause"), true);
+    assert.equal(plan.requiredEvidence.diagnosticCodes.includes("same-layer-failure-pause"), false);
+  });
+});
+
+test("repository and process failure preconditions must match captured packet authority", async () => {
+  await withTempDir("forged-failure-authority", async (root) => {
+    const variants = [
+      {
+        layer: "repository",
+        preconditions: {
+          expectedHead: "forged-head",
+          acceptedEditableScopeDigest: "forged-scope",
+          candidateFingerprint: "forged-candidate",
+        },
+      },
+      {
+        layer: "process",
+        preconditions: {
+          processLifecycleIdentity: "forged-lifecycle",
+          terminationProof: "forged-proof",
+        },
+      },
+    ];
+    for (const variant of variants) {
+      const dir = path.join(root, variant.layer);
+      await mkdir(dir, { recursive: true });
+      const benchmark = `${quoteForShell(process.execPath)} -e "process.exit(7)"`;
+      const setup = await setupSessionFixture(dir, {
+        acceptedContract: true,
+        benchmarkCommand: benchmark,
+        name: `${variant.layer} failure authority`,
+      });
+      assert.equal(setup.code, 0, setup.stderr);
+      const packet = await runCli(["next", "--cwd", dir]);
+      assert.equal(packet.code, 0, packet.stderr);
+      const failurePath = path.join(dir, "target", "autoresearch", "failure.json");
+      await mkdir(path.dirname(failurePath), { recursive: true });
+      await writeFile(
+        failurePath,
+        JSON.stringify({
+          layer: variant.layer,
+          code: "forged-authority",
+          preconditions: variant.preconditions,
+        }),
+      );
+      const logged = await runCli([
+        "log",
+        "--cwd",
+        dir,
+        "--from-last",
+        "--status",
+        "crash",
+        "--description",
+        "Forged failure authority",
+        "--failure-json-file",
+        failurePath,
+      ]);
+      assert.equal(logged.code, 1, `${variant.layer}: ${logged.stdout}`);
+      assert.match(logged.stderr, /failure .* preconditions do not match captured authority/i);
+    }
   });
 });
 
@@ -356,11 +694,27 @@ test("new config segment preserves previous durable goal when omitted", async ()
 
 test("discarded metrics do not become best or suppress on-improvement checks", async () => {
   await withTempDir("discarded-best", async (dir) => {
-    await setupFixture(dir, { name: "discarded best", direction: "lower" });
-    const checksFile =
-      process.platform === "win32" ? "autoresearch.checks.ps1" : "autoresearch.checks.sh";
-    const checksBody = process.platform === "win32" ? "exit 1\n" : "#!/bin/sh\nexit 1\n";
-    await writeFile(path.join(dir, checksFile), checksBody, "utf8");
+    const failingChecks = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
+    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=7')"`;
+    const setup = await setupSessionFixture(dir, {
+      benchmarkCommand: benchmark,
+      checksCommand: failingChecks,
+      completeContract: true,
+      direction: "lower",
+      name: "discarded best",
+    });
+    assert.equal(setup.code, 0, setup.stderr);
+    const configured = await runCli(["config", "--cwd", dir, "--checks-policy", "on-improvement"]);
+    assert.equal(configured.code, 0, configured.stderr);
+    const accepted = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "Accept the discarded-best test contract",
+      "--yes",
+    ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
     await appendLegacyLedgerRows(dir, [
       { run: 1, metric: 10, status: "keep", description: "Legacy accepted baseline" },
     ]);
@@ -380,16 +734,7 @@ test("discarded metrics do not become best or suppress on-improvement checks", a
     assert.equal(state.code, 0, state.stderr);
     assert.equal(JSON.parse(state.stdout).best, 10);
 
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=7')"`;
-    const result = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "on-improvement",
-    ]);
+    const result = await runCli(["next", "--cwd", dir]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout).run;
     assert.equal(payload.improvesPrimary, true);

@@ -1,8 +1,7 @@
-import path from "node:path";
-
 import { countsTowardPacketBudget } from "./benchmark/budget-contract.js";
 import {
   loadCoherentSessionSnapshot,
+  CoherentSnapshotSourceError,
   type CoherentSessionSnapshot,
   type CoherentSnapshotLoadResult,
 } from "./coherent-session-snapshot.js";
@@ -14,17 +13,56 @@ import {
 } from "./decision-compiler.js";
 import { continuationCommands } from "./commands/continuation.js";
 import { analyzeLedgerHealth } from "./ledger-health.js";
-import { lastRunConfigSnapshot } from "./last-run-store.js";
+import { lastRunPacketFreshnessFromFacts } from "./last-run-store.js";
 import {
   approvalRequirementsFromLaneResults,
   buildApprovalLedgerStatus,
 } from "./approval-ledger.js";
 import { isUnknownRecord, type UnknownRecord } from "./types/json.js";
+import { stateFromSessionRecords } from "./session-core.js";
+import type { LastRunPacket } from "./types/packet.js";
+import { buildScaffoldHealth } from "./truth-signals.js";
+import { operatorWarningsForWorkDir } from "./operator-warnings.js";
+import { buildSourceCleanliness } from "./source-cleanliness.js";
+import { classifyPacketDiagnostics } from "./packet-diagnostics.js";
+import { decisionGuidance } from "./decision-guidance.js";
+import { currentQualityGapSummary } from "./research-gaps.js";
+import { buildCheapFinalizationPressure } from "./session-read-model.js";
+import { isAcceptedCurrentRun } from "./evidence-registry.js";
+import { contractDerivationError, deriveExperimentContract } from "./experiment-contract.js";
+import {
+  blockedFinalizationDecisionFact,
+  isFinalizationDecisionFact,
+  type FinalizationDecisionFact,
+} from "./finalization-decision-fact.js";
 
 export interface SessionDecisionFacts {
   finalization?: UnknownRecord | null;
+  finalizationDecisionFact?: FinalizationDecisionFact | null;
   finalizationClaimRequired?: boolean;
   diagnostics?: readonly DecisionDiagnostic[];
+  packetFreshness?: UnknownRecord | null;
+}
+
+export class CanonicalSessionSourceError extends CoherentSnapshotSourceError {
+  constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "CanonicalSessionSourceError";
+  }
+}
+
+export interface SessionDecisionFactCollection {
+  finalization: UnknownRecord | null;
+  finalizationDecisionFact: FinalizationDecisionFact | null;
+  finalizationClaimRequired: boolean;
+  diagnostics: DecisionDiagnostic[];
+  scaffoldHealth: UnknownRecord;
+  warningDetails: UnknownRecord[];
+  sourceCleanliness: UnknownRecord;
+  packetDiagnostics: UnknownRecord;
+  packetFreshness: UnknownRecord | null;
+  guidance: UnknownRecord;
+  qualityGap: UnknownRecord | null;
 }
 
 export type CanonicalSessionDecisionResult =
@@ -33,23 +71,61 @@ export type CanonicalSessionDecisionResult =
       attempts: number;
       snapshot: CoherentSessionSnapshot;
       plan: DecisionPlan;
+      factCollection?: SessionDecisionFactCollection;
     }
   | Extract<CoherentSnapshotLoadResult, { ok: false }>;
 
 export async function loadCanonicalSessionDecision({
   requestedCwd,
   allowOutsideWorkdir = false,
+  allowLedgerParseErrors = false,
   facts = {},
 }: {
   requestedCwd: string;
   allowOutsideWorkdir?: boolean;
+  allowLedgerParseErrors?: boolean;
   facts?: SessionDecisionFacts;
 }): Promise<CanonicalSessionDecisionResult> {
-  const loaded = await loadCoherentSessionSnapshot({ requestedCwd, allowOutsideWorkdir });
+  let factCollection: SessionDecisionFactCollection | null = null;
+  const loaded = await loadCoherentSessionSnapshot({
+    requestedCwd,
+    allowOutsideWorkdir,
+    inspectCapturedSnapshot: async (snapshot) => {
+      if (!allowLedgerParseErrors && snapshot.sourceDiagnostics.ledgerIssues.length > 0) {
+        throw new CanonicalSessionSourceError(snapshot.sourceDiagnostics.ledgerIssues[0].message);
+      }
+      factCollection = await collectSessionDecisionFacts(snapshot, facts);
+      return sessionDecisionFactCollectionVersion(snapshot, factCollection);
+    },
+  });
   if (!loaded.ok) return loaded;
+  if (!factCollection) {
+    throw new Error(
+      "Canonical session fact collection was not captured inside the accepted attempt.",
+    );
+  }
   return {
     ...loaded,
-    plan: compileSessionDecision(loaded.snapshot, facts),
+    plan: compileSessionDecision(loaded.snapshot, factCollection),
+    factCollection,
+  };
+}
+
+export function sessionDecisionFactCollectionVersion(
+  snapshot: CoherentSessionSnapshot,
+  facts: SessionDecisionFactCollection,
+): string {
+  return compileSessionDecision(snapshot, facts).decisionId;
+}
+
+export async function compileCanonicalSessionDecision(
+  snapshot: CoherentSessionSnapshot,
+  facts: SessionDecisionFacts = {},
+): Promise<{ plan: DecisionPlan; factCollection: SessionDecisionFactCollection }> {
+  const factCollection = await collectSessionDecisionFacts(snapshot, facts);
+  return {
+    plan: compileSessionDecision(snapshot, factCollection),
+    factCollection,
   };
 }
 
@@ -57,11 +133,106 @@ export function compileSessionDecision(
   snapshot: CoherentSessionSnapshot,
   facts: SessionDecisionFacts = {},
 ): DecisionPlan {
+  const packetFreshness = Object.hasOwn(facts, "packetFreshness")
+    ? facts.packetFreshness || null
+    : packetFreshnessFromSnapshot(snapshot);
+  const legacyContractDiagnosticPresent = (facts.diagnostics || []).some(
+    ({ code }) =>
+      code === "legacy-contract-acceptance-required" || code === "legacy-contract-conflict",
+  );
   return compileDecisionPlan(snapshot, [
-    ...diagnosticsFromSnapshot(snapshot),
-    ...finalizationDecisionDiagnostics(facts),
+    ...diagnosticsFromSnapshot(snapshot, packetFreshness, legacyContractDiagnosticPresent),
+    ...finalizationDecisionDiagnostics(facts, snapshot.workDir),
     ...(facts.diagnostics || []),
   ]);
+}
+
+export async function collectSessionDecisionFacts(
+  snapshot: CoherentSessionSnapshot,
+  overrides: SessionDecisionFacts = {},
+): Promise<SessionDecisionFactCollection> {
+  const state = stateFromSessionRecords(snapshot.workDir, snapshot.records);
+  const scaffoldHealth = (await buildScaffoldHealth({
+    workDir: snapshot.workDir,
+    config: snapshot.config,
+  })) as UnknownRecord;
+  const warningDetails = (await operatorWarningsForWorkDir(
+    snapshot.workDir,
+    state as UnknownRecord,
+    snapshot.config,
+    { records: snapshot.records },
+  )) as UnknownRecord[];
+  const sourceCleanliness = buildSourceCleanliness({ warningDetails }) as unknown as UnknownRecord;
+  const packetFreshness = packetFreshnessFromSnapshot(snapshot);
+  const lastRun = snapshot.lastRunPacket;
+  const lastRunDecision = object(lastRun?.decision);
+  const lastRunRecord = object(lastRun?.run);
+  const lastRunEvidence = object(lastRun?.packetEvidence);
+  const packetDiagnostics = (lastRun
+    ? classifyPacketDiagnostics({
+        packetEvidence: lastRunEvidence,
+        run: lastRunRecord,
+        decision: lastRunDecision,
+        metrics: objectOrNull(lastRunDecision.metrics) || object(lastRunRecord.parsedMetrics),
+        metricName: state.config.metricName,
+        command: continuationCommands(snapshot.workDir).partialResults,
+      })
+    : classifyPacketDiagnostics()) as unknown as UnknownRecord;
+  const guidance = (await decisionGuidance({
+    workDir: snapshot.workDir,
+    config: snapshot.config,
+    state,
+    scaffoldHealth,
+    warningDetails,
+  })) as UnknownRecord;
+  const qualityGap = (await currentQualityGapSummary(snapshot.workDir).catch(
+    (): null => null,
+  )) as UnknownRecord | null;
+  let finalization: UnknownRecord | null;
+  let finalizationDecisionFact: FinalizationDecisionFact | null;
+  if (Object.hasOwn(overrides, "finalization")) {
+    finalization = overrides.finalization || null;
+    finalizationDecisionFact = isFinalizationDecisionFact(overrides.finalizationDecisionFact)
+      ? overrides.finalizationDecisionFact
+      : finalization
+        ? blockedFinalizationDecisionFact()
+        : null;
+  } else {
+    const collectedFinalization = await collectFinalizationFacts({
+      snapshot,
+      state: state as UnknownRecord,
+      qualityGap,
+      warningDetails,
+    });
+    finalization = collectedFinalization.finalization;
+    finalizationDecisionFact = collectedFinalization.decisionFact;
+  }
+  const legacyContractDiagnostic = await legacyContractDecisionDiagnostic(snapshot);
+  const diagnostics = [
+    ...decisionDiagnosticsForCollectedFacts({
+      guidance,
+      packetDiagnostics,
+      scaffoldHealth,
+      sourceCleanliness,
+      warningDetails,
+      hasFreshPacketAuthority: packetFreshness?.fresh === true,
+    }),
+    ...(legacyContractDiagnostic ? [legacyContractDiagnostic] : []),
+    ...(overrides.diagnostics || []),
+  ];
+  return {
+    finalization,
+    finalizationDecisionFact,
+    finalizationClaimRequired: overrides.finalizationClaimRequired === true,
+    diagnostics,
+    scaffoldHealth,
+    warningDetails,
+    sourceCleanliness,
+    packetDiagnostics,
+    packetFreshness,
+    guidance,
+    qualityGap,
+  };
 }
 
 export function packetFreshnessFromSnapshot(
@@ -69,57 +240,25 @@ export function packetFreshnessFromSnapshot(
 ): UnknownRecord | null {
   const packet = snapshot.lastRunPacket;
   if (!packet) return null;
-  const history = object(packet.history);
-  const records = snapshot.records;
-  const state = ledgerState(records);
-  const expectedWorkDir = stringValue(history.workDir || packet.workDir);
-  if (expectedWorkDir && path.resolve(expectedWorkDir) !== path.resolve(snapshot.workDir)) {
-    return stale("working directory changed since the packet was created");
-  }
-  const expectedSegment = finiteInteger(history.segment);
-  if (expectedSegment != null && expectedSegment !== state.segment) {
-    return stale(`expected segment #${expectedSegment}, but current segment is #${state.segment}`);
-  }
-  const expectedNextRun = finiteInteger(history.nextRun);
-  if (expectedNextRun == null || expectedNextRun !== state.runCount + 1) {
-    return stale(
-      expectedNextRun == null
-        ? "packet history is missing the next run"
-        : `expected next run #${expectedNextRun}, but current history would log #${state.runCount + 1}`,
-    );
-  }
-  const expectedConfig = objectOrNull(history.config);
-  if (
-    !expectedConfig ||
-    canonicalJson(expectedConfig) !== canonicalJson(lastRunConfigSnapshot(state.config))
-  ) {
-    return stale("session config changed since the packet was created");
-  }
-  const expectedGit = object(history.git);
-  if (expectedGit.inside === true) {
-    const expectedHead = stringValue(expectedGit.head);
-    if (
-      expectedHead &&
-      snapshot.git.head !== "unborn" &&
-      !snapshot.git.head.startsWith(expectedHead)
-    ) {
-      return stale("Git HEAD changed since the packet was created");
-    }
-    const expectedStatusHash = stringValue(expectedGit.statusHash);
-    if (expectedStatusHash && expectedStatusHash !== snapshot.git.statusHash) {
-      return stale("Git dirty state changed since the packet was created");
-    }
-  }
-  return {
-    fresh: true,
-    expectedNextRun,
-    actualNextRun: state.runCount + 1,
-    expectedWorkDir: expectedWorkDir || snapshot.workDir,
-    reason: "Last-run packet matches the coherent session snapshot.",
-  };
+  const state = stateFromSessionRecords(snapshot.workDir, snapshot.records);
+  return lastRunPacketFreshnessFromFacts({
+    workDir: snapshot.workDir,
+    packet: packet as LastRunPacket,
+    runtimeConfig: snapshot.config,
+    state,
+    actualGit: snapshot.gitTrust || {
+      inside: snapshot.git.head !== "not-a-repository",
+      head: snapshot.git.head === "unborn" ? "" : snapshot.git.head.slice(0, 7),
+      statusHash: snapshot.git.statusHash,
+    },
+  }) as UnknownRecord;
 }
 
-function diagnosticsFromSnapshot(snapshot: CoherentSessionSnapshot): DecisionDiagnostic[] {
+function diagnosticsFromSnapshot(
+  snapshot: CoherentSessionSnapshot,
+  packetFreshness: UnknownRecord | null = packetFreshnessFromSnapshot(snapshot),
+  legacyContractDiagnosticPresent = false,
+): DecisionDiagnostic[] {
   const diagnostics: DecisionDiagnostic[] = [];
   const commands = continuationCommands(snapshot.workDir);
   const state = ledgerState(snapshot.records);
@@ -152,7 +291,10 @@ function diagnosticsFromSnapshot(snapshot: CoherentSessionSnapshot): DecisionDia
       }),
     );
   }
-  if (!state.config.name || !state.config.metricName || !snapshot.semanticFacts.contractDigest) {
+  if (
+    !legacyContractDiagnosticPresent &&
+    (!state.config.name || !state.config.metricName || !snapshot.semanticFacts.contractDigest)
+  ) {
     diagnostics.push(
       decisionDiagnostic("setup-required", {
         message:
@@ -168,12 +310,11 @@ function diagnosticsFromSnapshot(snapshot: CoherentSessionSnapshot): DecisionDia
       }),
     );
   }
-  const freshness = packetFreshnessFromSnapshot(snapshot);
-  if (freshness) {
+  if (packetFreshness) {
     diagnostics.push(
-      decisionDiagnostic(freshness.fresh === true ? "pending-packet" : "stale-packet", {
-        message: stringValue(freshness.reason),
-        command: freshness.fresh === true ? commands.keepLast : commands.next,
+      decisionDiagnostic(packetFreshness.fresh === true ? "pending-packet" : "stale-packet", {
+        message: stringValue(packetFreshness.reason),
+        command: packetFreshness.fresh === true ? commands.keepLast : commands.next,
       }),
     );
   }
@@ -182,7 +323,7 @@ function diagnosticsFromSnapshot(snapshot: CoherentSessionSnapshot): DecisionDia
     diagnostics.push(
       decisionDiagnostic("process-integrity", {
         message: "Process-tree termination is not proven for the latest session process.",
-        command: commands.doctorExplain,
+        command: commands.processRecover,
       }),
     );
   } else if (process?.exitState === "running") {
@@ -213,11 +354,54 @@ function diagnosticsFromSnapshot(snapshot: CoherentSessionSnapshot): DecisionDia
   return diagnostics;
 }
 
-export function finalizationDecisionDiagnostics(facts: SessionDecisionFacts): DecisionDiagnostic[] {
+async function legacyContractDecisionDiagnostic(
+  snapshot: CoherentSessionSnapshot,
+): Promise<DecisionDiagnostic | null> {
+  if (snapshot.semanticFacts.contractDigest) return null;
+  const derivation = await deriveExperimentContract({
+    workDir: snapshot.workDir,
+    config: snapshot.config,
+    entries: snapshot.records,
+    packet: snapshot.lastRunPacket,
+  });
+  if (derivation.status === "derived") {
+    return decisionDiagnostic("legacy-contract-acceptance-required", {
+      message:
+        "Accept the complete legacy experiment contract exactly once before running this packet.",
+      command: continuationCommands(snapshot.workDir).next,
+      semantic: { contractDigest: derivation.contract.contractDigest },
+    });
+  }
+  if (derivation.status === "invalid" && derivation.missing.length === 0) {
+    return decisionDiagnostic("legacy-contract-conflict", {
+      message: contractDerivationError(derivation).message,
+      command: continuationCommands(snapshot.workDir).stateCompact,
+      semantic: {
+        conflicts: derivation.conflicts.map(({ field, sources }) => ({ field, sources })),
+      },
+    });
+  }
+  return null;
+}
+
+export function finalizationDecisionDiagnostics(
+  facts: SessionDecisionFacts,
+  workDir = "",
+): DecisionDiagnostic[] {
   const finalization = facts.finalization;
   if (!finalization) return [];
-  if (finalization.ready === true) {
+  const decisionFact = facts.finalizationDecisionFact;
+  if (decisionFact?.code === "finalization-ready") {
     return [decisionDiagnostic("finalization-ready")];
+  }
+  if (decisionFact?.code === "current-tree-finalization") {
+    return [
+      decisionDiagnostic("current-tree-finalization", {
+        message: "Package the current non-session tree through the exceptional finalization route.",
+        ...(workDir ? { command: continuationCommands(workDir).finalizeCurrentTree } : {}),
+        semantic: { actionCode: "current-tree-finalization" },
+      }),
+    ];
   }
   const code = facts.finalizationClaimRequired
     ? "finalization-claim-blocked"
@@ -235,6 +419,134 @@ function acceptedContract(snapshot: CoherentSessionSnapshot): UnknownRecord | nu
         record.contract.contractDigest === snapshot.semanticFacts.contractDigest,
     );
   return objectOrNull(event?.contract);
+}
+
+async function collectFinalizationFacts({
+  snapshot,
+  state,
+  qualityGap,
+  warningDetails,
+}: {
+  snapshot: CoherentSessionSnapshot;
+  state: UnknownRecord;
+  qualityGap: UnknownRecord | null;
+  warningDetails: UnknownRecord[];
+}): Promise<{
+  finalization: UnknownRecord;
+  decisionFact: FinalizationDecisionFact;
+}> {
+  const cheap = buildCheapFinalizationPressure({
+    state,
+    qualityGap,
+    warningDetails,
+  }) as UnknownRecord;
+  const runs = Array.isArray(state.results)
+    ? state.results
+    : Array.isArray(state.current)
+      ? state.current
+      : [];
+  if (!runs.some((run) => isUnknownRecord(run) && isAcceptedCurrentRun(run))) {
+    return {
+      finalization: cheap,
+      decisionFact: blockedFinalizationDecisionFact(),
+    };
+  }
+  try {
+    const { finalizePreview } = await import("./finalize-preview.js");
+    let decisionFact = blockedFinalizationDecisionFact();
+    const finalization = (await finalizePreview({
+      cwd: snapshot.workDir,
+      capturedRecords: snapshot.records,
+      canonicalDecisionProjection: false,
+      captureCanonicalDecisionFact: (captured: unknown) => {
+        if (isFinalizationDecisionFact(captured)) decisionFact = captured;
+      },
+    })) as UnknownRecord;
+    return { finalization, decisionFact };
+  } catch (error: unknown) {
+    return {
+      finalization: {
+        ...cheap,
+        ok: false,
+        ready: false,
+        warnings: [
+          ...(Array.isArray(cheap.warnings) ? cheap.warnings : []),
+          error instanceof Error ? error.message : String(error),
+        ],
+        actionCode: "preview-error",
+      },
+      decisionFact: blockedFinalizationDecisionFact(),
+    };
+  }
+}
+
+function decisionDiagnosticsForCollectedFacts({
+  guidance,
+  packetDiagnostics,
+  scaffoldHealth,
+  sourceCleanliness,
+  warningDetails,
+  hasFreshPacketAuthority,
+}: {
+  guidance: UnknownRecord;
+  packetDiagnostics: UnknownRecord;
+  scaffoldHealth: UnknownRecord;
+  sourceCleanliness: UnknownRecord;
+  warningDetails: UnknownRecord[];
+  hasFreshPacketAuthority: boolean;
+}): DecisionDiagnostic[] {
+  const diagnostics: DecisionDiagnostic[] = [];
+  const runtimeAuthority = object(guidance.runtimeAuthority);
+  if (runtimeAuthority.blocking === true) {
+    diagnostics.push(
+      decisionDiagnostic("runtime-integrity", {
+        message: stringValue(runtimeAuthority.blocker) || "Runtime authority is not proven.",
+      }),
+    );
+  }
+  if (
+    (Array.isArray(scaffoldHealth.checks) ? scaffoldHealth.checks : []).some(
+      (value) => object(value).severity === "blocker",
+    )
+  ) {
+    diagnostics.push(
+      decisionDiagnostic("scaffold-invalid", {
+        message: "The session scaffold has a blocking integrity issue.",
+      }),
+    );
+  }
+  if (sourceCleanliness.sourceDirty === true && !hasFreshPacketAuthority) {
+    diagnostics.push(
+      decisionDiagnostic("dirty-source", {
+        message: "Review the dirty source tree before authorizing packet evidence.",
+      }),
+    );
+  }
+  const evaluatorDrift = warningDetails.find((warning) => {
+    const code = stringValue(warning.code);
+    return (
+      code === "benchmark_contract_changed" ||
+      (code.startsWith("protected_benchmark_") && warning.severity === "error")
+    );
+  });
+  if (evaluatorDrift) {
+    diagnostics.push(
+      decisionDiagnostic("evaluator-drift", {
+        message: stringValue(evaluatorDrift.message) || "The accepted evaluator has drifted.",
+      }),
+    );
+  }
+  if (packetDiagnostics.unresolved === true && packetDiagnostics.primaryStage) {
+    diagnostics.push(
+      decisionDiagnostic("packet-diagnostic", {
+        message:
+          stringValue(packetDiagnostics.recommendation) || "Resolve the latest packet diagnostic.",
+        command: stringValue(packetDiagnostics.command),
+        semantic: { primaryStage: stringValue(packetDiagnostics.primaryStage) },
+      }),
+    );
+  }
+  return diagnostics;
 }
 
 function ledgerState(records: readonly UnknownRecord[]): {
@@ -276,10 +588,6 @@ function ledgerState(records: readonly UnknownRecord[]): {
   return { config, hasMetricRun, runCount, segment };
 }
 
-function stale(reason: string): UnknownRecord {
-  return { fresh: false, reason: `Last-run packet is stale: ${reason}. Run next again.` };
-}
-
 function object(value: unknown): UnknownRecord {
   return objectOrNull(value) || {};
 }
@@ -299,15 +607,4 @@ function finiteInteger(value: unknown): number | null {
 
 function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (isUnknownRecord(value)) {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value ?? null);
 }

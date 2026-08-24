@@ -1,10 +1,7 @@
 import { type UnknownRecord, unknownRecordOrNull as recordOrNull } from "../types/json.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../command-execution-boundary.js";
-import {
-  loadCoherentSessionSnapshot,
-  type CoherentSessionSnapshot,
-} from "../coherent-session-snapshot.js";
-import { decisionDiagnostic, type DecisionDiagnostic } from "../decision-compiler.js";
+import type { CoherentSessionSnapshot } from "../coherent-session-snapshot.js";
+import { isDecisionPlan, type DecisionPlan } from "../decision-compiler.js";
 import { projectLoopContinuation, projectResolvedDecision } from "../decision-projection.js";
 import {
   buildCheapFinalizationPressure,
@@ -21,14 +18,10 @@ import { boolOption } from "../cli/args.js";
 import { iterationLimitInfo, stateFromSessionRecords } from "../session-core.js";
 import { isAcceptedCurrentRun } from "../evidence-registry.js";
 import { buildLaneLifecycle } from "../lane-lifecycle.js";
-import { buildScaffoldHealth, buildResearchIntegrity } from "../truth-signals.js";
+import { buildResearchIntegrity } from "../truth-signals.js";
 import { buildServeRegistryHealthInput, readServeRegistry } from "../dashboard-server-registry.js";
-import { buildSourceCleanliness } from "../source-cleanliness.js";
 import { buildTerminalReport } from "../terminal-report.js";
-import { classifyPacketDiagnostics } from "../packet-diagnostics.js";
-import { currentQualityGapSummary } from "../research-gaps.js";
 import { buildDashboardSettings, dashboardCommands } from "./dashboard.js";
-import { decisionGuidance } from "../decision-guidance.js";
 import { continuationCommands } from "./continuation.js";
 import { fixedControlStateSummary } from "../fixed-control.js";
 import { listBuiltInRecipes } from "../recipes.js";
@@ -36,12 +29,16 @@ import { recommendPortfolioDirection } from "../portfolio-advisor.js";
 import { redactCommandDisplay, redactEvidenceObject } from "../evidence-redaction.js";
 import { verifyDashboardHealthSummary } from "../dashboard-health.js";
 import { replacementNextCommandForLastRun } from "../last-run-store.js";
-import { compileSessionDecision } from "../session-decision.js";
-import { operatorWarningsForWorkDir } from "../operator-warnings.js";
+import {
+  compileCanonicalSessionDecision,
+  loadCanonicalSessionDecision,
+  type SessionDecisionFactCollection,
+} from "../session-decision.js";
 import { buildParallelOrchestrationContext } from "../parallel-orchestration.js";
 import { PLUGIN_VERSION } from "../plugin-version.js";
 import { runtimeProvenance } from "../drift-doctor.js";
 import { resolvePackageRoot } from "../runtime-paths.js";
+import { acceptedSessionDecisionContext } from "../cli/workdir-context.js";
 
 export interface CompactStateBuilderInput extends UnknownRecord {
   workDir: string;
@@ -84,9 +81,13 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
   const jsonFull = boolOption(args.jsonFull ?? args.json_full ?? args.full, false);
   const bounded = boolOption(args.bounded, false);
   const codexGoalObjective = args.codexGoalObjective || args.codex_goal_objective;
-  let snapshot = coherentSnapshotOrNull(args.coherentSnapshot);
+  const acceptedDecision = acceptedSessionDecisionContext();
+  let snapshot =
+    coherentSnapshotOrNull(args.coherentSnapshot) || acceptedDecision?.snapshot || null;
+  let decisionPlan: DecisionPlan;
+  let decisionFacts: SessionDecisionFactCollection;
   if (!snapshot) {
-    const loaded = await loadCoherentSessionSnapshot({
+    const loaded = await loadCanonicalSessionDecision({
       requestedCwd,
       allowOutsideWorkdir: boolOption(
         args.allowOutsideWorkdir ?? args.allow_outside_workdir,
@@ -102,10 +103,30 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
       };
     }
     snapshot = loaded.snapshot;
+    decisionPlan = loaded.plan;
+    decisionFacts = requireDecisionFacts(loaded.factCollection);
+  } else if (acceptedDecision && snapshot === acceptedDecision.snapshot) {
+    decisionPlan = acceptedDecision.plan;
+    decisionFacts = acceptedDecision.facts;
+  } else if (
+    isDecisionPlan(args.canonicalDecisionPlan) &&
+    isDecisionFactCollection(args.canonicalDecisionFacts)
+  ) {
+    decisionPlan = args.canonicalDecisionPlan;
+    decisionFacts = args.canonicalDecisionFacts;
+  } else {
+    const compiled = await compileCanonicalSessionDecision(snapshot);
+    decisionPlan = compiled.plan;
+    decisionFacts = compiled.factCollection;
   }
   const { workDir, config } = snapshot;
   if (compact || report) {
-    const compactState = await publicCompactState({ snapshot, codexGoalObjective });
+    const compactState = await publicCompactState({
+      snapshot,
+      codexGoalObjective,
+      decisionPlan,
+      decisionFacts,
+    });
     if (!report) return compactState;
     const response: CommandRecord = {
       ok: compactState.ok !== false,
@@ -121,18 +142,13 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
   const ledgerHealth = analyzeLedgerHealth(records, {
     parseErrors: snapshot.sourceDiagnostics.ledgerIssues,
   });
-  const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
+  const scaffoldHealth = decisionFacts.scaffoldHealth;
   const researchIntegrity = buildResearchIntegrity({ state, config });
-  const warningDetails = await operatorWarningsForWorkDir(workDir, state);
+  const warningDetails = decisionFacts.warningDetails;
   const lastRun = snapshot.lastRunPacket;
   const activeProgress = snapshot.processProgress;
-  const qualityGap = await currentQualityGapSummary(workDir);
-  const finalization = await finalizationPressureForWorkDir({
-    workDir,
-    state,
-    qualityGap,
-    warningDetails,
-  });
+  const qualityGap = decisionFacts.qualityGap;
+  const finalization = decisionFacts.finalization || {};
   const settings = buildDashboardSettings(config);
   const orchestration = buildParallelOrchestrationContext({
     workDir,
@@ -151,30 +167,12 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
     workDir,
     pluginRoot: PLUGIN_ROOT,
   });
-  const lastRunDecision = recordOrEmpty(lastRun?.decision);
-  const lastRunRecord = recordOrEmpty(lastRun?.run);
   const lastRunEvidence = recordOrEmpty(lastRun?.packetEvidence);
-  const packetDiagnostics = lastRun
-    ? classifyPacketDiagnostics({
-        packetEvidence: lastRunEvidence,
-        run: lastRunRecord,
-        decision: lastRunDecision,
-        metrics:
-          recordOrNull(lastRunDecision.metrics) || recordOrEmpty(lastRunRecord.parsedMetrics),
-        metricName: state.config.metricName,
-        command: continuationCommands(workDir).partialResults,
-      })
-    : classifyPacketDiagnostics();
+  const packetDiagnostics = decisionFacts.packetDiagnostics;
   const currentRuntimeProvenance = runtimeProvenance();
   const dashboardHealth = await dashboardHealthForWorkDir(workDir, PLUGIN_VERSION);
-  const sourceCleanliness = buildSourceCleanliness({ warningDetails });
-  const guidance = await decisionGuidance({
-    workDir,
-    config,
-    state,
-    scaffoldHealth,
-    warningDetails,
-  });
+  const sourceCleanliness = decisionFacts.sourceCleanliness;
+  const guidance = decisionFacts.guidance;
   const publicCommandAuthority = publicCommandPayload(guidance.commandAuthority);
   const publicPreflight = publicCommandPayload(guidance.preflight);
   const stateWithQualityGap = {
@@ -243,16 +241,6 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
     experimentMemory: memory,
     best: state.best,
     current: state.current,
-  });
-  const decisionPlan = compileSessionDecision(snapshot, {
-    finalization,
-    diagnostics: decisionDiagnosticsForStateFacts({
-      guidance,
-      packetDiagnostics,
-      scaffoldHealth,
-      sourceCleanliness,
-      warningDetails,
-    }),
   });
   const continuation = projectLoopContinuation(decisionPlan);
   const resolvedDecision = projectResolvedDecision(decisionPlan);
@@ -339,9 +327,13 @@ export async function publicState(args: CommandRecord): Promise<CommandRecord> {
 async function publicCompactState({
   snapshot,
   codexGoalObjective,
+  decisionPlan,
+  decisionFacts,
 }: {
   snapshot: CoherentSessionSnapshot;
   codexGoalObjective?: unknown;
+  decisionPlan: DecisionPlan;
+  decisionFacts: SessionDecisionFactCollection;
 }): Promise<CommandRecord> {
   const { workDir, config } = snapshot;
   const records = snapshot.records;
@@ -352,10 +344,10 @@ async function publicCompactState({
   const lastRun = snapshot.lastRunPacket;
   const activeProgress = snapshot.processProgress;
   const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
-  const qualityGap = await currentQualityGapSummary(workDir);
-  const scaffoldHealth = await buildScaffoldHealth({ workDir, config });
+  const qualityGap = decisionFacts.qualityGap;
+  const scaffoldHealth = decisionFacts.scaffoldHealth;
   const researchIntegrity = buildResearchIntegrity({ state, config });
-  const warningDetails = await operatorWarningsForWorkDir(workDir, state);
+  const warningDetails = decisionFacts.warningDetails;
   const settings = buildDashboardSettings(config);
   const orchestration = buildParallelOrchestrationContext({
     workDir,
@@ -374,30 +366,12 @@ async function publicCompactState({
     workDir,
     pluginRoot: PLUGIN_ROOT,
   });
-  const lastRunDecision = recordOrEmpty(lastRun?.decision);
-  const lastRunRecord = recordOrEmpty(lastRun?.run);
   const lastRunEvidence = recordOrEmpty(lastRun?.packetEvidence);
-  const packetDiagnostics = lastRun
-    ? classifyPacketDiagnostics({
-        packetEvidence: lastRunEvidence,
-        run: lastRunRecord,
-        decision: lastRunDecision,
-        metrics:
-          recordOrNull(lastRunDecision.metrics) || recordOrEmpty(lastRunRecord.parsedMetrics),
-        metricName: state.config.metricName,
-        command: continuationCommands(workDir).partialResults,
-      })
-    : classifyPacketDiagnostics();
+  const packetDiagnostics = decisionFacts.packetDiagnostics;
   const currentRuntimeProvenance = runtimeProvenance();
   const dashboardHealth = await dashboardHealthForWorkDir(workDir, PLUGIN_VERSION);
-  const sourceCleanliness = buildSourceCleanliness({ warningDetails });
-  const guidance = await decisionGuidance({
-    workDir,
-    config,
-    state,
-    scaffoldHealth,
-    warningDetails,
-  });
+  const sourceCleanliness = decisionFacts.sourceCleanliness;
+  const guidance = decisionFacts.guidance;
   const publicPreflight = publicCommandPayload(guidance.preflight);
   const stateWithQualityGap = {
     ...buildSessionReadModelState({
@@ -438,12 +412,7 @@ async function publicCompactState({
     ...continuationCommandSet,
     ...(replaceLastRunCommand ? { replaceLast: replaceLastRunCommand } : {}),
   };
-  const finalization = await finalizationPressureForWorkDir({
-    workDir,
-    state,
-    qualityGap,
-    warningDetails,
-  });
+  const finalization = decisionFacts.finalization || {};
   const readModel = buildSessionReadModel({
     workDir,
     config,
@@ -476,16 +445,6 @@ async function publicCompactState({
     experimentMemory: memory,
     best: state.best,
     current: state.current,
-  });
-  const decisionPlan = compileSessionDecision(snapshot, {
-    finalization,
-    diagnostics: decisionDiagnosticsForStateFacts({
-      guidance,
-      packetDiagnostics,
-      scaffoldHealth,
-      sourceCleanliness,
-      warningDetails,
-    }),
   });
   const continuation = projectLoopContinuation(decisionPlan);
   const resolvedDecision = projectResolvedDecision(decisionPlan);
@@ -665,72 +624,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function decisionDiagnosticsForStateFacts({
-  guidance,
-  packetDiagnostics,
-  scaffoldHealth,
-  sourceCleanliness,
-  warningDetails,
-}: {
-  guidance: CommandRecord;
-  packetDiagnostics: unknown;
-  scaffoldHealth: CommandRecord;
-  sourceCleanliness: unknown;
-  warningDetails: CommandRecord[];
-}): DecisionDiagnostic[] {
-  const diagnostics: DecisionDiagnostic[] = [];
-  const packetFacts = recordOrEmpty(packetDiagnostics);
-  const cleanlinessFacts = recordOrEmpty(sourceCleanliness);
-  const runtimeAuthority = recordOrEmpty(guidance.runtimeAuthority);
-  if (runtimeAuthority.blocking === true) {
-    diagnostics.push(
-      decisionDiagnostic("runtime-integrity", {
-        message: String(runtimeAuthority.blocker || "Runtime authority is not proven."),
-      }),
-    );
-  }
-  if (
-    (Array.isArray(scaffoldHealth.checks) ? scaffoldHealth.checks : []).some(
-      (value) => recordOrEmpty(value).severity === "blocker",
-    )
-  ) {
-    diagnostics.push(
-      decisionDiagnostic("scaffold-invalid", {
-        message: "The session scaffold has a blocking integrity issue.",
-      }),
-    );
-  }
-  if (cleanlinessFacts.sourceDirty === true) {
-    diagnostics.push(
-      decisionDiagnostic("dirty-source", {
-        message: "Review the dirty source tree before authorizing packet evidence.",
-      }),
-    );
-  }
-  const evaluatorDrift = warningDetails.find((warning) =>
-    ["benchmark_contract_changed", "protected_benchmark_changed"].includes(
-      String(warning.code || ""),
-    ),
-  );
-  if (evaluatorDrift) {
-    diagnostics.push(
-      decisionDiagnostic("evaluator-drift", {
-        message: String(evaluatorDrift.message || "The accepted evaluator has drifted."),
-      }),
-    );
-  }
-  if (packetFacts.unresolved === true && packetFacts.primaryStage) {
-    diagnostics.push(
-      decisionDiagnostic("packet-diagnostic", {
-        message: String(packetFacts.recommendation || "Resolve the latest packet diagnostic."),
-        command: String(packetFacts.command || ""),
-        semantic: { primaryStage: String(packetFacts.primaryStage) },
-      }),
-    );
-  }
-  return diagnostics;
-}
-
 function recordOrEmpty(value: unknown): UnknownRecord {
   return recordOrNull(value) || {};
 }
@@ -740,4 +633,27 @@ function coherentSnapshotOrNull(value: unknown): CoherentSessionSnapshot | null 
   return snapshot?.kind === "coherent-session-snapshot" && snapshot.schemaVersion === 1
     ? (snapshot as unknown as CoherentSessionSnapshot)
     : null;
+}
+
+function isDecisionFactCollection(value: unknown): value is SessionDecisionFactCollection {
+  const facts = recordOrNull(value);
+  return Boolean(
+    facts &&
+    Object.hasOwn(facts, "finalizationDecisionFact") &&
+    Array.isArray(facts.diagnostics) &&
+    recordOrNull(facts.scaffoldHealth) &&
+    Array.isArray(facts.warningDetails) &&
+    recordOrNull(facts.sourceCleanliness) &&
+    recordOrNull(facts.packetDiagnostics) &&
+    recordOrNull(facts.guidance),
+  );
+}
+
+function requireDecisionFacts(
+  facts: SessionDecisionFactCollection | undefined,
+): SessionDecisionFactCollection {
+  if (!facts) {
+    throw new Error("Canonical session fact collection is missing from the accepted snapshot.");
+  }
+  return facts;
 }

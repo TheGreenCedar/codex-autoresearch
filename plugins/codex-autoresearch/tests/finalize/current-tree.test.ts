@@ -1,7 +1,22 @@
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { cli, finalizer, git, run, testWithTempRoot, writeFile } from "./helpers.js";
+import {
+  cli,
+  finalizer,
+  git,
+  run,
+  testWithTempRoot,
+  writeCompleteFinalizationEvidenceFixture,
+  writeFile,
+} from "./helpers.js";
+
+async function commitSupportingCurrentTreeChange(repo: string, name: string) {
+  const relativePath = `src/${name}.txt`;
+  await writeFile(path.join(repo, relativePath), "supporting current-tree change\n");
+  await git(["add", relativePath], repo);
+  await git(["commit", "-m", `add ${name} current-tree support`], repo);
+}
 
 testWithTempRoot(
   "finalize-current-tree packages the current non-session diff",
@@ -33,8 +48,22 @@ testWithTempRoot(
       "- [ ] gap\n",
     );
     await writeFile(path.join(repo, "autoresearch-finalize", "scratch.groups.json"), "{}\n");
-    await git(["add", "-A"], repo);
+    await git(["add", "src/guardrails.txt", "src/value.txt"], repo);
     await git(["commit", "-m", "final tree update"], repo);
+    const acceptedTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: acceptedTree });
+    await git(
+      [
+        "add",
+        "-f",
+        "autoresearch-dashboard.html",
+        "autoresearch-finalize/scratch.groups.json",
+        "autoresearch.jsonl",
+        "autoresearch.research/study/quality-gaps.md",
+      ],
+      repo,
+    );
+    await git(["commit", "-m", "accept finalization fixture"], repo);
 
     const result = await run(process.execPath, [cli, "finalize-current-tree", "--cwd", repo], repo);
     const payload = JSON.parse(result.stdout);
@@ -116,7 +145,9 @@ testWithTempRoot(
         "",
       ].join("\n"),
     );
-    await git(["add", "autoresearch.jsonl"], repo);
+    await writeCompleteFinalizationEvidenceFixture(repo);
+    await commitSupportingCurrentTreeChange(repo, "retrieval-proof-support");
+    await git(["add", "-f", "autoresearch.jsonl"], repo);
     await git(["commit", "-m", "log autoresearch session"], repo);
 
     const result = await run(process.execPath, [cli, "finalize-current-tree", "--cwd", repo], repo);
@@ -173,6 +204,11 @@ testWithTempRoot(
     );
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "final tree update"], repo);
+    const acceptedTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: acceptedTree });
+    await commitSupportingCurrentTreeChange(repo, "claim-tamper-support");
+    await git(["add", "autoresearch.jsonl"], repo);
+    await git(["commit", "-m", "accept finalization fixture"], repo);
 
     const result = await run(process.execPath, [cli, "finalize-current-tree", "--cwd", repo], repo);
     const payload = JSON.parse(result.stdout);
@@ -213,6 +249,9 @@ testWithTempRoot(
     );
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "final tree update"], repo);
+    const acceptedTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: acceptedTree });
+    await commitSupportingCurrentTreeChange(repo, "included-session-support");
 
     const result = await run(
       process.execPath,
@@ -250,13 +289,24 @@ testWithTempRoot(
     await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "final tree update"], repo);
+    const acceptedTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: acceptedTree });
     await writeFile(path.join(repo, "src", "dirty.txt"), "uncommitted\n");
 
-    const result = await run(process.execPath, [cli, "finalize-current-tree", "--cwd", repo], repo);
-    const payload = JSON.parse(result.stdout);
-    assert.equal(payload.ready, false);
-    assert.equal(payload.planOutput, "");
-    assert.match(payload.warnings.join("\n"), /dirty/i);
+    const result = await run(
+      process.execPath,
+      [cli, "finalize-current-tree", "--cwd", repo],
+      repo,
+      true,
+    );
+    assert.notEqual(result.code, 0);
+    const refusal = JSON.parse(result.stderr);
+    assert.equal(refusal.code, "mutation-precondition-blocked");
+    assert.equal(refusal.preconditionDecision.capabilities.finalize, "blocked");
+    assert.ok(
+      refusal.preconditionDecision.requiredEvidence.diagnosticCodes.includes("dirty-source"),
+    );
+    await assert.rejects(fsp.access(path.join(repo, "autoresearch-finalize")));
   },
 );
 
@@ -278,6 +328,9 @@ testWithTempRoot(
     await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "final tree update"], repo);
+    const acceptedTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: acceptedTree });
+    await commitSupportingCurrentTreeChange(repo, "coverage-tamper-support");
 
     const result = await run(process.execPath, [cli, "finalize-current-tree", "--cwd", repo], repo);
     const payload = JSON.parse(result.stdout);
@@ -309,11 +362,14 @@ testWithTempRoot(
     await writeFile(path.join(repo, "src", "value.txt"), "kept\n");
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "final tree update"], repo);
+    const acceptedTree = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: acceptedTree });
+    await commitSupportingCurrentTreeChange(repo, "head-staleness-support");
 
     const result = await run(process.execPath, [cli, "finalize-current-tree", "--cwd", repo], repo);
     const payload = JSON.parse(result.stdout);
-    await writeFile(path.join(repo, "src", "late.txt"), "late\n");
-    await git(["add", "-A"], repo);
+    await writeFile(path.join(repo, "autoresearch-dashboard.html"), "late session export\n");
+    await git(["add", "-f", "autoresearch-dashboard.html"], repo);
     await git(["commit", "-m", "advance source after plan"], repo);
 
     const stale = await run(process.execPath, [finalizer, payload.planOutput], repo, true);

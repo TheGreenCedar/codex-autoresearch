@@ -226,7 +226,7 @@ test("legacy failed sentinel metrics do not suppress next-run baseline measure g
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=5')"`;
     await setupFixture(dir, {
       name: "legacy sentinel",
-      completeContract: true,
+      acceptedContract: true,
       benchmarkCommand: command,
     });
     await appendLegacyLedgerRows(dir, [
@@ -255,7 +255,7 @@ test("metricless failed last-run packets log cleanly and preserve packet on inva
     const command = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
     await setupFixture(dir, {
       name: "metricless last run",
-      completeContract: true,
+      acceptedContract: true,
       benchmarkCommand: command,
     });
 
@@ -302,7 +302,7 @@ test("metricless failed last-run packets log cleanly and preserve packet on inva
 
 test("keep, discard, and measure still require finite metrics", async () => {
   await withTempDir("metric-required", async (dir) => {
-    await setupFixture(dir, { name: "metric required" });
+    await setupFixture(dir, { name: "metric required", acceptedContract: true });
 
     for (const status of ["keep", "discard", "measure"]) {
       const result = await runCli([
@@ -391,6 +391,15 @@ test("last-run packet keeps source clean while contract acceptance dirties only 
     });
     await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-m", "session"]);
+    const accepted = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "Accept the clean Git packet fixture",
+      "--yes",
+    ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
 
     const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);

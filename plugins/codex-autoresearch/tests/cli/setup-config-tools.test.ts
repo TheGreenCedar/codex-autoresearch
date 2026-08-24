@@ -1105,6 +1105,42 @@ test("CLI and tool argument normalization share runtime contracts", async () => 
   });
 });
 
+test("tool learning validation matches the advertised nested schema", async () => {
+  const { validateToolArguments } = await import("../../lib/tool-schemas.js");
+  const base = {
+    workingDir: "C:/repo",
+    description: "Nested learning validation",
+    status: "discard",
+  };
+  for (const learning of [
+    true,
+    "causal",
+    { kind: "causal", changedBelief: true, evidence: ["trace"] },
+    { kind: "causal", changedBelief: "Concrete belief", evidence: [42] },
+    {
+      kind: "causal",
+      changedBelief: "Concrete belief",
+      evidence: ["trace"],
+      extra: true,
+    },
+  ]) {
+    assert.throws(
+      () => validateToolArguments("log_experiment", { ...base, learning }),
+      /learning/i,
+    );
+  }
+  assert.doesNotThrow(() =>
+    validateToolArguments("log_experiment", {
+      ...base,
+      learning: {
+        kind: "causal",
+        changedBelief: "Concrete belief",
+        evidence: ["trace"],
+      },
+    }),
+  );
+});
+
 test("log rejects conflicting metrics inputs and invalid evidence status", async () => {
   await withTempDir("log-contract-edges", async (dir) => {
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;

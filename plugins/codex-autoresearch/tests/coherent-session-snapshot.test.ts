@@ -64,6 +64,74 @@ test("coherent snapshot retries every raw source race and accepts only an equal 
   }
 });
 
+test("coherent snapshot re-resolves private-store locations across the A/load/B boundary", async () => {
+  let resolves = 0;
+  let sourceReads = 0;
+  const gitLocations = snapshotLocations("/git");
+  const movedLocations = snapshotLocations("/moved-git");
+  const io: CoherentSnapshotIo = {
+    async captureRoutingConfig() {
+      return structuredClone(BASE_SOURCES.config);
+    },
+    async resolveLocations() {
+      resolves += 1;
+      return structuredClone(resolves === 1 ? gitLocations : movedLocations);
+    },
+    async readVersionVector() {
+      return structuredClone(BASE_VECTOR);
+    },
+    async captureSources(locations) {
+      sourceReads += 1;
+      assert.equal(
+        locations.packet.path,
+        sourceReads === 1 ? gitLocations.packet.path : movedLocations.packet.path,
+      );
+      return structuredClone(BASE_SOURCES);
+    },
+  };
+
+  const result = await loadCoherentSessionSnapshot({ requestedCwd: "/worktree", io });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.attempts, 2);
+  assert.equal(resolves, 4, "locations are resolved independently for A and B on every attempt");
+  assert.equal(sourceReads, 2, "source capture stays bound to the A locations");
+});
+
+test("a new private-store conflict at vector B fails closed", async () => {
+  let resolves = 0;
+  const locations = snapshotLocations("/git");
+  const io: CoherentSnapshotIo = {
+    async captureRoutingConfig() {
+      return structuredClone(BASE_SOURCES.config);
+    },
+    async resolveLocations() {
+      resolves += 1;
+      if (resolves === 2) {
+        throw new Error(
+          "Conflicting last-run packet state exists in both Git-private and worktree storage.",
+        );
+      }
+      return structuredClone(locations);
+    },
+    async readVersionVector() {
+      return structuredClone(BASE_VECTOR);
+    },
+    async captureSources() {
+      return structuredClone(BASE_SOURCES);
+    },
+  };
+
+  const result = await loadCoherentSessionSnapshot({ requestedCwd: "/worktree", io });
+
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.attempts, 1);
+  assert.equal(result.diagnostic.code, "coherent-snapshot-source-invalid");
+  assert.match(result.diagnostic.message, /conflicting last-run packet state/i);
+});
+
 test("coherent snapshot returns typed exhaustion after exactly three unequal attempts", async () => {
   const vectors = Array.from({ length: 6 }, (_, index) => {
     const vector = structuredClone(BASE_VECTOR);
@@ -106,6 +174,51 @@ test("coherent snapshot parses the bytes captured inside the accepted attempt", 
   assert.equal(io.sourceReads(), 1);
 });
 
+test("derived fact collection runs inside each A/load/B attempt and retains the accepted attempt", async () => {
+  const changed = structuredClone(BASE_VECTOR);
+  changed.config.hash = "config-b";
+  const first = { ...BASE_SOURCES, config: Buffer.from('{"name":"raced"}\n') };
+  const accepted = { ...BASE_SOURCES, config: Buffer.from('{"name":"accepted"}\n') };
+  const io = sequenceIo(
+    [BASE_VECTOR, changed, changed, changed],
+    [first, accepted],
+    [first.config, accepted.config],
+  );
+  const inspectedNames: string[] = [];
+
+  const result = await loadCoherentSessionSnapshot({
+    requestedCwd: "/worktree",
+    io,
+    inspectCapturedSnapshot: async (snapshot) => {
+      inspectedNames.push(String(snapshot.config.name || ""));
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(inspectedNames, ["raced", "accepted"]);
+  if (result.ok) assert.equal(result.snapshot.config.name, "accepted");
+});
+
+test("derived fact stability is verified without entering the raw generation vector", async () => {
+  const io = sequenceIo([BASE_VECTOR, BASE_VECTOR], [BASE_SOURCES]);
+  let inspections = 0;
+
+  const result = await loadCoherentSessionSnapshot({
+    requestedCwd: "/worktree",
+    io,
+    inspectCapturedSnapshot: async () => {
+      inspections += 1;
+      return "stable-derived-fact-version";
+    },
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(inspections, 2, "derived facts are checked on both sides of the accepted attempt");
+  assert.equal(result.snapshot.generationId, generationIdForVersionVector(BASE_VECTOR));
+  assert.equal(Object.hasOwn(result.snapshot.vector, "decisionFacts"), false);
+});
+
 test("routing config bytes and accepted config bytes must identify the same target cwd", async () => {
   const wrongRouting = Buffer.from('{"workingDir":"wrong"}\n');
   const stableRouting = Buffer.from('{"workingDir":"right"}\n');
@@ -123,7 +236,12 @@ test("routing config bytes and accepted config bytes must identify the same targ
   assert.equal(result.attempts, 2);
   assert.equal(result.snapshot.sessionCwd, "/session");
   assert.equal(result.snapshot.workDir, "/session/right");
-  assert.deepEqual(io.resolvedWorkDirs(), ["/session/wrong", "/session/right"]);
+  assert.deepEqual(io.resolvedWorkDirs(), [
+    "/session/wrong",
+    "/session/wrong",
+    "/session/right",
+    "/session/right",
+  ]);
 });
 
 test("generation identity changes for every member of the raw version vector", () => {
@@ -175,6 +293,104 @@ test("Git version capture does not overlap commands that may contend on the inde
     indexTree: "tree",
     statusHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   });
+});
+
+test("Git version capture accepts only a proven unborn symbolic branch", async () => {
+  const calls: string[] = [];
+  const resultFor = (code: number, stdout = "", stderr = ""): ProcessRunResult => ({
+    code,
+    signal: null,
+    stdout,
+    stderr,
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    timedOut: false,
+    durationMs: 1,
+  });
+  const result = await captureGitVersion("/worktree", {
+    insideGitRepo: async () => true,
+    runGit: async (args) => {
+      calls.push(args.join(" "));
+      if (args[0] === "rev-parse") return resultFor(128, "", "fatal: Needed a single revision");
+      if (args[0] === "symbolic-ref") return resultFor(0, "refs/heads/main\n");
+      if (args[0] === "show-ref") return resultFor(1);
+      if (args[0] === "write-tree") return resultFor(0, "tree\n");
+      return resultFor(0);
+    },
+  });
+
+  assert.equal(result.head, "unborn");
+  assert.ok(calls.includes("symbolic-ref -q HEAD"));
+  assert.ok(calls.includes("show-ref --verify --quiet refs/heads/main"));
+});
+
+test("Git HEAD integrity failures cannot be mislabeled as unborn", async () => {
+  const resultFor = (code: number, stdout = "", stderr = ""): ProcessRunResult => ({
+    code,
+    signal: null,
+    stdout,
+    stderr,
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    timedOut: false,
+    durationMs: 1,
+  });
+  await assert.rejects(
+    captureGitVersion("/worktree", {
+      insideGitRepo: async () => true,
+      runGit: async (args) => {
+        if (args[0] === "rev-parse") return resultFor(128, "", "fatal: bad object HEAD");
+        if (args[0] === "symbolic-ref") return resultFor(0, "refs/heads/main\n");
+        if (args[0] === "show-ref") return resultFor(128, "", "fatal: bad ref");
+        if (args[0] === "write-tree") return resultFor(0, "tree\n");
+        return resultFor(0);
+      },
+    }),
+    /Git HEAD could not be captured.*bad object HEAD/i,
+  );
+});
+
+test("a missing non-branch symbolic ref is not an unborn branch", async () => {
+  const resultFor = (code: number, stdout = "", stderr = ""): ProcessRunResult => ({
+    code,
+    signal: null,
+    stdout,
+    stderr,
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    timedOut: false,
+    durationMs: 1,
+  });
+  await assert.rejects(
+    captureGitVersion("/worktree", {
+      insideGitRepo: async () => true,
+      runGit: async (args) => {
+        if (args[0] === "rev-parse") return resultFor(128, "", "fatal: bad object HEAD");
+        if (args[0] === "symbolic-ref") return resultFor(0, "refs/tags/missing\n");
+        if (args[0] === "write-tree") return resultFor(0, "tree\n");
+        return resultFor(0);
+      },
+    }),
+    /Git HEAD could not be captured.*bad object HEAD/i,
+  );
+});
+
+test("source capture failures return a typed coherent snapshot diagnostic", async () => {
+  const base = sequenceIo([BASE_VECTOR], [BASE_SOURCES]);
+  const io: CoherentSnapshotIo = {
+    ...base,
+    readVersionVector: async () => {
+      throw new Error("Git HEAD could not be captured: fatal: bad object HEAD");
+    },
+  };
+
+  const result = await loadCoherentSessionSnapshot({ requestedCwd: "/worktree", io });
+
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.attempts, 1);
+  assert.equal(result.diagnostic.code, "coherent-snapshot-source-invalid");
+  assert.match(result.diagnostic.message, /bad object HEAD/);
 });
 
 test("coherent snapshot uses one private store and fails closed on independently populated copies", async () => {
@@ -244,5 +460,18 @@ function sequenceIo(
     vectorReads: () => vectorIndex,
     sourceReads: () => sourceIndex,
     resolvedWorkDirs: () => workDirs,
+  };
+}
+
+function snapshotLocations(privateRoot: string) {
+  return {
+    ledgerPath: "/session/autoresearch.jsonl",
+    configPath: "/session/autoresearch.config.json",
+    packet: { path: `${privateRoot}/last-run.json`, storage: "git-private" as const },
+    receipt: {
+      path: `${privateRoot}/pending-log-transaction.json`,
+      storage: "git-private" as const,
+    },
+    process: { path: `${privateRoot}/progress.json`, storage: "git-private" as const },
   };
 }

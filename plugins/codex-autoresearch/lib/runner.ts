@@ -105,11 +105,15 @@ export interface ShellRunResult {
   outputTruncated: boolean;
   parsedMetrics: Record<string, number>;
   retainedMetricOutput: string;
+  spawnError: string | null;
+  spawnState: ProcessSpawnState;
   startedAt: string;
   termination: ProcessTreeTermination | null;
   terminationFailed: boolean;
   timedOut: boolean;
 }
+
+export type ProcessSpawnState = "unknown" | "spawned" | "failed-before-spawn";
 
 export function validateMetricName(name: unknown): string {
   const value = String(name || "");
@@ -148,6 +152,8 @@ export interface ProcessRunResult {
   lastOutputAt: string | null;
   outputTruncated: boolean;
   parsedMetrics: Record<string, number>;
+  spawnError: string | null;
+  spawnState: ProcessSpawnState;
   startedAt: string;
   stderr: string;
   stderrTruncated: boolean;
@@ -294,6 +300,8 @@ export async function runShell(
     let lastOutputAt: string | null = null;
     let timedOut = false;
     let termination: ProcessTreeTermination | null = null;
+    let spawnState: ProcessSpawnState = "unknown";
+    let spawnError: string | null = null;
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | null = null;
     const metricCollector = createMetricCollector();
@@ -375,6 +383,8 @@ export async function runShell(
           fullOutputTruncated,
           parsedMetrics: metricCollector.finish(),
           termination,
+          spawnState,
+          spawnError,
         }),
       );
     };
@@ -398,8 +408,15 @@ export async function runShell(
     child.stderr.on("data", (chunk) => {
       appendOutput(chunk.toString("utf8"));
     });
+    child.once("spawn", () => {
+      spawnState = "spawned";
+    });
     child.on("error", (error) => {
       const errorText = String(error.stack || error.message || error);
+      if (spawnState !== "spawned") {
+        spawnState = "failed-before-spawn";
+        spawnError = errorText;
+      }
       if (timedOut) {
         appendOutput(errorText);
         return;
@@ -471,6 +488,8 @@ export async function runProcess(
     let lastOutputAt: string | null = null;
     let timedOut = false;
     let termination: ProcessTreeTermination | null = null;
+    let spawnState: ProcessSpawnState = "unknown";
+    let spawnError: string | null = null;
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | null = null;
     const metricCollector = createMetricCollector();
@@ -518,6 +537,8 @@ export async function runProcess(
           lastOutputAt,
           parsedMetrics: metricCollector.finish(),
           termination,
+          spawnState,
+          spawnError,
         }),
       );
     };
@@ -537,7 +558,14 @@ export async function runProcess(
     child.stderr.on("data", (chunk) => {
       appendOutput("stderr", stderrDecoder.write(chunk));
     });
+    child.once("spawn", () => {
+      spawnState = "spawned";
+    });
     child.on("error", (error) => {
+      if (spawnState !== "spawned") {
+        spawnState = "failed-before-spawn";
+        spawnError = error.message || String(error);
+      }
       if (timedOut) {
         appendOutput("stderr", error.message || String(error));
         return;
@@ -602,6 +630,8 @@ export async function runExecutableCommand(
       Buffer.byteLength(combinedOutput, "utf8") > (options.maxOutputBytes ?? OUTPUT_CAPTURE_BYTES),
     parsedMetrics: result.parsedMetrics,
     retainedMetricOutput: "",
+    spawnError: result.spawnError,
+    spawnState: result.spawnState,
     startedAt: result.startedAt,
     termination: result.termination,
     terminationFailed: result.terminationFailed,
@@ -637,6 +667,8 @@ function shellRunResult({
   fullOutputTruncated,
   parsedMetrics,
   termination,
+  spawnState,
+  spawnError,
 }: {
   command: string;
   exitCode: number | null;
@@ -651,6 +683,8 @@ function shellRunResult({
   retainedMetricOutput: string;
   startedAt: number;
   startedAtIso?: string;
+  spawnError: string | null;
+  spawnState: ProcessSpawnState;
   termination: ProcessTreeTermination | null;
   timedOut: boolean;
 }): ShellRunResult {
@@ -670,6 +704,8 @@ function shellRunResult({
     outputTruncated,
     fullOutputTruncated,
     parsedMetrics,
+    spawnError,
+    spawnState,
     termination,
     terminationFailed: Boolean(timedOut && !termination?.proven),
   };
@@ -688,6 +724,8 @@ function processResult({
   lastOutputAt,
   parsedMetrics = Object.create(null),
   termination,
+  spawnState,
+  spawnError,
 }: {
   commandDisplay: string;
   exitCode: number | null;
@@ -695,6 +733,8 @@ function processResult({
   parsedMetrics?: Record<string, number>;
   startedAt: number;
   startedAtIso?: string;
+  spawnError: string | null;
+  spawnState: ProcessSpawnState;
   stderr: string;
   stderrTruncated: boolean;
   stdout: string;
@@ -721,6 +761,8 @@ function processResult({
     stdoutTruncated,
     stderrTruncated,
     parsedMetrics,
+    spawnError,
+    spawnState,
     termination,
     terminationFailed: Boolean(timedOut && !termination?.proven),
   };

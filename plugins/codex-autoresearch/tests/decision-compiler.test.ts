@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -9,6 +10,11 @@ import {
 } from "../lib/decision-compiler.js";
 import type { CoherentSessionSnapshot } from "../lib/coherent-session-snapshot.js";
 import { finalizationDecisionDiagnostics } from "../lib/session-decision.js";
+import { buildFinalizationEvidenceState } from "../lib/finalization-plan.js";
+import {
+  buildFinalizationProductClaimCoverageFromLedger,
+  productClaimCoverageFingerprintMaterial,
+} from "../lib/product-claim-coverage.js";
 
 test("decision identity excludes prose, timestamps, and diagnostic order", () => {
   const snapshot = snapshotFixture();
@@ -97,6 +103,74 @@ test("decision identity normalizes rendered commands while retaining typed actio
   assert.equal(powershell.decisionId, posix.decisionId);
   assert.notEqual(powershell.action.commandDigest, posix.action.commandDigest);
   assert.notEqual(changed.decisionId, posix.decisionId);
+});
+
+test("decision identity includes typed command semantics and rejects conflicting duplicates", () => {
+  const snapshot = snapshotFixture();
+  const next = compileDecisionPlan(snapshot, [
+    decisionDiagnostic("packet-diagnostic", {
+      command: "node scripts/autoresearch.mjs partial-results --from-last --cwd /tmp/project",
+      semantic: { stage: "benchmark" },
+    }),
+  ]);
+  const doctor = compileDecisionPlan(snapshot, [
+    decisionDiagnostic("packet-diagnostic", {
+      command: "node scripts/autoresearch.mjs ledger-doctor --json --cwd /tmp/project",
+      semantic: { stage: "benchmark" },
+    }),
+  ]);
+  assert.notEqual(next.action.commandSemanticId, doctor.action.commandSemanticId);
+  assert.notEqual(next.decisionId, doctor.decisionId);
+
+  for (const diagnostics of [
+    [
+      decisionDiagnostic("packet-diagnostic", {
+        command: "node scripts/autoresearch.mjs partial-results --from-last",
+        semantic: { stage: "benchmark" },
+      }),
+      decisionDiagnostic("packet-diagnostic", {
+        command: "node scripts/autoresearch.mjs ledger-doctor --json",
+        semantic: { stage: "benchmark" },
+      }),
+    ],
+    [
+      decisionDiagnostic("packet-diagnostic", {
+        command: "node scripts/autoresearch.mjs ledger-doctor --json",
+        semantic: { stage: "benchmark" },
+      }),
+      decisionDiagnostic("packet-diagnostic", {
+        command: "node scripts/autoresearch.mjs partial-results --from-last",
+        semantic: { stage: "benchmark" },
+      }),
+    ],
+  ]) {
+    assert.throws(
+      () => compileDecisionPlan(snapshot, diagnostics),
+      /conflicting action semantics/i,
+    );
+  }
+});
+
+test("decision identity retains normalized value-bearing action parameters", () => {
+  const snapshot = snapshotFixture();
+  const keep = decisionDiagnostic("packet-diagnostic", {
+    command: "node scripts/autoresearch.mjs log --cwd /tmp/project --status keep --from-last",
+    semantic: { stage: "packet-log" },
+  });
+  const discard = decisionDiagnostic("packet-diagnostic", {
+    command:
+      'node scripts/autoresearch.mjs log --working-dir "C:\\tmp\\project" --status discard --from-last',
+    semantic: { stage: "packet-log" },
+  });
+  const keepPlan = compileDecisionPlan(snapshot, [keep]);
+  const discardPlan = compileDecisionPlan(snapshot, [discard]);
+
+  assert.notEqual(keepPlan.action.commandSemanticId, discardPlan.action.commandSemanticId);
+  assert.notEqual(keepPlan.decisionId, discardPlan.decisionId);
+  assert.throws(
+    () => compileDecisionPlan(snapshot, [keep, discard]),
+    /conflicting action semantics/i,
+  );
 });
 
 test("capability diagnostics remain scoped instead of becoming global packet brakes", () => {
@@ -218,7 +292,7 @@ test("two consecutive eligible no-learning candidates pause packets without chan
       learning: {
         kind: "causal",
         evidence: ["controlled comparison"],
-        changedBelief: true,
+        changedBelief: "The controlled variable, rather than packet order, explains the change.",
       },
     }),
     candidateRecord({ run: 2 }),
@@ -258,7 +332,14 @@ test("ineligible purposes and external-infrastructure-invalid outcomes never cou
     candidateRecord({ run: 4, evaluationAuthority: "manual" }),
     candidateRecord({
       run: 5,
-      failure: { layer: "external-infrastructure", code: "network" },
+      failure: {
+        layer: "external-infrastructure",
+        code: "network",
+        preconditions: {
+          externalDependencyIdentity: "benchmark-api",
+          externalObservation: "connection reset by peer",
+        },
+      },
     }),
     candidateRecord({ run: 6, preconditionEpoch: "other-epoch" }),
   ];
@@ -268,13 +349,47 @@ test("ineligible purposes and external-infrastructure-invalid outcomes never cou
   assert.equal(plan.capabilities["run-packet"], "allowed");
 });
 
+test("accepted crash and checks failures without proven external metadata stay conservative", () => {
+  const records = [
+    candidateRecord({ run: 1, status: "crash" }),
+    candidateRecord({
+      run: 2,
+      status: "checks_failed",
+      metric: 1,
+      failure: { layer: "external-infrastructure", code: "network" },
+    }),
+  ];
+  const plan = compileDecisionPlan(snapshotFixture({ records }), []);
+
+  assert.equal(plan.learning.consecutiveNoLearningCandidates, 2);
+  assert.equal(plan.outcome.kind, "invalid");
+  assert.equal(plan.failures.consecutive, 0);
+  assert.equal(plan.primaryBlockerCode, "no-learning-pause");
+  assert.equal(plan.capabilities["run-packet"], "blocked");
+});
+
 test("causal or discriminating learning requires evidence and an explicitly changed belief", () => {
   const cases = [
     [{ kind: "none" }, "none"],
-    [{ kind: "causal", changedBelief: true }, "none"],
-    [{ kind: "causal", evidence: ["trace"], changedBelief: false }, "none"],
-    [{ kind: "causal", evidence: ["trace"], changedBelief: true }, "causal"],
-    [{ kind: "discriminating", evidence: ["holdout"], changedBelief: true }, "discriminating"],
+    [{ kind: "causal", changedBelief: "the cache key controls the miss", evidence: [] }, "none"],
+    [{ kind: "causal", evidence: ["trace"], changedBelief: true }, "none"],
+    [{ kind: "causal", evidence: ["trace"], changedBelief: "   " }, "none"],
+    [
+      {
+        kind: "causal",
+        evidence: ["trace"],
+        changedBelief: "The cache key, rather than request order, controls the miss.",
+      },
+      "causal",
+    ],
+    [
+      {
+        kind: "discriminating",
+        evidence: ["holdout"],
+        changedBelief: "The holdout separates parser cost from network cost.",
+      },
+      "discriminating",
+    ],
   ] as const;
   for (const [learning, expected] of cases) {
     const plan = compileDecisionPlan(
@@ -282,7 +397,62 @@ test("causal or discriminating learning requires evidence and an explicitly chan
       [],
     );
     assert.equal(plan.learning.latest.kind, expected);
+    assert.deepEqual(plan.learning.latest.evidence, expected === "none" ? [] : learning.evidence);
   }
+
+  const first = compileDecisionPlan(
+    snapshotFixture({
+      records: [
+        candidateRecord({
+          run: 1,
+          learning: {
+            kind: "causal",
+            evidence: ["trace"],
+            changedBelief: "The cache key controls the miss.",
+          },
+        }),
+      ],
+    }),
+    [],
+  );
+  const second = compileDecisionPlan(
+    snapshotFixture({
+      records: [
+        candidateRecord({
+          run: 1,
+          learning: {
+            kind: "causal",
+            evidence: ["trace"],
+            changedBelief: "Request order controls the miss.",
+          },
+        }),
+      ],
+    }),
+    [],
+  );
+  assert.equal(
+    (first.learning.latest as { changedBelief?: unknown }).changedBelief,
+    "The cache key controls the miss.",
+  );
+  assert.deepEqual(first.learning.latest.evidence, ["trace"]);
+  assert.notEqual(second.decisionId, first.decisionId);
+
+  const differentEvidence = compileDecisionPlan(
+    snapshotFixture({
+      records: [
+        candidateRecord({
+          run: 1,
+          learning: {
+            kind: "causal",
+            evidence: ["holdout"],
+            changedBelief: "The cache key controls the miss.",
+          },
+        }),
+      ],
+    }),
+    [],
+  );
+  assert.notEqual(differentEvidence.decisionId, first.decisionId);
 });
 
 test("outcome is calculated from accepted metric semantics instead of an operator label", () => {
@@ -328,7 +498,143 @@ test("outcome is calculated from accepted metric semantics instead of an operato
     }),
     [],
   );
-  assert.equal(threshold.outcome.kind, "threshold-met");
+  assert.equal(threshold.outcome.kind, "improved");
+
+  const neutral = compileDecisionPlan(
+    snapshotFixture({
+      records: [
+        minimizeContract,
+        candidateRecord({ run: 1, metric: 10, status: "measure" }),
+        candidateRecord({ run: 2, metric: 10, status: "discard" }),
+      ],
+    }),
+    [],
+  );
+  assert.equal(neutral.outcome.kind as string, "neutral");
+
+  const unavailable = compileDecisionPlan(snapshotFixture({ records: [] }), []);
+  assert.equal(unavailable.outcome.kind as string, "invalid");
+});
+
+test("the first candidate compares with its accepted baseline without counting baseline learning", () => {
+  const baseline = candidateRecord({
+    run: 1,
+    runPurpose: "baseline",
+    metric: 10,
+    status: "measure",
+    learning: {
+      kind: "causal",
+      changedBelief: "The baseline establishes the accepted reference domain.",
+      evidence: ["baseline established"],
+    },
+  });
+  const candidate = candidateRecord({ run: 2, metric: 8, status: "keep" });
+  const plan = compileDecisionPlan(
+    snapshotFixture({ records: [acceptedContractRecord(), baseline, candidate] }),
+    [],
+  );
+
+  assert.equal(plan.outcome.kind, "improved");
+  assert.equal(plan.learning.latest.kind, "none");
+  assert.equal(plan.learning.consecutiveNoLearningCandidates, 1);
+});
+
+test("validated post-finalization evidence is the only completion authority", () => {
+  const preApply = compileDecisionPlan(snapshotFixture(), [
+    decisionDiagnostic("finalization-ready"),
+  ]);
+  assert.equal(preApply.parentDisposition.mayClaimCompletion, false);
+
+  const evidence = [
+    `review-summary-sha256:${"a".repeat(64)}`,
+    "verified-final-tree:head",
+    `review-branch:review/value@${"b".repeat(40)}`,
+  ];
+  const productClaimCoverage = buildFinalizationProductClaimCoverageFromLedger([]);
+  const acceptedEvidenceBase = "base";
+  const acceptedEvidenceCommitDomain: string[] = [];
+  const acceptedEvidenceFingerprint = buildFinalizationEvidenceState(
+    acceptedEvidenceCommitDomain,
+    [],
+  ).fingerprint;
+  const completionIdentity = {
+    sourceHead: "head",
+    sourceIndexTree: "index",
+    sourceStatusHash: "status",
+    contractDigest: "contract-a",
+    preconditionEpoch: "epoch-a",
+    acceptedEvidenceBase,
+    acceptedEvidenceCommitDomain,
+    acceptedEvidenceFingerprint,
+    productClaimCoverageHash: createHash("sha256")
+      .update(JSON.stringify(productClaimCoverageFingerprintMaterial(productClaimCoverage)))
+      .digest("hex"),
+    productGradeReady: true,
+    reviewSummary: "verified-summary.md",
+    evidence,
+  };
+  const completed = compileDecisionPlan(
+    snapshotFixture({
+      completionAudit: {
+        branchHeads: { "review/value": "b".repeat(40) },
+        summaryHash: "a".repeat(64),
+        acceptedEvidenceBase,
+        acceptedEvidenceCommitDomain,
+        acceptedEvidenceFingerprint,
+      } as CoherentSessionSnapshot["completionAudit"],
+      records: [
+        {
+          type: "finalization-completed",
+          schemaVersion: 1,
+          ...completionIdentity,
+          eventId: `finalization-completed:${createHash("sha256")
+            .update(JSON.stringify(completionIdentity))
+            .digest("hex")}`,
+        },
+      ],
+    }),
+    [decisionDiagnostic("completion-ready")],
+  );
+  assert.equal(completed.phase, "complete");
+  assert.equal(completed.loopDisposition.kind, "complete");
+  assert.equal(completed.parentDisposition.mayClaimCompletion, true);
+
+  for (const invalidIdentity of [
+    { ...completionIdentity, acceptedEvidenceFingerprint: undefined },
+    {
+      ...completionIdentity,
+      acceptedEvidenceFingerprint: {
+        ...acceptedEvidenceFingerprint,
+        fingerprint: "f".repeat(64),
+      },
+    },
+  ]) {
+    const eventId = `finalization-completed:${createHash("sha256")
+      .update(JSON.stringify(invalidIdentity))
+      .digest("hex")}`;
+    const invalid = compileDecisionPlan(
+      snapshotFixture({
+        completionAudit: {
+          branchHeads: { "review/value": "b".repeat(40) },
+          summaryHash: "a".repeat(64),
+          acceptedEvidenceBase,
+          acceptedEvidenceCommitDomain,
+          acceptedEvidenceFingerprint,
+        } as CoherentSessionSnapshot["completionAudit"],
+        records: [
+          {
+            type: "finalization-completed",
+            schemaVersion: 1,
+            ...invalidIdentity,
+            eventId,
+          },
+        ],
+      }),
+      [],
+    );
+    assert.equal(invalid.parentDisposition.mayClaimCompletion, false);
+    assert.equal(invalid.requiredEvidence.diagnosticCodes.includes("completion-ready"), false);
+  }
 });
 
 test("invalid accepted checks remain invalid even when a metric would otherwise improve", () => {
@@ -460,13 +766,74 @@ test("finalization projections cannot supply canonical action prose or commands"
       suggestedCommand: "legacy ready command",
     },
   });
+  const [typedReady] = finalizationDecisionDiagnostics({
+    finalization: { ready: false },
+    finalizationDecisionFact: { code: "finalization-ready" },
+  });
 
   assert.deepEqual(blocked, decisionDiagnostic("finalization-blocked"));
-  assert.deepEqual(ready, decisionDiagnostic("finalization-ready"));
+  assert.deepEqual(ready, decisionDiagnostic("finalization-blocked"));
+  assert.deepEqual(typedReady, decisionDiagnostic("finalization-ready"));
+});
+
+test("current-tree finalization is typed recovery authority, not general finalize permission", () => {
+  const [projectionOnly] = finalizationDecisionDiagnostics(
+    {
+      finalization: {
+        ready: false,
+        actionCode: "current-tree-finalization",
+        groups: [{ commit: "accepted-current" }],
+      },
+    },
+    "/repo",
+  );
+  const [diagnostic] = finalizationDecisionDiagnostics(
+    {
+      finalization: {
+        ready: false,
+        actionCode: "current-tree-finalization",
+        groups: [{ commit: "accepted-current" }],
+        nextAction: "untrusted projected current-tree prose",
+        suggestedCommand: "untrusted projected command",
+      },
+      finalizationDecisionFact: {
+        code: "current-tree-finalization",
+        acceptedEvidenceCount: 1,
+      },
+    },
+    "/repo",
+  );
+  assert.deepEqual(projectionOnly, decisionDiagnostic("finalization-blocked"));
+  assert.equal(diagnostic.code, "current-tree-finalization");
+  assert.match(String(diagnostic.command), /finalize-current-tree/);
+  assert.doesNotMatch(String(diagnostic.message), /untrusted projected/i);
+
+  const plan = compileDecisionPlan(snapshotFixture(), [diagnostic]);
+  assert.equal(plan.primaryBlockerCode, "current-tree-finalization");
+  assert.equal(plan.capabilities.finalize, "recovery-only");
+  assert.equal(plan.capabilities["run-packet"], "allowed");
+  assert.equal(plan.capabilities["parent-final-answer"], "allowed");
+  assert.ok(
+    plan.requiredEvidence.capabilityEffectCodes.includes(
+      "current-tree-finalization:finalize:recovery-only",
+    ),
+  );
+
+  const [missingAcceptedEvidence] = finalizationDecisionDiagnostics(
+    {
+      finalization: {
+        ready: false,
+        actionCode: "current-tree-finalization",
+      },
+    },
+    "/repo",
+  );
+  assert.deepEqual(missingAcceptedEvidence, decisionDiagnostic("finalization-blocked"));
 });
 
 function snapshotFixture(
   overrides: {
+    completionAudit?: CoherentSessionSnapshot["completionAudit"];
     contractDigest?: string;
     evaluatorIdentity?: string;
     records?: Record<string, unknown>[];
@@ -492,6 +859,7 @@ function snapshotFixture(
     pendingTransaction: null,
     processProgress: null,
     git: { head: "head", indexTree: "index", statusHash: "status" },
+    completionAudit: overrides.completionAudit || null,
     semanticFacts: {
       contractDigest: overrides.contractDigest || "contract-a",
       evaluatorIdentity: overrides.evaluatorIdentity || "eval-a",

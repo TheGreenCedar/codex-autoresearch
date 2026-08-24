@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
+import { defaultCommandShell, renderShellCommand } from "../lib/command-rendering.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 
 export const OPERATOR_TASK_SUITE = "v2.7-operator-tasks" as const;
@@ -660,12 +661,150 @@ async function outputBudgets(root: string): Promise<Record<string, unknown>> {
   await git(finalizeCwd, ["add", "app.txt"]);
   await git(finalizeCwd, ["commit", "-m", "improve app"]);
   const acceptedCommit = (await git(finalizeCwd, ["rev-parse", "HEAD"])).stdout.trim();
-  await writeLedger(finalizeCwd, [
-    configRecord("finalization output budgets"),
-    { ...runRecord(1, 1, "keep"), commit: acceptedCommit.slice(0, 12) },
-  ]);
-  await git(finalizeCwd, ["add", "autoresearch.jsonl", "autoresearch.config.json"]);
-  await git(finalizeCwd, ["commit", "-m", "record accepted evidence"]);
+  const evaluatorDirectory = ".operator-finalization";
+  const evaluatorPath = path.join(evaluatorDirectory, "evaluator.mjs");
+  const checksPath = path.join(evaluatorDirectory, "checks.mjs");
+  await fsp.mkdir(path.join(finalizeCwd, evaluatorDirectory), { recursive: true });
+  await fsp.writeFile(
+    path.join(finalizeCwd, evaluatorPath),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const value = readFileSync("app.txt", "utf8").trim();',
+      'console.log(`METRIC seconds=${value === "base" ? 2 : 1}`);',
+      "",
+    ].join("\n"),
+  );
+  await fsp.writeFile(path.join(finalizeCwd, checksPath), "process.exit(0);\n");
+  await fsp.appendFile(
+    path.join(finalizeCwd, ".git", "info", "exclude"),
+    `\nautoresearch*\n${evaluatorDirectory}/\n`,
+  );
+  const commandShell = defaultCommandShell();
+  const benchmarkCommand = renderShellCommand([process.execPath, evaluatorPath], commandShell);
+  const checksCommand = renderShellCommand([process.execPath, checksPath], commandShell);
+  expectJsonSuccess(
+    await runNode(
+      cli,
+      [
+        "setup",
+        "--cwd",
+        finalizeCwd,
+        "--name",
+        "finalization output budgets",
+        "--goal",
+        "Keep finalization responses bounded",
+        "--metric-name",
+        "seconds",
+        "--direction",
+        "lower",
+        "--benchmark-command",
+        benchmarkCommand,
+        "--checks-command",
+        checksCommand,
+        "--shell",
+        commandShell,
+        "--scope",
+        "app.txt",
+        "--commit-paths",
+        "app.txt",
+        "--max-iterations",
+        "4",
+        "--packet-budget",
+        "4",
+      ],
+      pluginRoot,
+      env,
+    ),
+  );
+  const acceptedConfigPath = path.join(finalizeCwd, "autoresearch.config.json");
+  const acceptedConfig = JSON.parse(await fsp.readFile(acceptedConfigPath, "utf8"));
+  await fsp.writeFile(
+    acceptedConfigPath,
+    `${JSON.stringify(
+      {
+        ...acceptedConfig,
+        checkImplementationPaths: [checksPath],
+        checksAuthoritative: true,
+        noiseModel: { kind: "deterministic" },
+        protectedBenchmarkPaths: [evaluatorPath, checksPath],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  expectJsonSuccess(
+    await runNode(
+      cli,
+      [
+        "new-segment",
+        "--cwd",
+        finalizeCwd,
+        "--reason",
+        "Accept the output-budget evaluator",
+        "--yes",
+      ],
+      pluginRoot,
+      env,
+    ),
+  );
+  await fsp.writeFile(path.join(finalizeCwd, "app.txt"), "base\n");
+  expectJsonSuccess(await runNode(cli, ["next", "--cwd", finalizeCwd], pluginRoot, env));
+  expectJsonSuccess(
+    await runNode(
+      cli,
+      [
+        "log",
+        "--cwd",
+        finalizeCwd,
+        "--from-last",
+        "--status",
+        "measure",
+        "--description",
+        "Accepted output-budget baseline",
+      ],
+      pluginRoot,
+      env,
+    ),
+  );
+  await fsp.writeFile(path.join(finalizeCwd, "app.txt"), "improved\n");
+  expectJsonSuccess(await runNode(cli, ["next", "--cwd", finalizeCwd], pluginRoot, env));
+  expectJsonSuccess(
+    await runNode(
+      cli,
+      [
+        "log",
+        "--cwd",
+        finalizeCwd,
+        "--from-last",
+        "--status",
+        "keep",
+        "--commit",
+        acceptedCommit,
+        "--description",
+        "Accepted output-budget candidate",
+      ],
+      pluginRoot,
+      env,
+    ),
+  );
+  await fsp.writeFile(path.join(finalizeCwd, "app.txt"), "final current tree\n");
+  await git(finalizeCwd, ["add", "app.txt"]);
+  await git(finalizeCwd, ["commit", "-m", "advance current final tree"]);
+  expectJsonSuccess(
+    await runNode(
+      cli,
+      [
+        "new-segment",
+        "--cwd",
+        finalizeCwd,
+        "--reason",
+        "Accept evaluator authority at the current final tree",
+        "--yes",
+      ],
+      pluginRoot,
+      env,
+    ),
+  );
   const finalizePreview = await runNode(
     cli,
     ["finalize-preview", "--cwd", finalizeCwd],

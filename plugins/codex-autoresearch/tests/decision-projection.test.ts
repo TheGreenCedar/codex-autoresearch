@@ -60,10 +60,28 @@ test("resolved-decision compatibility is a one-way projection from DecisionPlan"
 });
 
 test("plan summary preserves capability, disposition, and learning semantics", () => {
-  const plan = compileDecisionPlan(snapshotFixture(), [
+  const snapshot = snapshotFixture();
+  snapshot.records = [
+    {
+      type: "run",
+      run: 1,
+      runPurpose: "candidate",
+      evaluationAuthority: "accepted-contract",
+      candidateOrigin: { kind: "working-tree" },
+      experimentContractDigest: "contract-a",
+      preconditionEpoch: "epoch-a",
+      learning: {
+        kind: "causal",
+        changedBelief: "The captured trace identifies the causal boundary.",
+        evidence: ["trace:accepted-candidate"],
+      },
+    },
+  ];
+  const plan = compileDecisionPlan(snapshot, [
     decisionDiagnostic("finalization-blocked", { message: "Finalization only." }),
   ]);
   const summary = projectCompactDecisionPlan(plan);
+  const dashboard = projectDashboardDecisionPlan(plan);
 
   assert.equal(summary.kind, "decision-plan-projection");
   assert.equal(summary.capabilities.finalize, "blocked");
@@ -74,6 +92,12 @@ test("plan summary preserves capability, disposition, and learning semantics", (
   assert.deepEqual(summary.loopDisposition, plan.loopDisposition);
   assert.deepEqual(summary.parentDisposition, plan.parentDisposition);
   assert.equal(summary.learning.kind, plan.learning.latest.kind);
+  assert.equal(
+    summary.learning.changedBelief,
+    "The captured trace identifies the causal boundary.",
+  );
+  assert.deepEqual(summary.learning.evidence, ["trace:accepted-candidate"]);
+  assert.deepEqual(dashboard.learning, summary.learning);
 });
 
 test("continuation projects loop and parent dispositions without reinterpreting prose", () => {

@@ -59,7 +59,7 @@ test("finalizer CLI validates aliases, booleans, unknown options, and debug stac
 
   const leadingDebug = await run(
     process.execPath,
-    [finalizer, "--debug", "missing.groups.json"],
+    [finalizer, "--debug", "plan", "--bogus"],
     pluginRoot,
     true,
   );
@@ -191,6 +191,7 @@ testWithTempRoot(
         "{ not valid json",
       ].join("\n") + "\n",
     );
+    const originalHead = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
 
     const output = path.join(root, "groups.json");
     const result = await run(
@@ -200,11 +201,14 @@ testWithTempRoot(
       true,
     );
     assert.notEqual(result.code, 0);
-    assert.match(
-      `${result.stdout}\n${result.stderr}`,
-      /canonical precondition permits recovery only/i,
-    );
-    assert.match(`${result.stdout}\n${result.stderr}`, /not the typed recovery command/i);
+    const refusal = JSON.parse(result.stderr);
+    assert.equal(refusal.code, "coherent-snapshot-source-invalid");
+    assert.match(refusal.message, /Corrupt autoresearch\.jsonl at line 2/i);
     await assert.rejects(fsp.access(output));
+    assert.equal((await git(["rev-parse", "HEAD"], repo)).stdout.trim(), originalHead);
+    assert.equal(
+      (await git(["branch", "--list", "autoresearch-review/*"], repo)).stdout.trim(),
+      "",
+    );
   },
 );

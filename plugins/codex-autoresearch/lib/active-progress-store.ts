@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 
@@ -123,6 +124,125 @@ export async function deleteActiveProgressSnapshotIfSafe(workDir: string): Promi
     return;
   }
   await deleteActiveProgressSnapshot(workDir);
+}
+
+export async function recoverTerminationFailedProgress(workDir: string): Promise<UnknownRecord> {
+  const target = await resolveProgressPath(workDir);
+  let before: Buffer;
+  try {
+    before = await fsp.readFile(target);
+  } catch (error) {
+    if (isMissingPathError(error)) throw new Error("No retained process progress marker exists.");
+    throw error;
+  }
+  let snapshot: UnknownRecord;
+  try {
+    const parsed: unknown = JSON.parse(before.toString("utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+    snapshot = parsed as UnknownRecord;
+  } catch {
+    throw new Error("The retained process progress marker is not valid JSON evidence.");
+  }
+  if (snapshot.exitState !== "termination_failed" || snapshot.terminationFailed !== true) {
+    throw new Error("Process recovery requires a retained termination_failed marker.");
+  }
+  const termination =
+    snapshot.termination && typeof snapshot.termination === "object"
+      ? (snapshot.termination as UnknownRecord)
+      : null;
+  const pids = uniqueProcessIds([
+    termination?.pid,
+    ...(Array.isArray(termination?.trackedPids) ? termination.trackedPids : []),
+    ...(Array.isArray(termination?.remainingPids) ? termination.remainingPids : []),
+  ]);
+  if (pids.length === 0) {
+    if (isFailedBeforeSpawnProof(snapshot, termination)) {
+      const after = await fsp.readFile(target);
+      if (!before.equals(after)) {
+        throw new Error("The retained process progress marker changed during recovery; retry.");
+      }
+      await fsp.rm(target);
+      return {
+        ok: true,
+        workDir,
+        recovered: true,
+        markerPath: target,
+        provenDeadPids: [],
+        proof: {
+          kind: "no-process-started",
+          markerGeneration: snapshot.generation ?? null,
+          packetId: snapshot.packetId ?? null,
+          spawnState: "failed-before-spawn",
+          spawnErrorDigest: createHash("sha256")
+            .update(String(snapshot.spawnError), "utf8")
+            .digest("hex"),
+        },
+      };
+    }
+    throw new Error("Process recovery cannot prove a dead tree without recorded process IDs.");
+  }
+  const livePids = pids.filter(processIdMayBeLive);
+  if (livePids.length > 0) {
+    throw new Error(`The recorded process tree is still live or unproven: ${livePids.join(", ")}.`);
+  }
+  const after = await fsp.readFile(target);
+  if (!before.equals(after)) {
+    throw new Error("The retained process progress marker changed during recovery; retry.");
+  }
+  await fsp.rm(target);
+  return {
+    ok: true,
+    workDir,
+    recovered: true,
+    markerPath: target,
+    provenDeadPids: pids,
+    proof: {
+      kind: "recorded-process-tree-absent",
+      markerGeneration: snapshot.generation ?? null,
+      packetId: snapshot.packetId ?? null,
+    },
+  };
+}
+
+function isFailedBeforeSpawnProof(
+  snapshot: UnknownRecord,
+  termination: UnknownRecord | null,
+): boolean {
+  return Boolean(
+    snapshot.spawnState === "failed-before-spawn" &&
+    typeof snapshot.spawnError === "string" &&
+    snapshot.spawnError.trim() &&
+    termination &&
+    termination.attempted === false &&
+    termination.escalated === false &&
+    termination.method === "none" &&
+    termination.pid === null &&
+    termination.proven === false &&
+    termination.reason === "missing_root_pid" &&
+    Array.isArray(termination.trackedPids) &&
+    termination.trackedPids.length === 0 &&
+    Array.isArray(termination.remainingPids) &&
+    termination.remainingPids.length === 0,
+  );
+}
+
+function uniqueProcessIds(values: unknown[]): number[] {
+  return [
+    ...new Set(
+      values
+        .map(Number)
+        .filter((value) => Number.isSafeInteger(value) && value > 0 && value <= 2_147_483_647),
+    ),
+  ].sort((left, right) => left - right);
+}
+
+function processIdMayBeLive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(error && typeof error === "object" && (error as { code?: unknown }).code === "ESRCH");
+  }
 }
 
 function isMissingPathError(error: unknown): boolean {

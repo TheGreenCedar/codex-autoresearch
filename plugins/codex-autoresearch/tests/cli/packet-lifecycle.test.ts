@@ -15,7 +15,7 @@ import {
 async function setupFixture(dir: string, options: Parameters<typeof setupSessionFixture>[1] = {}) {
   const result = await setupSessionFixture(dir, {
     benchmarkCommand: `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`,
-    completeContract: true,
+    acceptedContract: true,
     packetBudget: 100,
     ...options,
   });
@@ -28,7 +28,7 @@ async function setupFixture(dir: string, options: Parameters<typeof setupSession
       {
         ...existingConfig,
         checksAuthoritative: true,
-        commitPaths: ["src"],
+        commitPaths: [options.scope ?? "src"],
         maxIterations: options.packetBudget ?? 100,
         noiseModel: { kind: "deterministic" },
       },
@@ -198,18 +198,16 @@ test("next refuses to overwrite an unlogged fresh last-run packet", async () => 
     assert.equal(before.decision.metric, 3);
     assert.equal(await readFile(sideEffectFile, "utf8"), "ran\n");
     const second = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
-    assert.equal(second.code, 0, second.stderr);
-    const refused = JSON.parse(second.stdout);
-    assert.equal(refused.ok, false);
-    assert.equal(refused.refused, true);
-    assert.equal(refused.code, "next_blocked_by_decision_plan");
-    assert.equal(refused.blockingAction.kind, "log-decision");
-    assert.equal(refused.resultingDecision.action.kind, "log-decision");
-    assert.equal(refused.resultingDecision.capabilities["run-packet"], "blocked");
-    assert.equal(refused.resultingDecision.loopDisposition.canRunPacket, false);
-    assert.equal(refused.run, null);
-    assert.equal(refused.decision, null);
-    assert.match(refused.commandHint, /\blog\b/);
+    assert.notEqual(second.code, 0);
+    const refused = JSON.parse(second.stderr);
+    assert.equal(refused.code, "mutation-precondition-blocked");
+    assert.equal(refused.preconditionDecision.action.kind, "log-decision");
+    assert.equal(refused.preconditionDecision.capabilities["run-packet"], "blocked");
+    assert.equal(refused.preconditionDecision.loopDisposition.canRunPacket, false);
+    assert.ok(
+      refused.preconditionDecision.requiredEvidence.diagnosticCodes.includes("pending-packet"),
+    );
+    assert.equal(refused.mutation, undefined);
 
     const after = JSON.parse(await readFile(packetPath, "utf8"));
     assert.equal(after.decision.metric, 3);
@@ -335,18 +333,20 @@ test("stale last-run packets are rejected when scoped git evidence changes", asy
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
     await git(dir, ["config", "user.name", "Codex Test"]);
-    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
-    await git(dir, ["add", "tracked.txt"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "src/tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "git stale packet" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
+    await acceptCurrentContract(dir);
 
     const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
 
-    await writeFile(path.join(dir, "tracked.txt"), "changed after next\n", "utf8");
+    await writeFile(path.join(dir, "src", "tracked.txt"), "changed after next\n", "utf8");
     const stale = await runCli([
       "log",
       "--cwd",
@@ -367,19 +367,21 @@ test("stale last-run packets are rejected when dirty file contents change withou
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
     await git(dir, ["config", "user.name", "Codex Test"]);
-    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
-    await git(dir, ["add", "tracked.txt"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "src/tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "dirty content packet" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
-    await writeFile(path.join(dir, "tracked.txt"), "dirty before packet\n", "utf8");
+    await acceptCurrentContract(dir);
+    await writeFile(path.join(dir, "src", "tracked.txt"), "dirty before packet\n", "utf8");
 
     const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
 
-    await writeFile(path.join(dir, "tracked.txt"), "dirty after packet\n", "utf8");
+    await writeFile(path.join(dir, "src", "tracked.txt"), "dirty after packet\n", "utf8");
     const stale = await runCli([
       "log",
       "--cwd",
@@ -392,7 +394,7 @@ test("stale last-run packets are rejected when dirty file contents change withou
       "--allow-add-all",
     ]);
     assert.notEqual(stale.code, 0);
-    assert.match(stale.stderr, /dirty file contents changed/);
+    assertStalePacketCapabilityRefusal(stale.stderr);
   });
 });
 
@@ -409,6 +411,7 @@ test("dirty fingerprints preserve hostile Git filenames", async () => {
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
     await writeFile(path.join(dir, file), "dirty before packet\n", "utf8");
+    await acceptCurrentContract(dir);
 
     const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
@@ -429,7 +432,7 @@ test("dirty fingerprints preserve hostile Git filenames", async () => {
       "--allow-add-all",
     ]);
     assert.notEqual(stale.code, 0);
-    assert.match(stale.stderr, /dirty file contents changed/);
+    assertStalePacketCapabilityRefusal(stale.stderr);
   });
 });
 
@@ -438,20 +441,22 @@ test("stale last-run packets are rejected when untracked directory contents chan
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
     await git(dir, ["config", "user.name", "Codex Test"]);
-    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
-    await git(dir, ["add", "tracked.txt"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "src/tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "untracked dir packet" });
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
-    await mkdir(path.join(dir, "scratch"), { recursive: true });
-    await writeFile(path.join(dir, "scratch", "thing.txt"), "before packet\n", "utf8");
+    await acceptCurrentContract(dir);
+    await mkdir(path.join(dir, "src", "scratch"), { recursive: true });
+    await writeFile(path.join(dir, "src", "scratch", "thing.txt"), "before packet\n", "utf8");
 
     const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
 
-    await writeFile(path.join(dir, "scratch", "thing.txt"), "after packet\n", "utf8");
+    await writeFile(path.join(dir, "src", "scratch", "thing.txt"), "after packet\n", "utf8");
     const stale = await runCli([
       "log",
       "--cwd",
@@ -464,7 +469,7 @@ test("stale last-run packets are rejected when untracked directory contents chan
       "--allow-add-all",
     ]);
     assert.notEqual(stale.code, 0);
-    assert.match(stale.stderr, /dirty file contents changed|Git dirty state changed/);
+    assertStalePacketCapabilityRefusal(stale.stderr);
   });
 });
 
@@ -495,7 +500,7 @@ test("next refuses runs when dirty fingerprints would be truncated", async () =>
   });
 });
 
-test("next rejects entry-limited candidate authority even when the repository is clean", async () => {
+test("next rejects entry-limited authority when the candidate scope is clean", async () => {
   await withTempDir("large-clean-scoped-commit-path", async (dir) => {
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
@@ -513,7 +518,8 @@ test("next rejects entry-limited candidate authority even when the repository is
     assert.equal(configured.code, 0, configured.stderr);
     await git(dir, ["add", "--all"]);
     await git(dir, ["commit", "-m", "session config"]);
-    const status = await git(dir, ["status", "--short"]);
+    await acceptCurrentContract(dir);
+    const status = await git(dir, ["status", "--short", "--", "src"]);
     assert.equal(status, "");
 
     const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
@@ -539,7 +545,8 @@ test("next blocks when dirty fingerprint bytes exceed the total budget", async (
     assert.equal(initialized.code, 0, initialized.stderr);
     await git(dir, ["add", "autoresearch.jsonl"]);
     await git(dir, ["commit", "-m", "session"]);
-    await writeFile(path.join(dir, "oversized.bin"), Buffer.alloc(16 * 1024 * 1024 + 1));
+    await acceptCurrentContract(dir);
+    await writeFile(path.join(dir, "src", "oversized.bin"), Buffer.alloc(16 * 1024 * 1024 + 1));
 
     const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(next.code, 0, next.stderr);
@@ -601,6 +608,12 @@ test("last-run freshness hashes execution policy and commit scope", async () => 
       "src",
     ]);
     assert.equal(configured.code, 0, configured.stderr);
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(statePayload.decisionPlanProjection.primaryBlockerCode, "stale-packet");
+    assert.equal(statePayload.decisionPlanProjection.action.kind, "replace-packet");
+    assert.equal(statePayload.decisionPlanProjection.capabilities["run-packet"], "recovery-only");
     const dashboard = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(dashboard.code, 0, dashboard.stderr);
     const dashboardPayload = JSON.parse(dashboard.stdout);
@@ -640,16 +653,18 @@ test("packet command tampering is stale in dashboard and next preflight", async 
     const dashboardPayload = JSON.parse(dashboard.stdout);
     assert.equal(dashboardPayload.viewModel.lastRun.freshness.fresh, false);
     assert.match(dashboardPayload.viewModel.lastRun.freshness.reason, /execution, checks, scope/);
-    assert.equal(dashboardPayload.viewModel.nextBestAction.kind, "log-decision");
+    assert.equal(dashboardPayload.viewModel.decisionPlanProjection.action.kind, "replace-packet");
+    assert.equal(dashboardPayload.viewModel.nextBestAction.kind, "replace-packet");
 
     const replacement = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(replacement.code, 0, replacement.stderr);
     const replacementPayload = JSON.parse(replacement.stdout);
-    assert.equal(replacementPayload.ok, false);
-    assert.equal(replacementPayload.run, null);
-    assert.equal(replacementPayload.code, "next_blocked_by_decision_plan");
+    assert.equal(replacementPayload.ok, true);
+    assert.equal(replacementPayload.run.command, acceptedCommand);
     assert.equal(replacementPayload.resultingDecision.action.kind, "log-decision");
     assert.equal(replacementPayload.resultingDecision.capabilities["run-packet"], "blocked");
+    const replacementPacket = JSON.parse(await readFile(packet.lastRunPath, "utf8"));
+    assert.equal(replacementPacket.run.command, acceptedCommand);
     assert.equal(acceptedCommand, packet.history.command);
   });
 });
@@ -711,8 +726,9 @@ test("owner-autonomous runs return continuation instead of handing control back"
     ]);
     assert.equal(log.code, 0, log.stderr);
     const payload = JSON.parse(log.stdout);
-    assert.equal(payload.resultingDecision.action.kind, "run-packet");
+    assert.equal(payload.resultingDecision.action.kind, "direct-work");
     assert.equal(payload.resultingDecision.capabilities["run-packet"], "allowed");
+    assert.equal(payload.resultingDecision.capabilities.finalize, "blocked");
     assert.equal(payload.resultingDecision.loopDisposition.shouldContinue, true);
     assert.equal(payload.resultingDecision.parentDisposition.mayAnswer, true);
   });
@@ -955,3 +971,23 @@ test("from-last errors name next and manual measure recovery commands", async ()
     assert.match(log.stderr, /--status measure/);
   });
 });
+
+function assertStalePacketCapabilityRefusal(stderr: string): void {
+  const refusal = JSON.parse(stderr);
+  assert.equal(refusal.code, "mutation-precondition-blocked");
+  assert.equal(refusal.preconditionDecision.capabilities["authorize-keep"], "blocked");
+  assert.ok(refusal.preconditionDecision.requiredEvidence.diagnosticCodes.includes("stale-packet"));
+  assert.equal(refusal.mutation, undefined);
+}
+
+async function acceptCurrentContract(dir: string): Promise<void> {
+  const accepted = await runCli([
+    "new-segment",
+    "--cwd",
+    dir,
+    "--reason",
+    "Accept the current packet fixture repository state",
+    "--yes",
+  ]);
+  assert.equal(accepted.code, 0, accepted.stderr);
+}

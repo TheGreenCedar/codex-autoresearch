@@ -1,16 +1,24 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-import type { DecisionDiagnostic, DecisionPlan } from "./decision-compiler.js";
+import type { DecisionPlan } from "./decision-compiler.js";
+import type { CoherentSessionSnapshot } from "./coherent-session-snapshot.js";
 import {
+  CanonicalSessionSourceError,
   loadCanonicalSessionDecision,
   type CanonicalSessionDecisionResult,
-  type SessionDecisionFacts,
+  type SessionDecisionFactCollection,
 } from "./session-decision.js";
 import { assertSessionMutationLockHeld } from "./session-mutation-lock.js";
+import {
+  decisionCapabilityForCommand,
+  recoveryDiagnosticsForCommand,
+  requiredDecisionDiagnosticsForCommand,
+} from "./command-table.js";
+import { COMMAND_MUTATION_RECEIPT_SCHEMA_VERSION } from "./decision-schema-versions.js";
+import { acceptedExperimentContractForMutation } from "./experiment-contract.js";
 
-export const COMMAND_MUTATION_RECEIPT_SCHEMA_VERSION = 1 as const;
-const COMMAND_DECISION_DIAGNOSTICS = Symbol("command-decision-diagnostics");
+export { COMMAND_MUTATION_RECEIPT_SCHEMA_VERSION } from "./decision-schema-versions.js";
 
 export interface CommandMutationReceipt {
   kind: "command-mutation-receipt";
@@ -22,8 +30,9 @@ export interface CommandMutationReceipt {
   completedAt: string;
   workDir: string;
   preconditionGenerationId: string;
-  resultingGenerationId: string;
-  generationChanged: boolean;
+  resultingCaptureStatus: "captured" | "unavailable";
+  resultingGenerationId: string | null;
+  generationChanged: boolean | null;
 }
 
 export interface CommandDecisionProtocolResult<T> {
@@ -37,45 +46,36 @@ export interface CommandDecisionMutationContext {
   sessionCwd: string;
   workDir: string;
   config: Record<string, unknown>;
+  snapshot: CoherentSessionSnapshot;
+  factCollection?: SessionDecisionFactCollection;
   preconditionDecision: DecisionPlan;
 }
 
 type DecisionLoader = (input: {
   requestedCwd: string;
   allowOutsideWorkdir?: boolean;
-  facts?: SessionDecisionFacts;
+  allowLedgerParseErrors?: boolean;
 }) => Promise<CanonicalSessionDecisionResult>;
 
-export function withCommandDecisionDiagnostics<T extends object>(
-  value: T,
-  diagnostics: readonly DecisionDiagnostic[],
-): T {
-  Object.defineProperty(value, COMMAND_DECISION_DIAGNOSTICS, {
-    configurable: false,
-    enumerable: false,
-    value: [...diagnostics],
-    writable: false,
-  });
-  return value;
-}
-
-export function commandDecisionDiagnosticsFrom(value: unknown): DecisionDiagnostic[] {
-  if (!value || typeof value !== "object") return [];
-  const record = value as Record<PropertyKey, unknown>;
-  const direct = record[COMMAND_DECISION_DIAGNOSTICS];
-  if (Array.isArray(direct)) return direct as DecisionDiagnostic[];
-  return commandDecisionDiagnosticsFrom(record.result);
+export interface ResultingCaptureDiagnostic {
+  code:
+    | "coherent-snapshot-source-invalid"
+    | "coherent-snapshot-unavailable"
+    | "session-route-changed";
+  message: string;
 }
 
 export class CommandDecisionProtocolError extends Error {
   readonly code:
     | "coherent-snapshot-unavailable"
+    | "coherent-snapshot-source-invalid"
     | "mutation-failed"
     | "mutation-precondition-blocked"
     | "session-route-changed";
   readonly preconditionDecision: DecisionPlan | null;
   readonly mutation: CommandMutationReceipt | null;
   readonly resultingDecision: DecisionPlan | null;
+  readonly resultingCaptureDiagnostic: ResultingCaptureDiagnostic | null;
 
   constructor({
     code,
@@ -84,6 +84,7 @@ export class CommandDecisionProtocolError extends Error {
     preconditionDecision = null,
     mutation = null,
     resultingDecision = null,
+    resultingCaptureDiagnostic = null,
   }: {
     code: CommandDecisionProtocolError["code"];
     message: string;
@@ -91,6 +92,7 @@ export class CommandDecisionProtocolError extends Error {
     preconditionDecision?: DecisionPlan | null;
     mutation?: CommandMutationReceipt | null;
     resultingDecision?: DecisionPlan | null;
+    resultingCaptureDiagnostic?: ResultingCaptureDiagnostic | null;
   }) {
     super(message, cause === undefined ? undefined : { cause });
     this.name = "CommandDecisionProtocolError";
@@ -98,7 +100,23 @@ export class CommandDecisionProtocolError extends Error {
     this.preconditionDecision = preconditionDecision;
     this.mutation = mutation;
     this.resultingDecision = resultingDecision;
+    this.resultingCaptureDiagnostic = resultingCaptureDiagnostic;
   }
+}
+
+export function commandDecisionProtocolFailureEnvelope(
+  error: CommandDecisionProtocolError,
+): Record<string, unknown> {
+  return {
+    code: error.code,
+    message: error.message,
+    ...(error.preconditionDecision ? { preconditionDecision: error.preconditionDecision } : {}),
+    ...(error.mutation ? { mutation: error.mutation } : {}),
+    ...(error.resultingDecision ? { resultingDecision: error.resultingDecision } : {}),
+    ...(error.resultingCaptureDiagnostic
+      ? { resultingCaptureDiagnostic: error.resultingCaptureDiagnostic }
+      : {}),
+  };
 }
 
 export async function runCommandDecisionProtocol<T>({
@@ -106,6 +124,7 @@ export async function runCommandDecisionProtocol<T>({
   requestedCwd,
   expectedWorkDir,
   allowOutsideWorkdir = false,
+  commandArgs = {},
   mutate,
   loadDecision = loadCanonicalSessionDecision,
 }: {
@@ -113,6 +132,7 @@ export async function runCommandDecisionProtocol<T>({
   requestedCwd: string;
   expectedWorkDir: string;
   allowOutsideWorkdir?: boolean;
+  commandArgs?: Readonly<Record<string, unknown>>;
   mutate: (context: CommandDecisionMutationContext) => Promise<T>;
   loadDecision?: DecisionLoader;
 }): Promise<CommandDecisionProtocolResult<T>> {
@@ -125,7 +145,9 @@ export async function runCommandDecisionProtocol<T>({
     loadDecision,
   });
   assertExpectedRoute(command, "precondition", expectedWorkDir, precondition.snapshot.workDir);
-  assertMutationCapability(command, precondition.plan);
+  assertMutationCapability(command, commandArgs, precondition.plan, precondition.snapshot);
+  await assertAcceptedContractCommandCompatibility(command, commandArgs, precondition);
+  await acceptCompleteLegacyContract(command, commandArgs, precondition);
 
   const startedAt = new Date().toISOString();
   const receiptId = randomUUID();
@@ -135,18 +157,19 @@ export async function runCommandDecisionProtocol<T>({
       sessionCwd: precondition.snapshot.sessionCwd,
       workDir: precondition.snapshot.workDir,
       config: precondition.snapshot.config,
+      snapshot: precondition.snapshot,
+      factCollection: precondition.factCollection,
       preconditionDecision: precondition.plan,
     });
   } catch (cause) {
-    const resulting = await loadRequiredDecision({
+    const resulting = await captureResultingDecision({
       command,
-      phase: "resulting",
       requestedCwd,
+      expectedWorkDir,
       allowOutsideWorkdir,
       loadDecision,
       preconditionDecision: precondition.plan,
     });
-    assertExpectedRoute(command, "resulting", expectedWorkDir, resulting.snapshot.workDir);
     const mutation = mutationReceipt({
       command,
       receiptId,
@@ -154,7 +177,7 @@ export async function runCommandDecisionProtocol<T>({
       startedAt,
       workDir: expectedWorkDir,
       preconditionDecision: precondition.plan,
-      resultingDecision: resulting.plan,
+      resultingDecision: resulting.ok ? resulting.loaded.plan : null,
     });
     throw new CommandDecisionProtocolError({
       code: "mutation-failed",
@@ -162,20 +185,37 @@ export async function runCommandDecisionProtocol<T>({
       cause,
       preconditionDecision: precondition.plan,
       mutation,
-      resultingDecision: resulting.plan,
+      resultingDecision: resulting.ok ? resulting.loaded.plan : null,
+      resultingCaptureDiagnostic: resulting.ok ? null : resulting.diagnostic,
     });
   }
 
-  const resulting = await loadRequiredDecision({
+  const resulting = await captureResultingDecision({
     command,
-    phase: "resulting",
     requestedCwd,
+    expectedWorkDir,
     allowOutsideWorkdir,
     loadDecision,
     preconditionDecision: precondition.plan,
-    diagnostics: commandDecisionDiagnosticsFrom(result),
   });
-  assertExpectedRoute(command, "resulting", expectedWorkDir, resulting.snapshot.workDir);
+  if (!resulting.ok) {
+    const mutation = mutationReceipt({
+      command,
+      receiptId,
+      status: "completed",
+      startedAt,
+      workDir: expectedWorkDir,
+      preconditionDecision: precondition.plan,
+      resultingDecision: null,
+    });
+    throw new CommandDecisionProtocolError({
+      code: resulting.diagnostic.code,
+      message: resulting.diagnostic.message,
+      preconditionDecision: precondition.plan,
+      mutation,
+      resultingCaptureDiagnostic: resulting.diagnostic,
+    });
+  }
   return {
     preconditionDecision: precondition.plan,
     mutation: mutationReceipt({
@@ -185,34 +225,147 @@ export async function runCommandDecisionProtocol<T>({
       startedAt,
       workDir: expectedWorkDir,
       preconditionDecision: precondition.plan,
-      resultingDecision: resulting.plan,
+      resultingDecision: resulting.loaded.plan,
     }),
     result,
-    resultingDecision: resulting.plan,
+    resultingDecision: resulting.loaded.plan,
   };
 }
 
-function assertMutationCapability(command: string, plan: DecisionPlan): void {
-  const status = plan.capabilities["mutate-session"];
-  if (status === "allowed") return;
-  const diagnosticCodes = plan.requiredEvidence.diagnosticCodes;
-  const allowedRecoveryCommands = new Set<string>();
-  if (
-    diagnosticCodes.includes("pending-log-transaction") ||
-    diagnosticCodes.includes("pending-log-transaction-inconsistent")
-  ) {
-    allowedRecoveryCommands.add("log");
+async function assertAcceptedContractCommandCompatibility(
+  command: string,
+  commandArgs: Readonly<Record<string, unknown>>,
+  precondition: Extract<CanonicalSessionDecisionResult, { ok: true }>,
+): Promise<void> {
+  if (command !== "next" || !precondition.snapshot.semanticFacts.contractDigest) return;
+  try {
+    await acceptedExperimentContractForMutation({
+      workDir: precondition.snapshot.workDir,
+      args: commandArgs,
+      config: precondition.snapshot.config,
+      entries: precondition.snapshot.records,
+      packet: precondition.snapshot.lastRunPacket,
+    });
+  } catch (cause) {
+    throw new CommandDecisionProtocolError({
+      code: "mutation-precondition-blocked",
+      message: cause instanceof Error ? cause.message : String(cause),
+      cause,
+      preconditionDecision: precondition.plan,
+    });
   }
-  if (diagnosticCodes.includes("ledger-integrity")) allowedRecoveryCommands.add("ledger-doctor");
-  if (status === "recovery-only" && allowedRecoveryCommands.has(command)) return;
+}
+
+async function acceptCompleteLegacyContract(
+  command: string,
+  commandArgs: Readonly<Record<string, unknown>>,
+  precondition: Extract<CanonicalSessionDecisionResult, { ok: true }>,
+): Promise<void> {
+  const capability = decisionCapabilityForCommand(command, commandArgs, {
+    config: precondition.snapshot.config,
+  });
+  if (capability === "transition-segment") return;
+  if (
+    !precondition.plan.requiredEvidence.diagnosticCodes.includes(
+      "legacy-contract-acceptance-required",
+    )
+  ) {
+    return;
+  }
+  await acceptedExperimentContractForMutation({
+    workDir: precondition.snapshot.workDir,
+    config: precondition.snapshot.config,
+    entries: precondition.snapshot.records,
+    packet: precondition.snapshot.lastRunPacket,
+  });
+}
+
+function assertMutationCapability(
+  command: string,
+  commandArgs: Readonly<Record<string, unknown>>,
+  plan: DecisionPlan,
+  snapshot: CoherentSessionSnapshot,
+): void {
+  const missingRequiredDiagnostic = requiredDecisionDiagnosticsForCommand(command).find(
+    (code) => !plan.requiredEvidence.diagnosticCodes.includes(code),
+  );
+  if (missingRequiredDiagnostic) {
+    throw new CommandDecisionProtocolError({
+      code: "mutation-precondition-blocked",
+      message: `${command} requires the canonical ${missingRequiredDiagnostic} recovery route.`,
+      preconditionDecision: plan,
+    });
+  }
+  const status = plan.capabilities["mutate-session"];
+  const recoveryCodes = new Set(recoveryDiagnosticsForCommand(command));
+  if (
+    status !== "allowed" &&
+    !recoveryCoversCapabilityRestrictions(command, plan, snapshot, "mutate-session", recoveryCodes)
+  ) {
+    throw new CommandDecisionProtocolError({
+      code: "mutation-precondition-blocked",
+      message:
+        status === "recovery-only"
+          ? `The canonical precondition permits recovery only; ${command} is not the typed recovery command.`
+          : `The canonical precondition blocks session mutation for ${command}.`,
+      preconditionDecision: plan,
+    });
+  }
+  const capability = decisionCapabilityForCommand(command, commandArgs, {
+    config: snapshot.config,
+  });
+  if (!capability) return;
+  const capabilityStatus = plan.capabilities[capability];
+  if (
+    capabilityStatus === "allowed" ||
+    recoveryCoversCapabilityRestrictions(command, plan, snapshot, capability, recoveryCodes)
+  ) {
+    return;
+  }
   throw new CommandDecisionProtocolError({
     code: "mutation-precondition-blocked",
     message:
-      status === "recovery-only"
-        ? `The canonical precondition permits recovery only; ${command} is not the typed recovery command.`
-        : `The canonical precondition blocks session mutation for ${command}.`,
+      `The canonical precondition sets ${capability}=${capabilityStatus}; ${command} is not authorized` +
+      ` (${plan.requiredEvidence.diagnosticCodes.join(", ") || "no diagnostic code"}).`,
     preconditionDecision: plan,
   });
+}
+
+function recoveryCoversCapabilityRestrictions(
+  command: string,
+  plan: DecisionPlan,
+  snapshot: CoherentSessionSnapshot,
+  capability: keyof DecisionPlan["capabilities"],
+  recoveryCodes: ReadonlySet<string>,
+): boolean {
+  const marker = `:${capability}:`;
+  const restrictingDiagnostics = plan.requiredEvidence.capabilityEffectCodes.flatMap((effect) => {
+    const markerIndex = effect.indexOf(marker);
+    return markerIndex < 0 ? [] : [effect.slice(0, markerIndex)];
+  });
+  return (
+    restrictingDiagnostics.length > 0 &&
+    restrictingDiagnostics.every(
+      (code) =>
+        recoveryCodes.has(code) || receiptOwnedLedgerRecoveryCovers(command, snapshot, code),
+    )
+  );
+}
+
+function receiptOwnedLedgerRecoveryCovers(
+  command: string,
+  snapshot: CoherentSessionSnapshot,
+  diagnosticCode: string,
+): boolean {
+  if (command !== "log" || diagnosticCode !== "ledger-integrity") return false;
+  const pending = snapshot.pendingTransaction;
+  const relation = pending?.ledgerRelation;
+  return Boolean(
+    pending?.consistent &&
+    pending.transactionId &&
+    relation?.kind === "receipt-owned-torn-suffix" &&
+    relation.transactionId === pending.transactionId,
+  );
 }
 
 async function loadRequiredDecision({
@@ -222,7 +375,6 @@ async function loadRequiredDecision({
   allowOutsideWorkdir,
   loadDecision,
   preconditionDecision = null,
-  diagnostics = [],
 }: {
   command: string;
   phase: "precondition" | "resulting";
@@ -230,19 +382,86 @@ async function loadRequiredDecision({
   allowOutsideWorkdir: boolean;
   loadDecision: DecisionLoader;
   preconditionDecision?: DecisionPlan | null;
-  diagnostics?: readonly DecisionDiagnostic[];
 }): Promise<Extract<CanonicalSessionDecisionResult, { ok: true }>> {
-  const loaded = await loadDecision({
-    requestedCwd,
-    allowOutsideWorkdir,
-    ...(diagnostics.length > 0 ? { facts: { diagnostics } } : {}),
-  });
+  let loaded: CanonicalSessionDecisionResult;
+  try {
+    loaded = await loadDecision({
+      requestedCwd,
+      allowOutsideWorkdir,
+      ...(command === "ledger-doctor" || command === "log" ? { allowLedgerParseErrors: true } : {}),
+    });
+  } catch (error) {
+    if (error instanceof CommandDecisionProtocolError) throw error;
+    if (!(error instanceof CanonicalSessionSourceError)) throw error;
+    throw new CommandDecisionProtocolError({
+      code: "coherent-snapshot-source-invalid",
+      message: `Cannot capture the ${phase} decision for ${command}: ${error.message}`,
+      cause: error,
+      preconditionDecision,
+    });
+  }
   if (loaded.ok) return loaded;
   throw new CommandDecisionProtocolError({
-    code: "coherent-snapshot-unavailable",
+    code: loaded.diagnostic.code,
     message: `Cannot capture the ${phase} decision for ${command}: ${loaded.diagnostic.message}`,
     preconditionDecision,
   });
+}
+
+async function captureResultingDecision({
+  command,
+  requestedCwd,
+  expectedWorkDir,
+  allowOutsideWorkdir,
+  loadDecision,
+  preconditionDecision,
+}: {
+  command: string;
+  requestedCwd: string;
+  expectedWorkDir: string;
+  allowOutsideWorkdir: boolean;
+  loadDecision: DecisionLoader;
+  preconditionDecision: DecisionPlan;
+}): Promise<
+  | { ok: true; loaded: Extract<CanonicalSessionDecisionResult, { ok: true }> }
+  | { ok: false; diagnostic: ResultingCaptureDiagnostic }
+> {
+  try {
+    const loaded = await loadRequiredDecision({
+      command,
+      phase: "resulting",
+      requestedCwd,
+      allowOutsideWorkdir,
+      loadDecision,
+      preconditionDecision,
+    });
+    assertExpectedRoute(command, "resulting", expectedWorkDir, loaded.snapshot.workDir);
+    return { ok: true, loaded };
+  } catch (error) {
+    if (
+      error instanceof CommandDecisionProtocolError &&
+      [
+        "coherent-snapshot-source-invalid",
+        "coherent-snapshot-unavailable",
+        "session-route-changed",
+      ].includes(error.code)
+    ) {
+      return {
+        ok: false,
+        diagnostic: {
+          code: error.code as ResultingCaptureDiagnostic["code"],
+          message: error.message,
+        },
+      };
+    }
+    return {
+      ok: false,
+      diagnostic: {
+        code: "coherent-snapshot-source-invalid",
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
 }
 
 function assertExpectedRoute(
@@ -275,7 +494,7 @@ function mutationReceipt({
   startedAt: string;
   workDir: string;
   preconditionDecision: DecisionPlan;
-  resultingDecision: DecisionPlan;
+  resultingDecision: DecisionPlan | null;
 }): CommandMutationReceipt {
   return {
     kind: "command-mutation-receipt",
@@ -287,7 +506,10 @@ function mutationReceipt({
     completedAt: new Date().toISOString(),
     workDir,
     preconditionGenerationId: preconditionDecision.generationId,
-    resultingGenerationId: resultingDecision.generationId,
-    generationChanged: preconditionDecision.generationId !== resultingDecision.generationId,
+    resultingCaptureStatus: resultingDecision ? "captured" : "unavailable",
+    resultingGenerationId: resultingDecision?.generationId || null,
+    generationChanged: resultingDecision
+      ? preconditionDecision.generationId !== resultingDecision.generationId
+      : null,
   };
 }

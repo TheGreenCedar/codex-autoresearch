@@ -1,3 +1,4 @@
+import path from "node:path";
 import { type UnknownRecord, unknownRecordOrNull as recordOrNull } from "../types/json.js";
 import {
   missingBenchmarkCommandMessage,
@@ -5,14 +6,21 @@ import {
   resolveBenchmarkCommandSource,
 } from "../benchmark/command-input.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../command-execution-boundary.js";
-import { withCommandDecisionDiagnostics } from "../command-decision-protocol.js";
 import { boolOption, numberOption } from "../cli/args.js";
-import { loadCoherentSessionSnapshot } from "../coherent-session-snapshot.js";
-import { decisionDiagnostic, type DecisionDiagnostic } from "../decision-compiler.js";
+import type { DecisionPlan } from "../decision-compiler.js";
 import { projectLoopContinuation } from "../decision-projection.js";
 import { decisionGuidance } from "../decision-guidance.js";
 import { buildDriftReport, runtimeProvenance } from "../drift-doctor.js";
 import { fixedControlBlockForCommand } from "../fixed-control.js";
+import {
+  acceptedExperimentContractForEvidenceValidation,
+  contractDerivationError,
+  deriveExperimentContract,
+  executionCommandText,
+  materializeExecutionEnvironment,
+  verifyExecutionSpecForWorkDir,
+  type ExecutionSpec,
+} from "../experiment-contract.js";
 import { insideGitRepo } from "../git-private-state.js";
 import { latestBenchmarkContractEntry } from "../operator-warnings.js";
 import { benchmarkContractDiagnostics } from "../packet-diagnostics.js";
@@ -20,32 +28,60 @@ import { PLUGIN_VERSION } from "../plugin-version.js";
 import { resolvePackageRoot } from "../runtime-paths.js";
 import { finiteMetric, listOption } from "../session-core.js";
 import { inspectRuntimeDrift } from "../runtime-drift-doctor.js";
-import { metricParseSource, parseMetricLines, runShell } from "../runner.js";
+import {
+  metricParseSource,
+  parseMetricLines,
+  runExecutableCommand,
+  runShell,
+  type ShellRunResult,
+} from "../runner.js";
 import { projectDoctorReadModel } from "../session-read-model.js";
-import { compileSessionDecision, finalizationDecisionDiagnostics } from "../session-decision.js";
+import {
+  loadCanonicalSessionDecision,
+  type SessionDecisionFactCollection,
+} from "../session-decision.js";
 import { redactCommandDisplay, redactEvidenceObject } from "../evidence-redaction.js";
 import { revalidateRecipeCatalogProvenance } from "../recipes.js";
 import { buildRunProgress } from "./run.js";
 import { publicState } from "./state.js";
+import { acceptedSessionDecisionContext } from "../cli/workdir-context.js";
 
 type CommandRecord = UnknownRecord;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 
 export async function doctorSession(args: CommandRecord): Promise<CommandRecord> {
   const requestedCwd = String(args.working_dir || args.cwd || "");
-  const loaded = await loadCoherentSessionSnapshot({
-    requestedCwd,
-    allowOutsideWorkdir: boolOption(args.allowOutsideWorkdir ?? args.allow_outside_workdir, false),
-  });
-  if (!loaded.ok) {
-    return {
-      ok: false,
-      code: loaded.diagnostic.code,
-      diagnostic: loaded.diagnostic,
-      attempts: loaded.attempts,
-    };
+  const acceptedDecision = acceptedSessionDecisionContext();
+  let snapshot;
+  let canonicalPlan: DecisionPlan;
+  let decisionFacts: SessionDecisionFactCollection;
+  if (acceptedDecision) {
+    snapshot = acceptedDecision.snapshot;
+    canonicalPlan = acceptedDecision.plan;
+    decisionFacts = acceptedDecision.facts;
+  } else {
+    const loaded = await loadCanonicalSessionDecision({
+      requestedCwd,
+      allowOutsideWorkdir: boolOption(
+        args.allowOutsideWorkdir ?? args.allow_outside_workdir,
+        false,
+      ),
+    });
+    if (!loaded.ok) {
+      return {
+        ok: false,
+        code: loaded.diagnostic.code,
+        diagnostic: loaded.diagnostic,
+        attempts: loaded.attempts,
+      };
+    }
+    if (!loaded.factCollection) {
+      throw new Error("Canonical session fact collection is missing from the accepted snapshot.");
+    }
+    snapshot = loaded.snapshot;
+    canonicalPlan = loaded.plan;
+    decisionFacts = loaded.factCollection;
   }
-  const snapshot = loaded.snapshot;
   const { sessionCwd, workDir, config } = snapshot;
   const jsonFull = boolOption(args.jsonFull ?? args.json_full ?? args.full, false);
   const state: CommandRecord = await publicState({
@@ -53,6 +89,8 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
     compact: false,
     jsonFull: true,
     coherentSnapshot: snapshot,
+    canonicalDecisionPlan: canonicalPlan,
+    canonicalDecisionFacts: decisionFacts,
   });
   const stateConfig = recordOrEmpty(state.config);
   const stateMemory = recordOrEmpty(state.memory);
@@ -120,14 +158,43 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
   let benchmarkCommandHint = "";
   let benchmarkCommandSource: Awaited<ReturnType<typeof resolveBenchmarkCommandSource>> | null =
     null;
+  let acceptedEvaluatorExecution: ExecutionSpec | null = null;
+  let benchmarkAuthorityIssue = "";
   try {
     benchmarkCommandSource = await resolveBenchmarkCommandSource(args, workDir, {
       fallbackToDefault: true,
       config,
     });
     benchmarkCommandHint = String(benchmarkCommandSource.command || "");
+    const acceptedContract = acceptedExperimentContractForEvidenceValidation(
+      workDir,
+      snapshot.records,
+    );
+    if (acceptedContract) {
+      acceptedEvaluatorExecution = acceptedContract.evaluator.execution;
+      benchmarkCommandHint = executionCommandText(acceptedEvaluatorExecution.command);
+      if (doctorHasExecutionOverride(args, benchmarkCommandSource.source)) {
+        const derivation = await deriveExperimentContract({
+          workDir,
+          args,
+          config,
+          entries: snapshot.records,
+          packet: snapshot.lastRunPacket,
+        });
+        if (
+          derivation.status !== "accepted" ||
+          derivation.contract.contractDigest !== acceptedContract.contractDigest
+        ) {
+          benchmarkAuthorityIssue =
+            derivation.status === "invalid"
+              ? contractDerivationError(derivation).message
+              : "The requested doctor evaluator does not match the accepted experiment contract. Start a new segment to change evaluator authority.";
+        }
+      }
+    }
   } catch (error: unknown) {
-    pushUniqueMessage(issues, errorMessage(error));
+    benchmarkAuthorityIssue = errorMessage(error);
+    pushUniqueMessage(issues, benchmarkAuthorityIssue);
   }
   warnings.push(...drift.warnings);
   const guidance = await decisionGuidance({
@@ -171,8 +238,13 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
         requireCommand: false,
         config,
       }));
-    benchmark.command = benchmarkCommandSource.command;
-    if (!benchmark.command) {
+    benchmark.command = acceptedEvaluatorExecution
+      ? executionCommandText(acceptedEvaluatorExecution.command)
+      : benchmarkCommandSource.command;
+    if (benchmarkAuthorityIssue) {
+      benchmark.metricError = benchmarkAuthorityIssue;
+      pushUniqueMessage(issues, benchmarkAuthorityIssue);
+    } else if (!benchmark.command) {
       benchmark.metricError =
         benchmarkCommandSource.missingReason || missingBenchmarkCommandMessage();
       issues.push(String(benchmark.metricError));
@@ -183,58 +255,74 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
         benchmark.metricError = fixedControlBlock.issue;
         issues.push(String(fixedControlBlock.issue));
       } else {
-        const latestContract = recordOrNull(
-          latestBenchmarkContractEntry(workDir, state)?.benchmarkContract,
-        );
-        const explicitPacketEnvMode = args.packet_env_mode != null || args.packetEnvMode != null;
-        const doctorPacketEnvMode = explicitPacketEnvMode
-          ? packetEnvModeFromArgs(args)
-          : latestContract && Object.hasOwn(latestContract, "packetEnvMode")
-            ? packetEnvModeFromArgs({ packetEnvMode: latestContract.packetEnvMode })
-            : "minimal";
-        benchmark.packetEnvMode = doctorPacketEnvMode;
-        const run = await runShell(
-          String(benchmark.command || ""),
-          workDir,
-          numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60),
-          {
-            envMode: doctorPacketEnvMode,
-            retainMetricNames: [primaryMetricName],
-          },
-        );
-        benchmark.exitCode = run.exitCode;
-        benchmark.timedOut = run.timedOut;
-        benchmark.termination = run.termination;
-        benchmark.terminationFailed = run.terminationFailed;
-        const parsedMetrics = parseMetricLines(metricParseSource(run));
-        benchmark.parsedMetrics = parsedMetrics;
-        benchmark.emitsPrimary = finiteMetric(parsedMetrics[primaryMetricName]) != null;
-        benchmark.progress = buildRunProgress({
-          benchmark: { ...run },
-          checks: null,
-          checksCommand: null,
-          passed: run.exitCode === 0 && !run.timedOut && benchmark.emitsPrimary === true,
-        });
-        if (run.exitCode !== 0 || run.timedOut) {
-          issues.push(
-            `Benchmark command failed during doctor check: exit ${run.exitCode ?? "none"}${run.timedOut ? " (timed out)" : ""}.`,
+        const acceptedRun = acceptedEvaluatorExecution
+          ? await runAcceptedDoctorEvaluator({
+              workDir,
+              execution: acceptedEvaluatorExecution,
+              primaryMetricName,
+            })
+          : null;
+        if (acceptedRun?.issue) {
+          benchmark.metricError = acceptedRun.issue;
+          pushUniqueMessage(issues, acceptedRun.issue);
+        } else {
+          const latestContract = recordOrNull(
+            latestBenchmarkContractEntry(workDir, state)?.benchmarkContract,
           );
-          if (run.terminationFailed) {
-            warnings.push(
-              "Process-tree termination could not be proven; verify the reported PID and descendants before another command.",
+          const explicitPacketEnvMode = args.packet_env_mode != null || args.packetEnvMode != null;
+          const doctorPacketEnvMode = acceptedEvaluatorExecution
+            ? acceptedEvaluatorExecution.environment.inheritance
+            : explicitPacketEnvMode
+              ? packetEnvModeFromArgs(args)
+              : latestContract && Object.hasOwn(latestContract, "packetEnvMode")
+                ? packetEnvModeFromArgs({ packetEnvMode: latestContract.packetEnvMode })
+                : "minimal";
+          benchmark.packetEnvMode = doctorPacketEnvMode;
+          const run =
+            acceptedRun?.run ||
+            (await runShell(
+              String(benchmark.command || ""),
+              workDir,
+              numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60),
+              {
+                envMode: doctorPacketEnvMode,
+                retainMetricNames: [primaryMetricName],
+              },
+            ));
+          benchmark.exitCode = run.exitCode;
+          benchmark.timedOut = run.timedOut;
+          benchmark.termination = run.termination;
+          benchmark.terminationFailed = run.terminationFailed;
+          const parsedMetrics = parseMetricLines(metricParseSource(run));
+          benchmark.parsedMetrics = parsedMetrics;
+          benchmark.emitsPrimary = finiteMetric(parsedMetrics[primaryMetricName]) != null;
+          benchmark.progress = buildRunProgress({
+            benchmark: { ...run },
+            checks: null,
+            checksCommand: null,
+            passed: run.exitCode === 0 && !run.timedOut && benchmark.emitsPrimary === true,
+          });
+          if (run.exitCode !== 0 || run.timedOut) {
+            issues.push(
+              `Benchmark command failed during doctor check: exit ${run.exitCode ?? "none"}${run.timedOut ? " (timed out)" : ""}.`,
             );
+            if (run.terminationFailed) {
+              warnings.push(
+                "Process-tree termination could not be proven; verify the reported PID and descendants before another command.",
+              );
+            }
+          } else if (!benchmark.emitsPrimary) {
+            benchmark.metricError = `Benchmark did not emit primary metric METRIC ${primaryMetricName}=<number>.`;
+            issues.push(String(benchmark.metricError));
           }
-        } else if (!benchmark.emitsPrimary) {
-          benchmark.metricError = `Benchmark did not emit primary metric METRIC ${primaryMetricName}=<number>.`;
-          issues.push(String(benchmark.metricError));
+          const driftWarning = benchmarkDriftWarning({
+            currentMetric: parsedMetrics[primaryMetricName],
+            bestMetric: state.best,
+            direction: stateConfig.bestDirection,
+            metricName: primaryMetricName,
+          });
+          if (driftWarning) warnings.push(driftWarning);
         }
-        const driftWarning = benchmarkDriftWarning({
-          currentMetric: parsedMetrics[primaryMetricName],
-          bestMetric: state.best,
-          direction: stateConfig.bestDirection,
-          metricName: primaryMetricName,
-        });
-        if (driftWarning) warnings.push(driftWarning);
       }
     }
   }
@@ -254,22 +342,7 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
   const benchmarkContractChanged = warningDetails.some(
     (detail) => detail.code === "benchmark_contract_changed",
   );
-  const commandDiagnostics = doctorDecisionDiagnostics({
-    benchmark,
-    issues,
-    runtimeAuthority,
-    scaffoldHealth,
-    sourceCleanliness,
-    warningDetails,
-    suppressEvaluatorDrift:
-      typeof args.acceptedContractDigest === "string" &&
-      args.acceptedContractDigest === snapshot.semanticFacts.contractDigest,
-  });
-  const finalizationFacts = { finalization: recordOrNull(state.finalizationPressure) };
-  const decisionPlan = compileSessionDecision(snapshot, {
-    ...finalizationFacts,
-    diagnostics: commandDiagnostics,
-  });
+  const decisionPlan = canonicalPlan;
   const nextAction = decisionPlan.action.reason;
   const publicBenchmark = {
     ...benchmark,
@@ -313,10 +386,64 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
     continuation: projectLoopContinuation(decisionPlan),
   };
   if (boolOption(args.explain, false)) result.explanation = doctorExplanation(result);
-  return withCommandDecisionDiagnostics(projectDoctorReadModel(result, { full: jsonFull }), [
-    ...finalizationDecisionDiagnostics(finalizationFacts),
-    ...commandDiagnostics,
-  ]);
+  return projectDoctorReadModel(result, { full: jsonFull });
+}
+
+function doctorHasExecutionOverride(args: CommandRecord, commandSource: string): boolean {
+  if (["command", "command-file", "separator"].includes(commandSource)) return true;
+  return [
+    "packet_env_mode",
+    "packetEnvMode",
+    "packet_env_file",
+    "packetEnvFile",
+    "env_file",
+    "envFile",
+    "timeout_seconds",
+    "timeoutSeconds",
+  ].some((key) => Object.hasOwn(args, key));
+}
+
+async function runAcceptedDoctorEvaluator({
+  workDir,
+  execution,
+  primaryMetricName,
+}: {
+  workDir: string;
+  execution: ExecutionSpec;
+  primaryMetricName: string;
+}): Promise<{ run: ShellRunResult | null; issue: string }> {
+  const verification = await verifyExecutionSpecForWorkDir(workDir, execution);
+  if (!verification.ok) {
+    return {
+      run: null,
+      issue: `The accepted evaluator execution specification is no longer valid: ${verification.conflicts
+        .map((conflict) => conflict.message)
+        .join(
+          " ",
+        )} Start a new segment after restoring or intentionally changing evaluator authority.`,
+    };
+  }
+  try {
+    const env = await materializeExecutionEnvironment(workDir, execution.environment);
+    return {
+      run: await runExecutableCommand(
+        execution.command,
+        path.resolve(workDir, execution.relativeWorkingDirectory),
+        execution.timeoutSeconds,
+        {
+          env,
+          envMode: execution.environment.inheritance,
+          retainMetricNames: [primaryMetricName],
+        },
+      ),
+      issue: "",
+    };
+  } catch (error: unknown) {
+    return {
+      run: null,
+      issue: `The accepted evaluator could not be materialized: ${errorMessage(error)} Start a new segment only if evaluator authority must change.`,
+    };
+  }
 }
 
 async function catalogTrustCheck(config: CommandRecord, sessionCwd: string) {
@@ -410,12 +537,6 @@ function pushUniqueMessage(target: string[], message: unknown) {
   if (text && !target.includes(text)) target.push(text);
 }
 
-function hasScaffoldBlocker(scaffoldHealth: unknown): boolean {
-  return arrayValue(recordOrEmpty(scaffoldHealth).checks).some(
-    (check) => recordOrEmpty(check).severity === "blocker",
-  );
-}
-
 function recordOrEmpty(value: unknown): UnknownRecord {
   return recordOrNull(value) || {};
 }
@@ -426,76 +547,4 @@ function arrayValue(value: unknown): unknown[] {
 
 function stringArray(value: unknown): string[] {
   return arrayValue(value).map(String);
-}
-
-function doctorDecisionDiagnostics({
-  benchmark,
-  issues,
-  runtimeAuthority,
-  scaffoldHealth,
-  sourceCleanliness,
-  warningDetails,
-  suppressEvaluatorDrift,
-}: {
-  benchmark: CommandRecord;
-  issues: string[];
-  runtimeAuthority: CommandRecord | null;
-  scaffoldHealth: CommandRecord;
-  sourceCleanliness: CommandRecord;
-  warningDetails: CommandRecord[];
-  suppressEvaluatorDrift: boolean;
-}): DecisionDiagnostic[] {
-  const diagnostics: DecisionDiagnostic[] = [];
-  if (runtimeAuthority?.blocking === true) {
-    diagnostics.push(
-      decisionDiagnostic("runtime-integrity", {
-        message: String(runtimeAuthority.blocker || "Runtime authority is not proven."),
-      }),
-    );
-  }
-  if (hasScaffoldBlocker(scaffoldHealth)) {
-    diagnostics.push(
-      decisionDiagnostic("scaffold-invalid", {
-        message: "The session scaffold has a blocking integrity issue.",
-      }),
-    );
-  }
-  if (sourceCleanliness.sourceDirty === true) {
-    diagnostics.push(
-      decisionDiagnostic("dirty-source", {
-        message: "Review the dirty source tree before authorizing packet evidence.",
-      }),
-    );
-  }
-  const drift = warningDetails.find((detail) => {
-    const code = String(detail.code || "");
-    return (
-      code === "benchmark_contract_changed" ||
-      (code.startsWith("protected_benchmark_") && detail.severity === "error")
-    );
-  });
-  if (drift && !suppressEvaluatorDrift) {
-    diagnostics.push(
-      decisionDiagnostic("evaluator-drift", {
-        message: String(drift.message || "The accepted evaluator has drifted."),
-      }),
-    );
-  }
-  if (
-    benchmark.checked === true &&
-    (benchmark.exitCode !== 0 || benchmark.timedOut === true || benchmark.emitsPrimary !== true)
-  ) {
-    diagnostics.push(
-      decisionDiagnostic("packet-diagnostic", {
-        message:
-          String(benchmark.metricError || "") ||
-          issues.find((issue) => /benchmark|metric/i.test(issue)) ||
-          "The doctor benchmark check did not produce accepted evaluator evidence.",
-        semantic: {
-          stage: benchmark.timedOut === true ? "timeout" : "evaluator-check",
-        },
-      }),
-    );
-  }
-  return diagnostics;
 }

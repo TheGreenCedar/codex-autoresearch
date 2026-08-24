@@ -74,6 +74,7 @@ import {
   withOutsideWorkdirAuthorization,
 } from "../lib/cli/workdir-context.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
+import { resolveInitialSessionMutationRoute } from "../lib/coherent-session-snapshot.js";
 import { buildDriftReport, runtimeProvenance } from "../lib/drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
 import {
@@ -87,13 +88,14 @@ import {
   createActiveProgressWriter,
   deleteActiveProgressSnapshotIfSafe,
   readActiveProgressSnapshot,
+  recoverTerminationFailedProgress,
 } from "../lib/active-progress-store.js";
 import { rekeyProcessLifecycleRecords } from "../lib/process-governor.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../lib/command-execution-boundary.js";
 import {
-  commandDecisionDiagnosticsFrom,
+  CommandDecisionProtocolError,
+  commandDecisionProtocolFailureEnvelope,
   runCommandDecisionProtocol,
-  withCommandDecisionDiagnostics,
   type CommandDecisionProtocolResult,
 } from "../lib/command-decision-protocol.js";
 import { defaultChecksCommand } from "../lib/check-policy.js";
@@ -3010,8 +3012,7 @@ async function researchStart(args: LooseObject) {
         baselineLogged: full.baselineLogged,
         stateStorage: compactStateStorage(setup.stateStorage),
         setup: {
-          slug: setup.slug,
-          qualityGap: setup.qualityGap,
+          qualityGap: compactResearchStartQualityGap(setup.qualityGap),
           checkpoint: setup.checkpoint,
         },
         benchmarkLint: {
@@ -3037,6 +3038,28 @@ async function researchStart(args: LooseObject) {
       };
     },
   );
+}
+
+function compactResearchStartQualityGap(value: unknown): LooseObject | null {
+  const qualityGap = compactRecord(value);
+  if (!qualityGap) return null;
+  const researchReadiness = compactRecord(qualityGap.researchReadiness) || {};
+  const roundDecision = compactRecord(qualityGap.roundDecision) || {};
+  return {
+    open: qualityGap.open ?? null,
+    closed: qualityGap.closed ?? 0,
+    total: qualityGap.total ?? 0,
+    researchReadiness: {
+      open: researchReadiness.open ?? 0,
+      closed: researchReadiness.closed ?? 0,
+      total: researchReadiness.total ?? 0,
+    },
+    roundDecision: {
+      accepted: roundDecision.accepted === true,
+      status: roundDecision.status || "unknown",
+      reason: roundDecision.reason || "",
+    },
+  };
 }
 
 function compactStateStorage(value: unknown): LooseObject | null {
@@ -3605,6 +3628,8 @@ export async function persistTerminationFailure(
       timedOut: true,
       terminationFailed: true,
       termination: evidence.termination,
+      spawnState: evidence.spawnState,
+      spawnError: evidence.spawnError,
       timeoutPhase: "unknown",
       completedAt: evidence.finishedAt || new Date().toISOString(),
     },
@@ -4378,6 +4403,8 @@ async function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     timedOut: Boolean(run.timedOut),
     termination: run.termination || null,
     terminationFailed: Boolean(run.terminationFailed),
+    spawnState: run.spawnState || "unknown",
+    spawnError: run.spawnError || null,
     processLifecycle: rekeyProcessLifecycleRecords(run.processLifecycle, packetId),
     stdoutTail: redactEvidenceText(run.tailOutput || run.progress?.latestOutputTail || "", {
       workDir: run.workDir,
@@ -4639,26 +4666,23 @@ async function nextExperimentWithActiveProgress(args: any, markProgressOwned: ()
   }
   if (preflightPlan.capabilities["run-packet"] === "blocked") {
     const resolvedDecision = projectResolvedDecision(preflightPlan);
-    return withCommandDecisionDiagnostics(
-      {
-        ok: false,
-        workDir: doctor.workDir,
-        refused: true,
-        code: "next_blocked_by_decision_plan",
-        doctor,
-        run: null as LooseObject | null,
-        decision: null as LooseObject | null,
-        blockingAction: resolvedDecision.canonicalNextAction,
-        decisionPlanProjection: projectCompactDecisionPlan(preflightPlan),
-        resolvedDecision,
-        nextAction: preflightPlan.action.reason,
-        clearingCondition:
-          "Resolve the capability diagnostic recorded by the canonical decision, then retry next.",
-        commandHint: preflightPlan.action.command || continuationCommands(doctor.workDir).state,
-        continuation: projectLoopContinuation(preflightPlan),
-      },
-      commandDecisionDiagnosticsFrom(doctor),
-    );
+    return {
+      ok: false,
+      workDir: doctor.workDir,
+      refused: true,
+      code: "next_blocked_by_decision_plan",
+      doctor,
+      run: null as LooseObject | null,
+      decision: null as LooseObject | null,
+      blockingAction: resolvedDecision.canonicalNextAction,
+      decisionPlanProjection: projectCompactDecisionPlan(preflightPlan),
+      resolvedDecision,
+      nextAction: preflightPlan.action.reason,
+      clearingCondition:
+        "Resolve the capability diagnostic recorded by the canonical decision, then retry next.",
+      commandHint: preflightPlan.action.command || continuationCommands(doctor.workDir).state,
+      continuation: projectLoopContinuation(preflightPlan),
+    };
   }
   const fixedControlBlock = fixedControlBlockForCommand(acceptedEvaluatorCommand, config, args);
   if (fixedControlBlock) throw fixedControlRerunError(fixedControlBlock);
@@ -4671,33 +4695,24 @@ async function nextExperimentWithActiveProgress(args: any, markProgressOwned: ()
       message:
         "Clean or narrow the dirty tree before running next; dirty file fingerprints were truncated before packet freshness could be proven.",
     });
-    const truncatedDecision = await loadCanonicalSessionDecision({
-      requestedCwd: String(args.working_dir || args.cwd || workDir),
-      facts: {
-        diagnostics: [dirtySourceDiagnostic],
-      },
-    });
-    const plan = truncatedDecision.ok ? truncatedDecision.plan : preflightPlan;
-    return withCommandDecisionDiagnostics(
-      {
-        ok: false,
-        workDir,
-        refused: true,
-        code: "next_blocked_by_truncated_fingerprints",
-        doctor,
-        run: null as LooseObject | null,
-        decision: null as LooseObject | null,
-        git: preRunGit,
-        decisionPlanProjection: projectCompactDecisionPlan(plan),
-        resolvedDecision: projectResolvedDecision(plan),
-        nextAction: plan.action.reason,
-        clearingCondition:
-          "Commit, stash, remove, or scope the dirty files so Autoresearch can fingerprint the packet inputs, then retry next.",
-        commandHint: continuationCommands(workDir).state,
-        continuation: projectLoopContinuation(plan),
-      },
-      [dirtySourceDiagnostic],
-    );
+    return {
+      ok: false,
+      workDir,
+      refused: true,
+      code: "next_blocked_by_truncated_fingerprints",
+      doctor,
+      run: null as LooseObject | null,
+      decision: null as LooseObject | null,
+      git: preRunGit,
+      diagnostics: [dirtySourceDiagnostic],
+      decisionPlanProjection: projectCompactDecisionPlan(preflightPlan),
+      resolvedDecision: projectResolvedDecision(preflightPlan),
+      nextAction: preflightPlan.action.reason,
+      clearingCondition:
+        "Commit, stash, remove, or scope the dirty files so Autoresearch can fingerprint the packet inputs, then retry next.",
+      commandHint: continuationCommands(workDir).state,
+      continuation: projectLoopContinuation(preflightPlan),
+    };
   }
   markProgressOwned();
   await writeNextPreflightProgressSnapshot(workDir, authorityArgs, config);
@@ -4785,10 +4800,7 @@ async function nextExperimentWithActiveProgress(args: any, markProgressOwned: ()
         : `Log this run as ${run.logHint.status} with rollback ASI before trying another change.`,
   };
   await writeLastRunPacket(run.workDir, packet);
-  return withCommandDecisionDiagnostics(
-    boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet,
-    commandDecisionDiagnosticsFrom(doctor),
-  );
+  return boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet;
 }
 
 function acceptedContractAuthorityArgs(
@@ -4828,16 +4840,13 @@ function acceptedContractDoctorView(doctor: LooseObject): LooseObject {
   const warningDetails = (Array.isArray(doctor.warningDetails) ? doctor.warningDetails : []).filter(
     (detail: LooseObject) => detail?.code !== "benchmark_contract_changed",
   );
-  return withCommandDecisionDiagnostics(
-    {
-      ...doctor,
-      ok: issues.length === 0,
-      issues,
-      warnings,
-      warningDetails,
-    },
-    commandDecisionDiagnosticsFrom(doctor),
-  );
+  return {
+    ...doctor,
+    ok: issues.length === 0,
+    issues,
+    warnings,
+    warningDetails,
+  };
 }
 
 async function writeNextPreflightProgressSnapshot(
@@ -4964,6 +4973,10 @@ export async function runAutoresearchCli(
     await executeAutoresearchCli(argv, writeStdout);
     return 0;
   } catch (error: any) {
+    if (error instanceof CommandDecisionProtocolError) {
+      writeStderr(JSON.stringify(commandDecisionProtocolFailureEnvelope(error)));
+      return 1;
+    }
     const message = error?.code
       ? `${error.code}: ${error.message || String(error)}`
       : error?.message || String(error);
@@ -5028,6 +5041,8 @@ async function executeAutoresearchCli(
       promoteGate,
       promptPlan,
       publicState,
+      recoverProcessIntegrity: async (args: LooseObject) =>
+        await recoverTerminationFailedProgress(resolveWorkDir(args.cwd).workDir),
       recordQualityGapDecision,
       recommendNext,
       sessionForensics,
@@ -5072,7 +5087,10 @@ async function executeAutoresearchCli(
       // This first resolution selects the existing lock only. The protocol re-captures the
       // routing config from requestedCwd while holding that lock and rejects any drift before
       // the handler can mutate the session.
-      const resolution = resolveWorkDir(requestedCwd);
+      const resolution = await resolveInitialSessionMutationRoute({
+        requestedCwd: String(requestedCwd || process.cwd()),
+        allowOutsideWorkdir: boolOption(args.allowOutsideWorkdir, false),
+      });
       const lock = await sessionMutationLockLocation(resolution.workDir);
       const protocol = await withSessionMutationLock(
         lock.root,
@@ -5080,6 +5098,7 @@ async function executeAutoresearchCli(
         async () => {
           return await runCommandDecisionProtocol({
             command,
+            commandArgs: args,
             requestedCwd: String(requestedCwd || process.cwd()),
             expectedWorkDir: resolution.workDir,
             allowOutsideWorkdir: boolOption(args.allowOutsideWorkdir, false),
@@ -5092,6 +5111,9 @@ async function executeAutoresearchCli(
                   sessionCwd: accepted.sessionCwd,
                   workDir: accepted.workDir,
                   config: accepted.config,
+                  coherentSnapshot: accepted.snapshot,
+                  canonicalDecisionPlan: accepted.preconditionDecision,
+                  canonicalDecisionFacts: accepted.factCollection,
                   sessionPaths: resolveSessionPaths({
                     sessionCwd: accepted.sessionCwd,
                     workDir: accepted.workDir,
@@ -5108,6 +5130,7 @@ async function executeAutoresearchCli(
     } else {
       outcome = await execute();
     }
+    assertNoCanonicalReadFailure(outcome.result);
     if (outcome.text != null) {
       writeStdout(outcome.text);
       return;
@@ -5115,6 +5138,28 @@ async function executeAutoresearchCli(
     writeStdout(JSON.stringify(redactCliResponseForOutput(outcome.result), null, 2));
     if (outcome.keepAlive) return await new Promise(() => {});
   });
+}
+
+function assertNoCanonicalReadFailure(result: unknown): void {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return;
+  const failure = result as LooseObject;
+  if (
+    failure.ok !== false ||
+    !["coherent-snapshot-source-invalid", "coherent-snapshot-unavailable"].includes(
+      String(failure.code || ""),
+    )
+  ) {
+    return;
+  }
+  const diagnostic =
+    failure.diagnostic &&
+    typeof failure.diagnostic === "object" &&
+    !Array.isArray(failure.diagnostic)
+      ? (failure.diagnostic as LooseObject)
+      : {};
+  const error = new Error(String(diagnostic.message || failure.message || failure.code));
+  Object.assign(error, { code: failure.code });
+  throw error;
 }
 
 function attachCommandDecisionProtocol(

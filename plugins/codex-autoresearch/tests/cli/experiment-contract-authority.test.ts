@@ -18,12 +18,6 @@ async function setupKeepPolicyFixture(
 ) {
   await mkdir(path.join(dir, "src"), { recursive: true });
   await mkdir(path.join(dir, "contract"), { recursive: true });
-  await setupFixture(dir, {
-    name: "mechanical keep policy",
-    goal: "Only keep contract-qualified improvements.",
-    metricName: "score",
-    direction: "higher",
-  });
   await writeFile(
     path.join(dir, "contract", "evaluator.mjs"),
     `console.log("METRIC score=${input.candidate}");\n`,
@@ -31,14 +25,28 @@ async function setupKeepPolicyFixture(
   await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n");
   const evaluator = `${quoteForShell(process.execPath)} contract/evaluator.mjs`;
   const checks = `${quoteForShell(process.execPath)} contract/checks.mjs`;
+  const setup = await setupFixture(dir, {
+    name: "mechanical keep policy",
+    goal: "Only keep contract-qualified improvements.",
+    metricName: "score",
+    direction: "higher",
+    completeContract: true,
+    benchmarkCommand: evaluator,
+    checksCommand: checks,
+    packetBudget: 8,
+    scope: "src",
+  });
+  assert.equal(setup.code, 0, setup.stderr);
+  const configPath = path.join(dir, "autoresearch.config.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
   await writeFile(
-    path.join(dir, "autoresearch.config.json"),
+    configPath,
     `${JSON.stringify(
       {
-        benchmarkCommand: evaluator,
+        ...config,
         checksAuthoritative: !input.supplementalChecks,
-        checksCommand: checks,
         commitPaths: ["src"],
+        editableScope: ["src"],
         maxIterations: 8,
         protectedBenchmarkPaths: ["contract/evaluator.mjs"],
         ...(!input.supplementalChecks ? { checkImplementationPaths: ["contract/checks.mjs"] } : {}),
@@ -48,6 +56,15 @@ async function setupKeepPolicyFixture(
       2,
     )}\n`,
   );
+  const accepted = await runCli([
+    "new-segment",
+    "--cwd",
+    dir,
+    "--reason",
+    "Accept the mechanical keep-policy fixture contract",
+    "--yes",
+  ]);
+  assert.equal(accepted.code, 0, accepted.stderr);
   const baseline = await runCli([
     "log",
     "--cwd",
@@ -292,16 +309,22 @@ test("next executes an accepted separator command as argv without shell expansio
       )}\n`,
     );
     const literal = "$HOME; $(printf injected)";
-    const next = await runCli([
-      "next",
+    const accepted = await runCli([
+      "new-segment",
       "--cwd",
       dir,
+      "--reason",
+      "Accept argv evaluator authority",
+      "--yes",
       "--",
       process.execPath,
       "-e",
       "require('node:fs').writeFileSync('argument.txt', process.argv[1]); console.log('METRIC score=1')",
       literal,
     ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
+
+    const next = await runCli(["next", "--cwd", dir]);
 
     assert.equal(next.code, 0, next.stderr);
     assert.equal(await readFile(path.join(dir, "argument.txt"), "utf8"), literal);
@@ -454,7 +477,7 @@ test("next does not reselect an evaluator after contract acceptance", async () =
       metricName: "score",
       direction: "higher",
     });
-    const evaluator = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')"`;
+    const evaluator = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync('accepted-ran.txt','yes'); console.log('METRIC score=1')"`;
     const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
     const configPath = path.join(dir, "autoresearch.config.json");
     await writeFile(
@@ -492,9 +515,8 @@ test("next does not reselect an evaluator after contract acceptance", async () =
 
     const next = await runCli(["next", "--cwd", dir]);
     assert.equal(next.code, 0, next.stderr);
-    const payload = JSON.parse(next.stdout);
-    assert.ok(payload.run, JSON.stringify(payload, null, 2));
-    assert.equal(payload.run.executionAuthority, "accepted-contract");
+    assert.equal(JSON.parse(next.stdout).run.parsedPrimary, 1);
+    assert.equal(await readFile(path.join(dir, "accepted-ran.txt"), "utf8"), "yes");
   });
 });
 
@@ -536,6 +558,50 @@ test("the first legacy next mutation appends one acceptance event without a segm
     assert.equal(acceptanceEvents[0].source, "legacy-derivation");
     assert.equal(acceptanceEvents[0].segment, 0);
     assert.match(acceptanceEvents[0].eventId, /^experiment-contract-accepted:0:[a-f0-9]{64}$/);
+    assert.equal(entries.filter((entry) => entry.type === "config").length, 1);
+  });
+});
+
+test("the first complete legacy config mutation appends one acceptance event", async () => {
+  await withTempDir("experiment-contract-config-migration", async (dir) => {
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await setupFixture(dir, {
+      name: "legacy config migration",
+      goal: "Accept legacy authority before the first configuration mutation",
+      metricName: "score",
+      direction: "higher",
+    });
+    const evaluator = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')"`;
+    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      `${JSON.stringify(
+        {
+          benchmarkCommand: evaluator,
+          checksCommand: checks,
+          commitPaths: ["src"],
+          maxIterations: 4,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const configured = await runCli(["config", "--cwd", dir, "--max-iterations", "4"]);
+      assert.equal(configured.code, 0, configured.stderr);
+    }
+
+    const entries = (await readFile(path.join(dir, "autoresearch.jsonl"), "utf8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line));
+    const acceptanceEvents = entries.filter(
+      (entry) => entry.type === "experiment-contract-accepted",
+    );
+    assert.equal(acceptanceEvents.length, 1);
+    assert.equal(acceptanceEvents[0].source, "legacy-derivation");
+    assert.equal(acceptanceEvents[0].segment, 0);
     assert.equal(entries.filter((entry) => entry.type === "config").length, 1);
   });
 });
@@ -828,7 +894,7 @@ test("next uses the accepted evaluator runner metric limit", async () => {
   });
 });
 
-test("explicit timeout conflicts with configured timeout before first acceptance", async () => {
+test("explicit timeout conflicts with the accepted configured timeout", async () => {
   await withTempDir("contract-timeout-source-conflict", async (dir) => {
     await mkdir(path.join(dir, "src"), { recursive: true });
     await setupFixture(dir, {
@@ -853,12 +919,21 @@ test("explicit timeout conflicts with configured timeout before first acceptance
         2,
       )}\n`,
     );
+    const accepted = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "Accept the configured timeout authority",
+      "--yes",
+    ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
 
     const next = await runCli(["next", "--cwd", dir, "--timeout-seconds", "30"]);
     assert.notEqual(next.code, 0);
     assert.match(next.stderr, /evaluator\.timeoutSeconds|do not agree/i);
     const ledger = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
-    assert.doesNotMatch(ledger, /experiment-contract-accepted/);
+    assert.match(ledger, /experiment-contract-accepted/);
   });
 });
 

@@ -461,8 +461,8 @@ test("doctor keeps current-tree finalization blockers scoped to finalization", a
     const payload = JSON.parse(doctor.stdout);
     const plan = projectedPlan(payload);
 
-    assert.equal(plan.primaryBlockerCode, "finalization-blocked");
-    assert.equal(capabilityStatus(plan, "finalize"), "blocked");
+    assert.equal(plan.primaryBlockerCode, "current-tree-finalization");
+    assert.equal(capabilityStatus(plan, "finalize"), "recovery-only");
     assert.equal(capabilityStatus(plan, "run-packet"), "allowed");
     assert.equal(capabilityStatus(plan, "mutate-session"), "allowed");
     assert.equal((plan.loopDisposition as UnknownRecord).kind, "continue");
@@ -480,8 +480,8 @@ test("state, recommend-next, doctor, and dashboard share finalization-scoped cap
     const statePayload = JSON.parse(state.stdout);
     const compactState = statePayload.compactState;
     const statePlan = projectedPlan(compactState);
-    assert.equal(statePlan.primaryBlockerCode, "finalization-blocked");
-    assert.equal(capabilityStatus(statePlan, "finalize"), "blocked");
+    assert.equal(statePlan.primaryBlockerCode, "current-tree-finalization");
+    assert.equal(capabilityStatus(statePlan, "finalize"), "recovery-only");
     assert.equal(capabilityStatus(statePlan, "run-packet"), "allowed");
     assert.equal((statePlan.parentDisposition as UnknownRecord).kind, "hand-back");
 
@@ -496,7 +496,7 @@ test("state, recommend-next, doctor, and dashboard share finalization-scoped cap
     const recommendPayload = JSON.parse(recommend.stdout);
     const recommendPlan = projectedPlan(recommendPayload);
     assert.equal(recommendPlan.decisionId, statePlan.decisionId);
-    assert.equal(capabilityStatus(recommendPlan, "finalize"), "blocked");
+    assert.equal(capabilityStatus(recommendPlan, "finalize"), "recovery-only");
     assert.equal(capabilityStatus(recommendPlan, "run-packet"), "allowed");
 
     const doctor = await runCli([
@@ -519,7 +519,7 @@ test("state, recommend-next, doctor, and dashboard share finalization-scoped cap
     const exportPayload = JSON.parse(exported.stdout);
     const dashboardPlan = projectedPlan(exportPayload.viewModel);
     assert.equal(dashboardPlan.decisionId, statePlan.decisionId);
-    assert.equal(capabilityStatus(dashboardPlan, "finalize"), "blocked");
+    assert.equal(capabilityStatus(dashboardPlan, "finalize"), "recovery-only");
     assert.equal(capabilityStatus(dashboardPlan, "run-packet"), "allowed");
   });
 });
@@ -531,8 +531,8 @@ test("next compact runs an accepted packet despite a finalization-only blocker",
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const before = projectedPlan(JSON.parse(state.stdout));
-    assert.equal(before.primaryBlockerCode, "finalization-blocked");
-    assert.equal(capabilityStatus(before, "finalize"), "blocked");
+    assert.equal(before.primaryBlockerCode, "current-tree-finalization");
+    assert.equal(capabilityStatus(before, "finalize"), "recovery-only");
     assert.equal(capabilityStatus(before, "run-packet"), "allowed");
 
     const next = await runCli(["next", "--cwd", dir, "--compact"]);

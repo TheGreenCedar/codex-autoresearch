@@ -8,7 +8,8 @@ import {
   runGit,
   type PrivateStateStorageMode,
 } from "./git-private-state.js";
-import { lastRunStateSpec } from "./last-run-store.js";
+import { captureVerifiedGitHead } from "./git-head.js";
+import { lastRunGitSnapshot, lastRunStateSpec } from "./last-run-store.js";
 import {
   parsePendingLogTransactionBytes,
   pendingLogTransactionStateSpec,
@@ -22,8 +23,13 @@ import {
   type SessionRecord,
 } from "./session-records.js";
 import { resolveSessionPaths } from "./session-paths.js";
+import { REPORT_DIRNAME } from "./session-artifacts.js";
 import { isPathInside } from "./path-containment.js";
 import { isUnknownRecord, type UnknownRecord } from "./types/json.js";
+import {
+  buildFinalizationEvidenceState,
+  type FinalizationEvidenceFingerprint,
+} from "./finalization-plan.js";
 
 const SNAPSHOT_SCHEMA_VERSION = 1 as const;
 const MAX_COHERENCE_ATTEMPTS = 3;
@@ -45,6 +51,7 @@ export interface GitVersion {
   head: string;
   indexTree: string;
   statusHash: string;
+  trustHash?: string;
 }
 
 export interface SessionSnapshotVersionVector {
@@ -53,7 +60,16 @@ export interface SessionSnapshotVersionVector {
   packet: StoredSourceVersion;
   receipt: StoredSourceVersion;
   process: StoredSourceVersion;
+  completionAudit?: StoredSourceVersion;
   git: GitVersion;
+}
+
+export interface CapturedCompletionAudit {
+  branchHeads: Record<string, string | null>;
+  summaryHash: string | null;
+  acceptedEvidenceBase: string | null;
+  acceptedEvidenceCommitDomain: string[] | null;
+  acceptedEvidenceFingerprint: FinalizationEvidenceFingerprint | null;
 }
 
 export interface CapturedSessionSources {
@@ -62,6 +78,8 @@ export interface CapturedSessionSources {
   packet: Uint8Array | null;
   receipt: Uint8Array | null;
   process: Uint8Array | null;
+  gitTrust?: UnknownRecord | null;
+  completionAudit?: CapturedCompletionAudit | null;
 }
 
 export interface ResolvedSnapshotSource {
@@ -87,7 +105,10 @@ export interface CoherentSnapshotIo {
     locations: ResolvedSnapshotLocations,
     input: { sessionCwd: string; workDir: string },
   ): Promise<SessionSnapshotVersionVector>;
-  captureSources(locations: ResolvedSnapshotLocations): Promise<CapturedSessionSources>;
+  captureSources(
+    locations: ResolvedSnapshotLocations,
+    input: { sessionCwd: string; workDir: string },
+  ): Promise<CapturedSessionSources>;
 }
 
 export interface SnapshotSemanticFacts {
@@ -110,6 +131,8 @@ export interface CoherentSessionSnapshot {
   pendingTransaction: PendingLogTransactionSnapshot | null;
   processProgress: UnknownRecord | null;
   git: GitVersion;
+  gitTrust?: UnknownRecord | null;
+  completionAudit?: CapturedCompletionAudit | null;
   sourceDiagnostics: {
     ledgerIssues: LedgerRecordIssue[];
   };
@@ -127,23 +150,79 @@ export type CoherentSnapshotLoadResult =
         lastVectorA: SessionSnapshotVersionVector;
         lastVectorB: SessionSnapshotVersionVector;
       };
+    }
+  | {
+      ok: false;
+      attempts: number;
+      diagnostic: {
+        code: "coherent-snapshot-source-invalid";
+        message: string;
+      };
     };
+
+export class CoherentSnapshotSourceError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "CoherentSnapshotSourceError";
+  }
+}
+
+export async function resolveInitialSessionMutationRoute({
+  requestedCwd,
+  allowOutsideWorkdir = false,
+}: {
+  requestedCwd: string;
+  allowOutsideWorkdir?: boolean;
+}): Promise<{ sessionCwd: string; workDir: string }> {
+  const sessionCwd = path.resolve(requestedCwd);
+  const routingConfigBytes = await nodeSnapshotIo.captureRoutingConfig(sessionCwd);
+  let routingConfig: UnknownRecord;
+  try {
+    routingConfig = parseObject(routingConfigBytes, "routing config") || {};
+  } catch (error) {
+    if (error instanceof CoherentSnapshotSourceError) {
+      return { sessionCwd, workDir: sessionCwd };
+    }
+    throw error;
+  }
+  const workDir = routingConfig.workingDir
+    ? path.resolve(sessionCwd, String(routingConfig.workingDir))
+    : sessionCwd;
+  if (!allowOutsideWorkdir && !isPathInside(sessionCwd, workDir)) {
+    throw new Error(
+      `Configured working directory is outside --cwd: ${workDir}. Pass --allow-outside-workdir to authorize it explicitly.`,
+    );
+  }
+  return { sessionCwd, workDir };
+}
 
 export async function loadCoherentSessionSnapshot({
   requestedCwd,
   allowOutsideWorkdir = false,
   io = nodeSnapshotIo,
+  inspectCapturedSnapshot,
 }: {
   requestedCwd: string;
   allowOutsideWorkdir?: boolean;
   io?: CoherentSnapshotIo;
+  inspectCapturedSnapshot?: (
+    snapshot: CoherentSessionSnapshot,
+  ) => void | string | Promise<void | string>;
 }): Promise<CoherentSnapshotLoadResult> {
   const sessionCwd = path.resolve(requestedCwd);
   let lastVectorA: SessionSnapshotVersionVector | null = null;
   let lastVectorB: SessionSnapshotVersionVector | null = null;
   for (let attempt = 1; attempt <= MAX_COHERENCE_ATTEMPTS; attempt += 1) {
     const routingConfigBytes = await io.captureRoutingConfig(sessionCwd);
-    const routingConfig = parseObject(routingConfigBytes, "routing config") || {};
+    let routingConfig: UnknownRecord;
+    try {
+      routingConfig = parseObject(routingConfigBytes, "routing config") || {};
+    } catch (error) {
+      if (error instanceof CoherentSnapshotSourceError) {
+        return snapshotSourceFailure(attempt, error);
+      }
+      throw error;
+    }
     const workDir = routingConfig.workingDir
       ? path.resolve(sessionCwd, String(routingConfig.workingDir))
       : sessionCwd;
@@ -152,29 +231,90 @@ export async function loadCoherentSessionSnapshot({
         `Configured working directory is outside --cwd: ${workDir}. Pass --allow-outside-workdir to authorize it explicitly.`,
       );
     }
-    const locations = await io.resolveLocations({ sessionCwd, workDir });
-    const vectorA = await io.readVersionVector(locations, { sessionCwd, workDir });
-    const captured = await io.captureSources(locations);
-    const vectorB = await io.readVersionVector(locations, { sessionCwd, workDir });
+    const locationsA = await io.resolveLocations({ sessionCwd, workDir });
+    let vectorA: SessionSnapshotVersionVector;
+    let captured: CapturedSessionSources;
+    try {
+      vectorA = await io.readVersionVector(locationsA, { sessionCwd, workDir });
+      captured = await io.captureSources(locationsA, { sessionCwd, workDir });
+    } catch (error) {
+      return snapshotSourceFailure(attempt, error);
+    }
+    let inspectedSnapshot: CoherentSessionSnapshot | null = null;
+    let inspectionVersionA = "";
+    let inspectionError: unknown = null;
+    if (inspectCapturedSnapshot) {
+      try {
+        inspectedSnapshot = parseCapturedSnapshot({
+          captured,
+          generationId: generationIdForVersionVector(vectorA),
+          sessionCwd,
+          vector: vectorA,
+          workDir,
+        });
+        inspectionVersionA = (await inspectCapturedSnapshot(inspectedSnapshot)) || "";
+      } catch (error) {
+        inspectionError = error;
+      }
+    }
+    let vectorB: SessionSnapshotVersionVector;
+    let locationsB: ResolvedSnapshotLocations;
+    try {
+      locationsB = await io.resolveLocations({ sessionCwd, workDir });
+      vectorB = await io.readVersionVector(locationsB, { sessionCwd, workDir });
+    } catch (error) {
+      return snapshotSourceFailure(attempt, error);
+    }
     lastVectorA = vectorA;
     lastVectorB = vectorB;
     if (
       !vectorsEqual(vectorA, vectorB) ||
+      !snapshotLocationsEqual(locationsA, locationsB) ||
       !optionalBytesEqual(routingConfigBytes, captured.config)
     ) {
       continue;
     }
-    return {
-      ok: true,
-      attempts: attempt,
-      snapshot: parseCapturedSnapshot({
-        captured,
-        generationId: generationIdForVersionVector(vectorA),
-        sessionCwd,
-        vector: vectorA,
-        workDir,
-      }),
-    };
+    if (inspectionError) {
+      if (inspectionError instanceof CoherentSnapshotSourceError) {
+        return snapshotSourceFailure(attempt, inspectionError);
+      }
+      throw inspectionError;
+    }
+    if (inspectCapturedSnapshot && inspectedSnapshot && inspectionVersionA) {
+      let inspectionVersionB = "";
+      try {
+        inspectionVersionB = (await inspectCapturedSnapshot(inspectedSnapshot)) || "";
+      } catch (error) {
+        inspectionError = error;
+      }
+      if (inspectionError) {
+        if (inspectionError instanceof CoherentSnapshotSourceError) {
+          return snapshotSourceFailure(attempt, inspectionError);
+        }
+        throw inspectionError;
+      }
+      if (inspectionVersionA !== inspectionVersionB) {
+        continue;
+      }
+    }
+    try {
+      return {
+        ok: true,
+        attempts: attempt,
+        snapshot: parseCapturedSnapshot({
+          captured,
+          generationId: generationIdForVersionVector(vectorB),
+          sessionCwd,
+          vector: vectorB,
+          workDir,
+        }),
+      };
+    } catch (error) {
+      if (error instanceof CoherentSnapshotSourceError) {
+        return snapshotSourceFailure(attempt, error);
+      }
+      throw error;
+    }
   }
   return {
     ok: false,
@@ -191,6 +331,30 @@ export async function loadCoherentSessionSnapshot({
 
 export function generationIdForVersionVector(vector: SessionSnapshotVersionVector): string {
   return sha256(canonicalJson(vector));
+}
+
+function snapshotLocationsEqual(
+  left: ResolvedSnapshotLocations,
+  right: ResolvedSnapshotLocations,
+): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+function snapshotSourceFailure(
+  attempts: number,
+  error: unknown,
+): Extract<
+  CoherentSnapshotLoadResult,
+  { ok: false; diagnostic: { code: "coherent-snapshot-source-invalid" } }
+> {
+  return {
+    ok: false,
+    attempts,
+    diagnostic: {
+      code: "coherent-snapshot-source-invalid",
+      message: `A coherent session source could not be captured: ${error instanceof Error ? error.message : String(error)}`,
+    },
+  };
 }
 
 export function parseCapturedSnapshot({
@@ -210,7 +374,7 @@ export function parseCapturedSnapshot({
   const records = ledger.records;
   const config = parseObject(captured.config, "accepted config") || {};
   const lastRunPacket = parseObject(captured.packet, "last-run packet");
-  const pendingTransaction = parsePendingLogTransactionBytes(captured.receipt);
+  const pendingTransaction = parsePendingLogTransactionBytes(captured.receipt, captured.ledger);
   const processProgress = parseObject(captured.process, "active process progress");
   return {
     kind: "coherent-session-snapshot",
@@ -225,6 +389,8 @@ export function parseCapturedSnapshot({
     pendingTransaction,
     processProgress,
     git: vector.git,
+    gitTrust: captured.gitTrust || null,
+    completionAudit: captured.completionAudit || null,
     sourceDiagnostics: { ledgerIssues: ledger.issues },
     semanticFacts: semanticFactsFromRecords(records),
   };
@@ -278,17 +444,24 @@ const nodeSnapshotIo: CoherentSnapshotIo = {
     };
   },
   async readVersionVector(locations, { workDir }) {
-    const [ledger, config, packet, receipt, process, git] = await Promise.all([
+    const [ledgerBytes, configBytes, packetBytes] = await Promise.all([
+      readOptionalFile(locations.ledgerPath),
+      readOptionalFile(locations.configPath),
+      readOptionalFile(locations.packet.path),
+    ]);
+    const trustConfig = parseObject(configBytes, "accepted config") || {};
+    const [ledger, config, packet, receipt, process, completionAudit, git] = await Promise.all([
       ledgerVersion(locations.ledgerPath),
       storedVersion(locations.configPath, "session"),
       storedVersion(locations.packet.path, locations.packet.storage),
       storedVersion(locations.receipt.path, locations.receipt.storage),
       storedVersion(locations.process.path, locations.process.storage),
-      captureGitVersion(workDir),
+      completionAuditVersion(workDir, ledgerBytes),
+      captureGitVersion(workDir, undefined, packetBytes ? trustConfig : undefined),
     ]);
-    return { ledger, config, packet, receipt, process, git };
+    return { ledger, config, packet, receipt, process, completionAudit, git };
   },
-  async captureSources(locations) {
+  async captureSources(locations, { workDir }) {
     const [ledger, config, packet, receipt, process] = await Promise.all([
       readOptionalFile(locations.ledgerPath),
       readOptionalFile(locations.configPath),
@@ -296,7 +469,11 @@ const nodeSnapshotIo: CoherentSnapshotIo = {
       readOptionalFile(locations.receipt.path),
       readOptionalFile(locations.process.path),
     ]);
-    return { ledger, config, packet, receipt, process };
+    const [gitTrust, completionAudit] = await Promise.all([
+      packet ? lastRunGitSnapshot(workDir, parseObject(config, "accepted config") || {}) : null,
+      captureCompletionAudit(workDir, ledger),
+    ]);
+    return { ledger, config, packet, receipt, process, gitTrust, completionAudit };
   },
 };
 
@@ -326,12 +503,148 @@ async function storedVersion(
   return { storage, hash: bytes == null ? MISSING_HASH : sha256(bytes) };
 }
 
+async function completionAuditVersion(
+  workDir: string,
+  ledgerBytes: Uint8Array | null,
+): Promise<StoredSourceVersion> {
+  const audit = await captureCompletionAudit(workDir, ledgerBytes);
+  return {
+    storage: "session",
+    hash: audit ? sha256(canonicalJson(audit)) : MISSING_HASH,
+  };
+}
+
+async function captureCompletionAudit(
+  workDir: string,
+  ledgerBytes: Uint8Array | null,
+): Promise<CapturedCompletionAudit | null> {
+  const completed = latestCompletionRecord(ledgerBytes);
+  if (!completed || !Array.isArray(completed.evidence)) return null;
+  const branchHeads: Record<string, string | null> = {};
+  for (const item of completed.evidence) {
+    const match = String(item || "").match(/^review-branch:(.+)@([0-9a-f]{40}(?:[0-9a-f]{24})?)$/);
+    if (!match) continue;
+    const branch = match[1];
+    const format = await runGit(["check-ref-format", "--branch", branch], workDir);
+    if (format.code !== 0 || format.stdoutTruncated) {
+      branchHeads[branch] = null;
+      continue;
+    }
+    const resolved = await runGit(["rev-parse", "--verify", `refs/heads/${branch}`], workDir);
+    branchHeads[branch] =
+      resolved.code === 0 && !resolved.stdoutTruncated && resolved.stdout.trim()
+        ? resolved.stdout.trim()
+        : null;
+  }
+  const summaryName = String(completed.reviewSummary || "");
+  const summaryHash = await captureReviewSummaryHash(workDir, summaryName);
+  const acceptedEvidenceBase =
+    typeof completed.acceptedEvidenceBase === "string" &&
+    /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(completed.acceptedEvidenceBase)
+      ? completed.acceptedEvidenceBase
+      : null;
+  const acceptedEvidenceCommitDomain = acceptedEvidenceBase
+    ? await captureCompletionCommitDomain(workDir, acceptedEvidenceBase)
+    : null;
+  const acceptedEvidenceFingerprint = acceptedEvidenceCommitDomain
+    ? buildFinalizationEvidenceState(
+        acceptedEvidenceCommitDomain,
+        capturedLedgerObjects(ledgerBytes),
+      ).fingerprint
+    : null;
+  return {
+    branchHeads,
+    summaryHash,
+    acceptedEvidenceBase,
+    acceptedEvidenceCommitDomain,
+    acceptedEvidenceFingerprint,
+  };
+}
+
+async function captureCompletionCommitDomain(
+  workDir: string,
+  base: string,
+): Promise<string[] | null> {
+  const verified = await runGit(["rev-parse", "--verify", `${base}^{commit}`], workDir);
+  if (
+    verified.code !== 0 ||
+    verified.stdoutTruncated ||
+    verified.stdout.trim().toLowerCase() !== base.toLowerCase()
+  ) {
+    return null;
+  }
+  const history = await runGit(["log", "--reverse", "--format=%H", `${base}..HEAD`], workDir);
+  if (history.code !== 0 || history.stdoutTruncated) return null;
+  const commits = history.stdout
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return commits.every((value) => /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(value)) ? commits : null;
+}
+
+function capturedLedgerObjects(ledgerBytes: Uint8Array | null): UnknownRecord[] {
+  if (!ledgerBytes) return [];
+  return Buffer.from(ledgerBytes)
+    .toString("utf8")
+    .split(/\r?\n/)
+    .flatMap((rawLine) => {
+      const line = rawLine.trim();
+      if (!line) return [];
+      try {
+        const parsed: unknown = JSON.parse(line);
+        return isUnknownRecord(parsed) ? [parsed] : [];
+      } catch {
+        return [];
+      }
+    });
+}
+
+async function captureReviewSummaryHash(
+  workDir: string,
+  summaryName: string,
+): Promise<string | null> {
+  if (!summaryName || path.basename(summaryName) !== summaryName) return null;
+  const commonDir = await runGit(["rev-parse", "--git-common-dir"], workDir);
+  if (commonDir.code !== 0 || commonDir.stdoutTruncated || !commonDir.stdout.trim()) return null;
+  const resolvedCommonDir = path.isAbsolute(commonDir.stdout.trim())
+    ? path.resolve(commonDir.stdout.trim())
+    : path.resolve(workDir, commonDir.stdout.trim());
+  const reportRoot = path.join(resolvedCommonDir, REPORT_DIRNAME);
+  const summaryPath = path.join(reportRoot, summaryName);
+  if (!isPathInside(reportRoot, summaryPath)) return null;
+  try {
+    const stats = await fsp.lstat(summaryPath);
+    if (!stats.isFile() || stats.isSymbolicLink()) return null;
+    return sha256(await fsp.readFile(summaryPath));
+  } catch {
+    return null;
+  }
+}
+
+function latestCompletionRecord(ledgerBytes: Uint8Array | null): UnknownRecord | null {
+  if (!ledgerBytes) return null;
+  let latest: UnknownRecord | null = null;
+  for (const rawLine of Buffer.from(ledgerBytes).toString("utf8").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (isUnknownRecord(parsed) && parsed.type === "finalization-completed") latest = parsed;
+    } catch {
+      // The ledger parser records structural issues separately; an invalid line cannot
+      // contribute completion audit authority.
+    }
+  }
+  return latest;
+}
+
 export async function captureGitVersion(
   workDir: string,
   io: {
     insideGitRepo: typeof insideGitRepo;
     runGit: typeof runGit;
   } = { insideGitRepo, runGit },
+  trustConfig?: UnknownRecord,
 ): Promise<GitVersion> {
   if (!(await io.insideGitRepo(workDir))) {
     return {
@@ -340,7 +653,7 @@ export async function captureGitVersion(
       statusHash: sha256("not-a-repository"),
     };
   }
-  const headResult = await io.runGit(["rev-parse", "--verify", "HEAD"], workDir);
+  const head = await captureVerifiedGitHead(workDir, { runGit: io.runGit });
   const indexResult = await io.runGit(["write-tree"], workDir);
   const statusResult = await io.runGit(["status", "--porcelain=v1", "-z", "-uall"], workDir);
   if (indexResult.code !== 0 || indexResult.stdoutTruncated) {
@@ -351,10 +664,12 @@ export async function captureGitVersion(
   if (statusResult.code !== 0 || statusResult.stdoutTruncated) {
     throw new Error("Git status could not be captured for the coherent session snapshot.");
   }
+  const trust = trustConfig ? await lastRunGitSnapshot(workDir, trustConfig) : null;
   return {
-    head: headResult.code === 0 ? headResult.stdout.trim() : "unborn",
+    head,
     indexTree: indexResult.stdout.trim() || "empty-index",
     statusHash: sha256(statusResult.stdout),
+    ...(trust ? { trustHash: sha256(canonicalJson(trust)) } : {}),
   };
 }
 
@@ -372,10 +687,12 @@ function parseObject(bytes: Uint8Array | null, label: string): UnknownRecord | n
   let parsed: unknown;
   try {
     parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
-  } catch {
-    throw new Error(`${label} contains invalid JSON.`);
+  } catch (error) {
+    throw new CoherentSnapshotSourceError(`${label} contains invalid JSON.`, error);
   }
-  if (!isUnknownRecord(parsed)) throw new Error(`${label} must contain a JSON object.`);
+  if (!isUnknownRecord(parsed)) {
+    throw new CoherentSnapshotSourceError(`${label} must contain a JSON object.`);
+  }
   return parsed;
 }
 
@@ -386,9 +703,6 @@ function semanticFactsFromRecords(records: SessionRecord[]): SnapshotSemanticFac
   const contract = isUnknownRecord(accepted?.contract) ? accepted.contract : null;
   const evaluator = isUnknownRecord(contract?.evaluator) ? contract.evaluator : null;
   const execution = isUnknownRecord(evaluator?.execution) ? evaluator.execution : null;
-  const latestEpochRecord = [...records]
-    .reverse()
-    .find((record) => typeof record.preconditionEpoch === "string");
   const evaluatorId = typeof evaluator?.id === "string" ? evaluator.id : "";
   const evaluatorExecutionDigest =
     typeof execution?.executionDigest === "string" ? execution.executionDigest : "";
@@ -407,12 +721,7 @@ function semanticFactsFromRecords(records: SessionRecord[]): SnapshotSemanticFac
     contractDigest: typeof contract?.contractDigest === "string" ? contract.contractDigest : "",
     evaluatorIdentity: [evaluatorId, evaluatorExecutionDigest].filter(Boolean).join("@"),
     acceptedCheckIdentities,
-    preconditionEpoch:
-      typeof latestEpochRecord?.preconditionEpoch === "string"
-        ? latestEpochRecord.preconditionEpoch
-        : typeof accepted?.eventId === "string"
-          ? accepted.eventId
-          : "",
+    preconditionEpoch: typeof accepted?.eventId === "string" ? accepted.eventId : "",
   };
 }
 

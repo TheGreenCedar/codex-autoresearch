@@ -117,8 +117,7 @@ test("protected benchmark edits block next and keep until a new segment", async 
     assertEvaluatorDriftDecision(doctorPayload, /Protected benchmark paths changed/i);
 
     const next = await runCli(["next", "--cwd", dir]);
-    assert.notEqual(next.code, 0);
-    assert.match(next.stderr, /protected execution input changed|accepted experiment contract/i);
+    assertEvaluatorDriftMutationFailure(next);
 
     const keep = await runCli([
       "log",
@@ -131,8 +130,7 @@ test("protected benchmark edits block next and keep until a new segment", async 
       "--description",
       "mutated benchmark",
     ]);
-    assert.notEqual(keep.code, 0);
-    assert.match(keep.stderr, /protected execution input changed|accepted experiment contract/i);
+    assertEvaluatorDriftMutationFailure(keep);
 
     await assertCliOk([
       "new-segment",
@@ -199,12 +197,10 @@ test("dirty protected benchmark paths block the first keep baseline", async () =
       "--description",
       "dirty first baseline",
     ]);
-    assert.notEqual(keep.code, 0);
-    assert.match(keep.stderr, /protected execution input changed|accepted experiment contract/i);
+    assertEvaluatorDriftMutationFailure(keep);
 
     const next = await runCli(["next", "--cwd", dir]);
-    assert.notEqual(next.code, 0);
-    assert.match(next.stderr, /protected execution input changed|accepted experiment contract/i);
+    assertEvaluatorDriftMutationFailure(next);
   });
 });
 
@@ -272,8 +268,7 @@ test("renaming a protected hostile path out of scope blocks the first baseline",
       "--description",
       "must not bless moved benchmark",
     ]);
-    assert.notEqual(keep.code, 0);
-    assert.match(keep.stderr, /protected execution input changed|accepted experiment contract/i);
+    assertEvaluatorDriftMutationFailure(keep);
   });
 });
 
@@ -424,6 +419,17 @@ function assertEvaluatorDriftDecision(payload, message) {
   assert.equal(plan.capabilities["run-packet"], "blocked");
   assert.equal(plan.capabilities["authorize-keep"], "blocked");
   assert.match(JSON.stringify([payload.issues, payload.warnings]), message);
+}
+
+function assertEvaluatorDriftMutationFailure(result) {
+  assert.notEqual(result.code, 0);
+  assert.equal(result.stdout, "");
+  const failure = JSON.parse(result.stderr);
+  assert.equal(failure.code, "mutation-precondition-blocked");
+  const plan = failure.preconditionDecision;
+  assert.equal(plan.requiredEvidence.diagnosticCodes.includes("evaluator-drift"), true);
+  assert.equal(plan.capabilities["run-packet"], "blocked");
+  assert.equal(plan.capabilities["authorize-keep"], "blocked");
 }
 
 async function initGit(dir) {

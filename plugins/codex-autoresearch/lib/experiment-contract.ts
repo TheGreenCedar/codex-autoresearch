@@ -14,6 +14,7 @@ export {
 import { buildProtectedBenchmarkSnapshot } from "./benchmark/contract-guards.js";
 import { parsePorcelainV1Z } from "./git-paths.js";
 import { insideGitRepo, runGit } from "./git-private-state.js";
+import { captureVerifiedGitHead } from "./git-head.js";
 import { normalizeRelativePaths } from "./literal-paths.js";
 import { appendJsonl, readJsonl, stateFromSessionRecords } from "./session-core.js";
 import {
@@ -2234,7 +2235,7 @@ async function repositoryContract(
   const [topLevel, commonDir, head, status] = await Promise.all([
     requiredGitOutput(workDir, ["rev-parse", "--show-toplevel"]),
     requiredGitOutput(workDir, ["rev-parse", "--git-common-dir"]),
-    requiredGitOutput(workDir, ["rev-parse", "HEAD"]),
+    captureVerifiedGitHead(workDir),
     requiredGitRawOutput(workDir, ["status", "--porcelain=v1", "-z", "-uall"]),
   ]);
   const repositoryIdentity = digestText(`repository\0${path.resolve(workDir, commonDir)}`);

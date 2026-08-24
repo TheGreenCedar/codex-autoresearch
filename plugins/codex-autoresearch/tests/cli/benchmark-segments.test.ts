@@ -47,13 +47,21 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
       name: "truth layer",
       metricName: "score",
       direction: "higher",
-      completeContract: true,
     });
     await writeCompleteContractConfig(dir, {
       benchmarkCommand: `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')"`,
       commitPaths: ["src/missing.ts"],
       editableScope: ["src/missing.ts"],
     });
+    const accepted = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "Accept the scaffold-health fixture contract",
+      "--yes",
+    ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
     await writeFile(
       path.join(dir, "autoresearch.ps1"),
       "& powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1\n",
@@ -338,12 +346,27 @@ test("run notes append inside the managed ledger block", async () => {
 test("benchmark contract changes block the next packet until a new segment", async () => {
   await withTempDir("contract-drift", async (dir) => {
     await setupFixture(dir, { name: "contract", metricName: "score", direction: "higher" });
-    await writeCompleteContractConfig(dir, { benchmarkCommand: undefined });
     await writeFile(
       path.join(dir, "packet.cmd"),
-      "node -e \"console.log('METRIC score=1')\"\n",
+      "node -e \"console.log('METRIC score=1')\"",
       "utf8",
     );
+    const benchmarkCommand = await readFile(path.join(dir, "packet.cmd"), "utf8");
+    await writeCompleteContractConfig(dir, {
+      benchmarkCommand,
+      protectedBenchmarkPaths: ["packet.cmd"],
+    });
+    const accepted = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--benchmark-command",
+      benchmarkCommand,
+      "--reason",
+      "Accept the command-file benchmark contract",
+      "--yes",
+    ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
 
     const packet = await runCli(["next", "--cwd", dir, "--command-file", "packet.cmd"]);
     assert.equal(packet.code, 0, packet.stderr);
@@ -361,8 +384,9 @@ test("benchmark contract changes block the next packet until a new segment", asy
     assert.equal(logged.code, 0, logged.stderr);
 
     await writeCompleteContractConfig(dir, {
-      benchmarkCommand: undefined,
+      benchmarkCommand,
       maxIterations: 8,
+      protectedBenchmarkPaths: ["packet.cmd"],
     });
     const blocked = await runCli(["next", "--cwd", dir, "--command-file", "packet.cmd"]);
     assert.notEqual(blocked.code, 0);
@@ -389,6 +413,17 @@ test("new segment rebaselines benchmark contract drift for changed benchmark sur
       benchmarkCommand,
       protectedBenchmarkPaths: ["bench-a.txt"],
     });
+    const accepted = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--benchmark-command",
+      benchmarkCommand,
+      "--reason",
+      "Accept the initial benchmark surface",
+      "--yes",
+    ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
 
     const packet = await runCli(["next", "--cwd", dir, "--command", benchmarkCommand]);
     assert.equal(packet.code, 0, packet.stderr);

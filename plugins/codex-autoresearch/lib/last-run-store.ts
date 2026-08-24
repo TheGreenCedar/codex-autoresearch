@@ -111,6 +111,33 @@ export async function lastRunPacketFreshness(
   runtimeConfig: UnknownRecord | null = null,
 ): Promise<LastRunPacketFreshness> {
   const history = record(packet.history);
+  const expectedGit = record(history.git);
+  const actualGit = expectedGit.inside
+    ? await lastRunGitSnapshot(workDir, { commitPaths: expectedGit.scopedPaths || [] })
+    : null;
+  return lastRunPacketFreshnessFromFacts({
+    workDir,
+    packet,
+    runtimeConfig,
+    state: currentState(workDir),
+    actualGit,
+  });
+}
+
+export function lastRunPacketFreshnessFromFacts({
+  workDir,
+  packet,
+  runtimeConfig = null,
+  state,
+  actualGit = null,
+}: {
+  workDir: string;
+  packet: LastRunPacket;
+  runtimeConfig?: UnknownRecord | null;
+  state: { config: UnknownRecord; results: readonly unknown[]; segment: number };
+  actualGit?: UnknownRecord | null;
+}): LastRunPacketFreshness {
+  const history = record(packet.history);
   const expectedNextRun = Number(history.nextRun);
   const expectedSegment = Number(history.segment);
   if (!Number.isFinite(expectedNextRun)) {
@@ -119,7 +146,6 @@ export async function lastRunPacketFreshness(
       reason: "Last-run packet is missing history metadata. Run next again before logging.",
     };
   }
-  const state = currentState(workDir);
   const expectedWorkDir = history.workDir || packet.workDir;
   if (expectedWorkDir && path.resolve(String(expectedWorkDir)) !== path.resolve(workDir)) {
     return {
@@ -166,8 +192,19 @@ export async function lastRunPacketFreshness(
   }
   const trustConfigValue = history.trustConfig;
   const trustConfig = record(trustConfigValue);
+  const run = record(packet.run);
+  const acceptedPacket =
+    run.evaluationAuthority === "accepted-contract" ||
+    run.executionAuthority === "accepted-contract" ||
+    Boolean(run.experimentContractDigest);
+  if (runtimeConfig && acceptedPacket && (!trustConfigValue || !trustConfig.hash)) {
+    return {
+      fresh: false,
+      reason:
+        "Last-run packet is missing accepted execution trust metadata. Run next again before logging.",
+    };
+  }
   if (trustConfigValue && runtimeConfig) {
-    const run = record(packet.run);
     const checks = record(run.checks);
     const benchmarkContract = record(history.benchmarkContract);
     const actualTrustConfig = lastRunTrustConfigSnapshot(workDir, runtimeConfig, {
@@ -198,74 +235,72 @@ export async function lastRunPacketFreshness(
   }
   const expectedGit = record(history.git);
   if (expectedGit.inside) {
-    const actualGit = await lastRunGitSnapshot(workDir, {
-      commitPaths: expectedGit.scopedPaths || [],
-    });
-    if (!actualGit.inside) {
+    const capturedGit = actualGit || {};
+    if (!capturedGit.inside) {
       return {
         fresh: false,
         expectedGit,
-        actualGit,
+        actualGit: capturedGit,
         reason:
           "Last-run packet is stale: the working directory is no longer a Git worktree. Run next again before logging.",
       };
     }
-    if (expectedGit.head && actualGit.head && expectedGit.head !== actualGit.head) {
+    if (expectedGit.head && capturedGit.head && expectedGit.head !== capturedGit.head) {
       return {
         fresh: false,
         expectedGit,
-        actualGit,
-        reason: `Last-run packet is stale: Git HEAD changed from ${expectedGit.head} to ${actualGit.head}. Run next again before logging.`,
+        actualGit: capturedGit,
+        reason: `Last-run packet is stale: Git HEAD changed from ${expectedGit.head} to ${capturedGit.head}. Run next again before logging.`,
       };
     }
     if (
       expectedGit.statusHash &&
-      actualGit.statusHash &&
-      expectedGit.statusHash !== actualGit.statusHash
+      capturedGit.statusHash &&
+      expectedGit.statusHash !== capturedGit.statusHash
     ) {
       return {
         fresh: false,
         expectedGit,
-        actualGit,
+        actualGit: capturedGit,
         reason:
           "Last-run packet is stale: Git dirty state changed since the packet was created. Run next again before logging.",
       };
     }
     if (
       gitSnapshotContainsDirtyFingerprintTruncation(expectedGit) ||
-      gitSnapshotContainsDirtyFingerprintTruncation(actualGit)
+      gitSnapshotContainsDirtyFingerprintTruncation(capturedGit)
     ) {
       return {
         fresh: false,
         expectedGit,
-        actualGit,
+        actualGit: capturedGit,
         reason:
           "Last-run packet is stale: dirty file fingerprints were truncated before freshness could be proven. Clean or narrow the dirty tree, then run next again before logging.",
       };
     }
-    if (expectedGit.fileFingerprints || actualGit.fileFingerprints) {
+    if (expectedGit.fileFingerprints || capturedGit.fileFingerprints) {
       if (
         JSON.stringify(expectedGit.fileFingerprints || []) !==
-        JSON.stringify(actualGit.fileFingerprints || [])
+        JSON.stringify(capturedGit.fileFingerprints || [])
       ) {
         return {
           fresh: false,
           expectedGit,
-          actualGit,
+          actualGit: capturedGit,
           reason:
             "Last-run packet is stale: scoped file fingerprints changed since the packet was created. Run next again before logging.",
         };
       }
     }
-    if (expectedGit.dirtyFileFingerprints || actualGit.dirtyFileFingerprints) {
+    if (expectedGit.dirtyFileFingerprints || capturedGit.dirtyFileFingerprints) {
       if (
         JSON.stringify(expectedGit.dirtyFileFingerprints || []) !==
-        JSON.stringify(actualGit.dirtyFileFingerprints || [])
+        JSON.stringify(capturedGit.dirtyFileFingerprints || [])
       ) {
         return {
           fresh: false,
           expectedGit,
-          actualGit,
+          actualGit: capturedGit,
           reason:
             "Last-run packet is stale: dirty file contents changed since the packet was created. Run next again before logging.",
         };

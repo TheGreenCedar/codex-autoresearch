@@ -15,7 +15,6 @@ export interface TerminalReportDashboard {
   status: string;
   detail: string;
   command: string;
-  healthUrl: string;
 }
 
 export interface TerminalReportSummary {
@@ -364,14 +363,12 @@ function dashboardSummary(state: JsonRecord, commands: JsonRecord): TerminalRepo
         shouldRestart ? "; serve a fresh dashboard before using dashboard evidence" : ""
       }`,
       command: shouldRestart ? serveCommand : healthProbeCommand,
-      healthUrl,
     };
   }
   return {
     status: "not-checked",
     detail: "not checked; verify dashboard health when dashboard evidence matters.",
     command: healthProbeCommand,
-    healthUrl,
   };
 }
 

@@ -147,6 +147,8 @@ export function projectCompactDecisionPlan(
     outcome: plan.outcome.kind,
     learning: {
       kind: plan.learning.latest.kind,
+      changedBelief: plan.learning.latest.changedBelief,
+      evidence: plan.learning.latest.evidence,
       consecutiveNoLearningCandidates: plan.learning.consecutiveNoLearningCandidates,
     },
   };

@@ -263,7 +263,10 @@ test("dashboard routes an incomplete manual session to accepted-contract setup",
       "Manual baseline",
     ]);
     assert.notEqual(rejectedKeep.code, 0);
-    assert.match(rejectedKeep.stderr, /contract is not acceptable/i);
+    const rejection = JSON.parse(rejectedKeep.stderr);
+    assert.equal(rejection.code, "mutation-precondition-blocked");
+    assert.equal(rejection.preconditionDecision.primaryBlockerCode, "setup-required");
+    assert.equal(rejection.preconditionDecision.capabilities["authorize-keep"], "blocked");
 
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
@@ -338,18 +341,16 @@ test("dashboard surfaces stale last-run packets before normal next guidance", as
 
 test("doctor summarizes readiness and detects missing benchmark metrics", async () => {
   await withTempDir("doctor", async (dir) => {
-    await setupFixture(dir, { name: "doctor" });
-
     const command = `${quoteForShell(process.execPath)} -e "console.log('no metric')"`;
-    const result = await runCli([
-      "doctor",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--check-benchmark",
-      "--json-full",
-    ]);
+    await setupFixture(dir, {
+      name: "doctor",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
+    const ordinaryState = await runCli(["state", "--cwd", dir, "--json-full"]);
+    assert.equal(ordinaryState.code, 0, ordinaryState.stderr);
+    const ordinaryPlan = projectedPlan(JSON.parse(ordinaryState.stdout));
+    const result = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--json-full"]);
     assert.equal(result.code, 0, result.stderr);
 
     const payload = JSON.parse(result.stdout);
@@ -362,7 +363,55 @@ test("doctor summarizes readiness and detects missing benchmark metrics", async 
     assert.equal(payload.benchmark.progress.stages[0].stage, "benchmark");
     assert.doesNotMatch(payload.preflight.blockers.join("\n"), /No benchmark command/i);
     assert.match(payload.issues.join("\n"), /primary metric/);
-    assert.match(payload.nextAction, /benchmark/i);
+    const plan = projectedPlan(payload);
+    assert.deepEqual(plan, ordinaryPlan);
+    assert.equal((plan.action as UnknownRecord).kind, "run-baseline");
+  });
+});
+
+test("doctor check-benchmark rejects a command outside the accepted evaluator", async () => {
+  await withTempDir("doctor-accepted-evaluator-only", async (dir) => {
+    const accepted = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const overrideSentinel = path.join(dir, "override-ran.txt");
+    const override = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC seconds=999')" ${quoteForShell(overrideSentinel)}`;
+    await setupFixture(dir, {
+      name: "doctor accepted evaluator",
+      acceptedContract: true,
+      benchmarkCommand: accepted,
+    });
+
+    const result = await runCli([
+      "doctor",
+      "--cwd",
+      dir,
+      "--command",
+      override,
+      "--check-benchmark",
+      "--json-full",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.benchmark.checked, true);
+    assert.equal(payload.benchmark.exitCode, null);
+    assert.deepEqual(payload.benchmark.parsedMetrics, {});
+    assert.match(
+      `${payload.benchmark.metricError}\n${payload.issues.join("\n")}`,
+      /accepted.*evaluator|experiment contract|start a new segment/i,
+    );
+    await assert.rejects(readFile(overrideSentinel), /ENOENT/);
+
+    const acceptedResult = await runCli([
+      "doctor",
+      "--cwd",
+      dir,
+      "--check-benchmark",
+      "--json-full",
+    ]);
+    assert.equal(acceptedResult.code, 0, acceptedResult.stderr);
+    const acceptedPayload = JSON.parse(acceptedResult.stdout);
+    assert.equal(acceptedPayload.benchmark.parsedMetrics.seconds, 1);
+    assert.equal(acceptedPayload.benchmark.emitsPrimary, true);
   });
 });
 
@@ -381,7 +430,10 @@ test("doctor and recommend-next preserve setup authority for incomplete manual s
       "Manual baseline",
     ]);
     assert.notEqual(rejectedKeep.code, 0);
-    assert.match(rejectedKeep.stderr, /contract is not acceptable/i);
+    const rejection = JSON.parse(rejectedKeep.stderr);
+    assert.equal(rejection.code, "mutation-precondition-blocked");
+    assert.equal(rejection.preconditionDecision.primaryBlockerCode, "setup-required");
+    assert.equal(rejection.preconditionDecision.capabilities["authorize-keep"], "blocked");
 
     const doctor = await runCli([
       "doctor",
@@ -401,11 +453,15 @@ test("doctor and recommend-next preserve setup authority for incomplete manual s
     assert.equal(doctorPayload.preflight.status, "blocked");
     assert.equal(doctorPayload.explanation.preflight.status, "blocked");
     const doctorPlan = projectedPlan(doctorPayload);
-    assert.equal((doctorPlan.action as UnknownRecord).kind, "inspect-packet");
-    assert.equal(doctorPlan.primaryBlockerCode, "packet-diagnostic");
+    assert.equal((doctorPlan.action as UnknownRecord).kind, "setup");
+    assert.equal(doctorPlan.primaryBlockerCode, "setup-required");
     assert.equal(capabilityStatus(doctorPlan, "run-packet"), "blocked");
     assert.equal(capabilityStatus(doctorPlan, "authorize-keep"), "blocked");
     assert.ok(requiredEvidenceCodes(doctorPlan).includes("setup-required"));
+    assert.equal(doctorPlan.generationId, doctorPayload.preconditionDecision.generationId);
+    assert.equal(doctorPlan.decisionId, doctorPayload.preconditionDecision.decisionId);
+    assert.equal(doctorPlan.generationId, doctorPayload.resultingDecision.generationId);
+    assert.equal(doctorPlan.decisionId, doctorPayload.resultingDecision.decisionId);
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
@@ -418,6 +474,8 @@ test("doctor and recommend-next preserve setup authority for incomplete manual s
     assert.equal((recommendPlan.parentDisposition as UnknownRecord).kind, "hand-back");
     assert.ok(requiredEvidenceCodes(recommendPlan).includes("setup-required"));
     assert.match(recommendPayload.nextAction, /accepted experiment contract/i);
+    assert.equal(recommendPlan.generationId, doctorPlan.generationId);
+    assert.equal(recommendPlan.decisionId, doctorPlan.decisionId);
   });
 });
 
@@ -449,6 +507,9 @@ test("doctor --check-installed blocks non-fresh installed runtime before packet 
       acceptedContract: true,
     });
     assert.equal(setup.code, 0, setup.stderr);
+    const ordinaryState = await runCli(["state", "--cwd", dir, "--json-full"]);
+    assert.equal(ordinaryState.code, 0, ordinaryState.stderr);
+    const ordinaryPlan = projectedPlan(JSON.parse(ordinaryState.stdout));
 
     for (const status of ["stale", "missing", "unavailable"]) {
       await withTempDir(`runtime-cache-${status}`, async (homeDir) => {
@@ -468,25 +529,24 @@ test("doctor --check-installed blocks non-fresh installed runtime before packet 
         assert.equal(payload.runtimeAuthority.blocking, true, status);
         assert.equal(payload.runtimeAuthority.installedRuntime.status, status);
         const plan = projectedPlan(payload);
+        assert.deepEqual(plan, ordinaryPlan, status);
         const action = plan.action as UnknownRecord;
-        assert.equal(action.kind, "recover-session", status);
-        assert.equal(plan.primaryBlockerCode, "runtime-integrity", status);
-        assert.equal(capabilityStatus(plan, "mutate-session"), "recovery-only", status);
-        assert.equal(capabilityStatus(plan, "run-packet"), "blocked", status);
-        assert.equal(capabilityStatus(plan, "authorize-keep"), "blocked", status);
-        assert.equal(capabilityStatus(plan, "parent-final-answer"), "blocked", status);
-        assert.equal((plan.parentDisposition as UnknownRecord).kind, "block-final-answer", status);
-        assert.ok(requiredEvidenceCodes(plan).includes("runtime-integrity"), status);
+        assert.equal(action.kind, "run-baseline", status);
+        assert.deepEqual(requiredEvidenceCodes(plan), requiredEvidenceCodes(ordinaryPlan), status);
         assert.ok(acceptedCheckIdentities(plan).length > 0, status);
-        assert.equal(action.command, "", status);
         assert.match(
           payload.issues.join("\n"),
           new RegExp(`${status} installed plugin runtime`, "i"),
         );
-        assert.match(payload.nextAction, /installed.*runtime/i);
-        assert.match(payload.nextAction, /inspect|refresh/i);
-        assert.doesNotMatch(payload.nextAction, /Run the next experiment|next measured packet/i);
-        assert.match(payload.explanation.nextSafeAction, /installed.*runtime/i);
+        assert.match(payload.runtimeAuthority.blocker, /installed.*runtime/i);
+        assert.match(payload.runtimeAuthority.blocker, /inspect|refresh/i);
+        assert.match(payload.runtimeDriftSummary.nextActionHint, /runtime/i);
+        assert.equal(payload.nextAction, payload.decisionPlan.action.reason, status);
+        assert.equal(
+          payload.explanation.nextSafeAction,
+          payload.decisionPlan.action.reason,
+          status,
+        );
       });
     }
   });

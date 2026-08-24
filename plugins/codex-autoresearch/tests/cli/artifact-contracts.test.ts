@@ -7,10 +7,6 @@ import { quoteForShell } from "../helpers/process.js";
 import { git, runCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
 
 const contractChecksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
-const canonicalWrapperCommand =
-  process.platform === "win32"
-    ? "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1"
-    : "bash ./autoresearch.sh";
 
 async function appendLegacyLedgerRows(dir: string, rows: Record<string, unknown>[]) {
   const ledgerPath = path.join(dir, "autoresearch.jsonl");
@@ -27,8 +23,10 @@ async function prepareAcceptedCandidateFixture(
   options: {
     baselineMetric?: number;
     benchmarkCommand: string;
+    commandFile?: string;
     commandFileContract?: boolean;
     direction?: "higher" | "lower";
+    envFile?: string;
     metricName?: string;
     name: string;
   },
@@ -54,7 +52,11 @@ async function prepareAcceptedCandidateFixture(
         },
   );
   assert.equal(setup.code, 0, setup.stderr);
+  await mkdir(path.join(dir, "src"), { recursive: true });
   const configPath = path.join(dir, "autoresearch.config.json");
+  const commandFileContents = options.commandFile
+    ? await readFile(path.join(dir, options.commandFile), "utf8")
+    : "";
   const config = options.commandFileContract ? {} : JSON.parse(await readFile(configPath, "utf8"));
   await writeFile(
     configPath,
@@ -63,11 +65,14 @@ async function prepareAcceptedCandidateFixture(
         ...config,
         ...(options.commandFileContract
           ? {
+              benchmarkCommand: commandFileContents,
               checksCommand,
               commitPaths: ["src"],
               editableScope: ["src"],
               maxIterations: 6,
               packetBudget: 6,
+              packetEnvFile: options.envFile,
+              protectedBenchmarkPaths: [options.commandFile],
             }
           : {}),
         checkImplementationPaths: ["contract/checks.mjs"],
@@ -79,6 +84,20 @@ async function prepareAcceptedCandidateFixture(
     )}\n`,
     "utf8",
   );
+  await git(dir, ["init"]);
+  await git(dir, ["add", "-A"]);
+  await git(dir, ["commit", "-m", "accepted contract fixture"]);
+  const accepted = await runCli([
+    "new-segment",
+    "--cwd",
+    dir,
+    ...(options.commandFile ? ["--benchmark-command", commandFileContents] : []),
+    ...(options.envFile ? ["--packet-env-file", options.envFile] : []),
+    "--reason",
+    "Accept the complete packet fixture contract",
+    "--yes",
+  ]);
+  assert.equal(accepted.code, 0, accepted.stderr);
   const baseline = await runCli([
     "log",
     "--cwd",
@@ -91,9 +110,6 @@ async function prepareAcceptedCandidateFixture(
     "Accepted reference observation",
   ]);
   assert.equal(baseline.code, 0, baseline.stderr);
-  await git(dir, ["init"]);
-  await git(dir, ["add", "-A"]);
-  await git(dir, ["commit", "-m", "accepted contract fixture"]);
   await mkdir(path.join(dir, "src"), { recursive: true });
   await writeFile(path.join(dir, "src", "candidate.txt"), "accepted candidate\n", "utf8");
 }
@@ -102,7 +118,9 @@ async function setupCommandFileContract(
   dir: string,
   options: {
     checksCommand?: string;
+    commandFile: string;
     direction?: "higher" | "lower";
+    envFile: string;
     metricName?: string;
     name: string;
   },
@@ -113,22 +131,39 @@ async function setupCommandFileContract(
     name: options.name,
   });
   assert.equal(setup.code, 0, setup.stderr);
+  const benchmarkCommand = await readFile(path.join(dir, options.commandFile), "utf8");
   await mkdir(path.join(dir, "src"), { recursive: true });
   await writeFile(
     path.join(dir, "autoresearch.config.json"),
     `${JSON.stringify(
       {
+        benchmarkCommand,
         checksCommand: options.checksCommand ?? contractChecksCommand,
         commitPaths: ["src"],
         editableScope: ["src"],
         maxIterations: 6,
         packetBudget: 6,
+        packetEnvFile: options.envFile,
+        protectedBenchmarkPaths: [options.commandFile],
       },
       null,
       2,
     )}\n`,
     "utf8",
   );
+  const accepted = await runCli([
+    "new-segment",
+    "--cwd",
+    dir,
+    "--benchmark-command",
+    benchmarkCommand,
+    "--packet-env-file",
+    options.envFile,
+    "--reason",
+    "Accept the command-file packet fixture contract",
+    "--yes",
+  ]);
+  assert.equal(accepted.code, 0, accepted.stderr);
 }
 
 test("skill metadata keeps the default prompt inside the interface mapping", async () => {
@@ -156,14 +191,16 @@ test("next supports command-file, env-file, and ARTIFACT output contracts", asyn
       "console.log(`METRIC score=${process.env.SCORE}`);\nconsole.log('ARTIFACT manifest=out/manifest.json');\nconsole.log('ARTIFACT task_manifest=out/task-manifest.json');\n",
       "utf8",
     );
-    await writeFile(path.join(dir, "packet.command"), "node packet-runner.mjs\n", "utf8");
+    await writeFile(path.join(dir, "packet.command"), "node packet-runner.mjs", "utf8");
     await writeFile(path.join(dir, ".packet.env"), "SCORE=7\n", "utf8");
     await prepareAcceptedCandidateFixture(dir, {
       name: "artifact packet",
       metricName: "score",
       direction: "higher",
       benchmarkCommand: "node packet-runner.mjs",
+      commandFile: "packet.command",
       commandFileContract: true,
+      envFile: ".packet.env",
     });
 
     const packet = await runCli([
@@ -217,7 +254,7 @@ test("malformed task manifests are quarantined without invalidating primary metr
       name: "task manifest",
       metricName: "score",
       direction: "higher",
-      completeContract: true,
+      acceptedContract: true,
       benchmarkCommand: command,
     });
     await writeFile(path.join(dir, "task-manifest.json"), "{not json}\n", "utf8");
@@ -256,7 +293,7 @@ test("symlinked task manifests outside the workdir are quarantined", async (t) =
         name: "task manifest symlink",
         metricName: "score",
         direction: "higher",
-        completeContract: true,
+        acceptedContract: true,
         benchmarkCommand: command,
       });
 
@@ -315,7 +352,6 @@ test("external catalog recipes require trust and record provenance", async () =>
       "--catalog",
       catalogPath,
       "--trust-catalog",
-      "--skip-init",
       "--commit-paths",
       "src",
       "--max-iterations",
@@ -345,6 +381,17 @@ test("external catalog recipes require trust and record provenance", async () =>
     assert.equal(planPayload.recommendedRecipe.id, "external-speed");
     assert.match(planPayload.nextCommand, /--catalog/);
     assert.match(planPayload.nextCommand, /--trust-catalog/);
+
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    const accepted = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "Accept the trusted external recipe contract",
+      "--yes",
+    ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
 
     catalog.recipes[0].benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
     await writeFile(catalogPath, JSON.stringify(catalog, null, 2), "utf8");
@@ -416,13 +463,6 @@ test("doctor skips remote catalog requests unless revalidation is explicit", asy
 test("external ARTIFACT paths are quarantined instead of stored as usable paths", async () => {
   await withTempDir("external-artifact", async (dir) => {
     const command = `${quoteForShell(process.execPath)} packet-runner.mjs`;
-    await setupFixture(dir, {
-      name: "external artifact packet",
-      metricName: "score",
-      direction: "higher",
-      completeContract: true,
-      benchmarkCommand: command,
-    });
     const outside = path.join(path.dirname(dir), "outside-manifest.json");
     await writeFile(
       path.join(dir, "packet-runner.mjs"),
@@ -432,6 +472,13 @@ test("external ARTIFACT paths are quarantined instead of stored as usable paths"
       ].join("\n"),
       "utf8",
     );
+    await setupFixture(dir, {
+      name: "external artifact packet",
+      metricName: "score",
+      direction: "higher",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
 
     const packet = await runCli(["next", "--cwd", dir]);
     assert.equal(packet.code, 0, packet.stderr);
@@ -478,13 +525,6 @@ test("ARTIFACT paths through linked directories outside the workdir are quaranti
       }
 
       const command = `${quoteForShell(process.execPath)} packet-runner.mjs`;
-      await setupFixture(dir, {
-        name: "linked external artifact",
-        metricName: "score",
-        direction: "higher",
-        completeContract: true,
-        benchmarkCommand: command,
-      });
       await writeFile(
         path.join(dir, "packet-runner.mjs"),
         [
@@ -493,6 +533,13 @@ test("ARTIFACT paths through linked directories outside the workdir are quaranti
         ].join("\n"),
         "utf8",
       );
+      await setupFixture(dir, {
+        name: "linked external artifact",
+        metricName: "score",
+        direction: "higher",
+        acceptedContract: true,
+        benchmarkCommand: command,
+      });
 
       const packet = await runCli(["next", "--cwd", dir]);
       assert.equal(packet.code, 0, packet.stderr);
@@ -570,11 +617,6 @@ test("accepted logged artifacts become current evidence in state registry", asyn
 test("last-run packet storage redacts raw benchmark evidence and still logs from last", async () => {
   await withTempDir("last-run-redaction", async (dir) => {
     const command = `${quoteForShell(process.execPath)} runner.mjs`;
-    await setupFixture(dir, {
-      name: "redacted packet",
-      completeContract: true,
-      benchmarkCommand: command,
-    });
     await writeFile(
       path.join(dir, "runner.mjs"),
       [
@@ -584,6 +626,11 @@ test("last-run packet storage redacts raw benchmark evidence and still logs from
       ].join("\n"),
       "utf8",
     );
+    await setupFixture(dir, {
+      name: "redacted packet",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
 
     const packet = await runCli(["next", "--cwd", dir]);
     assert.equal(packet.code, 0, packet.stderr);
@@ -627,11 +674,13 @@ test("last-run packet storage redacts run benchmark contract command and option-
     const envFile = path.join(dir, ".env.private");
     const checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)" -- --token ${checksSecret}`;
     const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')" -- --api-key ${commandSecret}`;
-    await writeFile(commandFile, `${benchmarkCommand}\n`, "utf8");
+    await writeFile(commandFile, benchmarkCommand, "utf8");
     await writeFile(envFile, "PACKET_TOKEN=env-secret-qwertyuiop\n", "utf8");
     await setupCommandFileContract(dir, {
       name: "redacted contract",
       checksCommand,
+      commandFile: "private-packet.command",
+      envFile: ".env.private",
     });
 
     const packet = await runCli([
@@ -661,7 +710,7 @@ test("last-run packet storage redacts run benchmark contract command and option-
     assert.equal(
       stored.run.acceptedEvaluator.execution.protectedInputs.some(
         (input: Record<string, unknown>) =>
-          input.role === "command-file" && input.path === "private-packet.command",
+          input.role === "evaluator" && input.path === "private-packet.command",
       ),
       true,
     );
@@ -673,10 +722,12 @@ test("last-run packet storage does not corrupt common option-file basenames", as
     const commandFile = path.join(dir, "run");
     const envFile = path.join(dir, "env");
     const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3'); console.log('ordinary run env node packet text')"`;
-    await writeFile(commandFile, [benchmarkCommand, ""].join("\n"), "utf8");
+    await writeFile(commandFile, benchmarkCommand, "utf8");
     await writeFile(envFile, "PACKET_TOKEN=common-name-env-value\n", "utf8");
     await setupCommandFileContract(dir, {
       name: "common basename contract",
+      commandFile: "run",
+      envFile: "env",
     });
 
     const packet = await runCli([
@@ -697,7 +748,7 @@ test("last-run packet storage does not corrupt common option-file basenames", as
     const acceptedExecution = stored.run.acceptedEvaluator.execution;
     assert.equal(
       acceptedExecution.protectedInputs.some(
-        (input: Record<string, unknown>) => input.role === "command-file" && input.path === "run",
+        (input: Record<string, unknown>) => input.role === "evaluator" && input.path === "run",
       ),
       true,
     );
@@ -711,9 +762,6 @@ test("last-run packet storage does not corrupt common option-file basenames", as
 test("next command response redacts raw benchmark evidence", async () => {
   await withTempDir("run-response-redaction", async (dir) => {
     const command = `${quoteForShell(process.execPath)} runner.mjs`;
-    await setupCommandFileContract(dir, {
-      name: "redacted run",
-    });
     await writeFile(
       path.join(dir, "runner.mjs"),
       [
@@ -728,8 +776,13 @@ test("next command response redacts raw benchmark evidence", async () => {
       ].join("\n"),
       "utf8",
     );
-    await writeFile(path.join(dir, "packet.command"), `${command}\n`, "utf8");
+    await writeFile(path.join(dir, "packet.command"), command, "utf8");
     await writeFile(path.join(dir, ".env.secret"), "SAMPLE_SECRET=from-env-secret-value\n", "utf8");
+    await setupCommandFileContract(dir, {
+      name: "redacted run",
+      commandFile: "packet.command",
+      envFile: ".env.secret",
+    });
 
     const result = await runCli([
       "next",
@@ -761,18 +814,20 @@ test("next command response redacts raw benchmark evidence", async () => {
 
 test("command and env files are included in benchmark contract drift", async () => {
   await withTempDir("command-env-contract-drift", async (dir) => {
-    await setupCommandFileContract(dir, {
-      name: "contract files",
-      metricName: "score",
-      direction: "higher",
-    });
     await writeFile(
       path.join(dir, "packet-runner.mjs"),
       "console.log(`METRIC score=${process.env.SCORE}`);\n",
       "utf8",
     );
-    await writeFile(path.join(dir, "packet.command"), "node packet-runner.mjs\n", "utf8");
+    await writeFile(path.join(dir, "packet.command"), "node packet-runner.mjs", "utf8");
     await writeFile(path.join(dir, ".packet.env"), "SCORE=7\n", "utf8");
+    await setupCommandFileContract(dir, {
+      name: "contract files",
+      metricName: "score",
+      direction: "higher",
+      commandFile: "packet.command",
+      envFile: ".packet.env",
+    });
 
     const packet = await runCli([
       "next",
@@ -833,7 +888,7 @@ test("packet env defaults to minimal and is part of benchmark contract and docto
       name: "env mode contract",
       metricName: "score",
       direction: "higher",
-      completeContract: true,
+      acceptedContract: true,
       benchmarkCommand: command,
     });
     const previous = process.env.AUTORESEARCH_ENV_MODE_REVIEW;
@@ -857,15 +912,7 @@ test("packet env defaults to minimal and is part of benchmark contract and docto
       const loggedPayload = JSON.parse(logged.stdout);
       assert.equal(loggedPayload.experiment.benchmarkContract.packetEnvMode, "minimal");
 
-      const doctor = await runCli([
-        "doctor",
-        "--cwd",
-        dir,
-        "--command",
-        canonicalWrapperCommand,
-        "--check-benchmark",
-        "--json-full",
-      ]);
+      const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--json-full"]);
       assert.equal(doctor.code, 0, doctor.stderr);
       const doctorPayload = JSON.parse(doctor.stdout);
       assert.equal(doctorPayload.benchmark.packetEnvMode, "minimal");
@@ -875,8 +922,6 @@ test("packet env defaults to minimal and is part of benchmark contract and docto
         "doctor",
         "--cwd",
         dir,
-        "--command",
-        canonicalWrapperCommand,
         "--check-benchmark",
         "--packet-env-mode",
         "inherit",
@@ -884,8 +929,13 @@ test("packet env defaults to minimal and is part of benchmark contract and docto
       ]);
       assert.equal(inheritedDoctor.code, 0, inheritedDoctor.stderr);
       const inheritedDoctorPayload = JSON.parse(inheritedDoctor.stdout);
-      assert.equal(inheritedDoctorPayload.benchmark.packetEnvMode, "inherit");
-      assert.equal(inheritedDoctorPayload.benchmark.parsedMetrics.score, 2);
+      assert.equal(inheritedDoctorPayload.ok, false);
+      assert.equal(inheritedDoctorPayload.benchmark.packetEnvMode, null);
+      assert.deepEqual(inheritedDoctorPayload.benchmark.parsedMetrics, {});
+      assert.match(
+        `${inheritedDoctorPayload.benchmark.metricError}\n${inheritedDoctorPayload.issues.join("\n")}`,
+        /accepted.*experiment contract|start a new segment/i,
+      );
     } finally {
       if (previous == null) delete process.env.AUTORESEARCH_ENV_MODE_REVIEW;
       else process.env.AUTORESEARCH_ENV_MODE_REVIEW = previous;

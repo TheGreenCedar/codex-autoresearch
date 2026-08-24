@@ -9,6 +9,17 @@ import {
   TOOL_STYLE_UNSAFE_COMMAND_GATE,
   toolSchemaRequiresUnsafeCommandGate,
 } from "./tool-unsafe-command-gate.js";
+import {
+  DECISION_ACTION_KINDS,
+  DECISION_CAPABILITIES,
+  DECISION_OUTCOME_KINDS,
+  decisionDiagnosticRegistry,
+  failureLayerPreconditions,
+} from "./decision-compiler.js";
+import {
+  COMMAND_MUTATION_RECEIPT_SCHEMA_VERSION,
+  DECISION_COMPILER_SCHEMA_VERSION,
+} from "./decision-schema-versions.js";
 
 type JsonSchema = CommandJsonSchema & {
   description?: string;
@@ -24,6 +35,125 @@ type ToolSchema = {
   [key: string]: unknown;
 };
 
+const closedObjectSchema = (
+  properties: Record<string, JsonSchema>,
+  required = Object.keys(properties),
+): JsonSchema => ({
+  type: "object",
+  properties,
+  required,
+  additionalProperties: false,
+});
+const nullableEnumStringSchema = (values: string[]): JsonSchema => ({
+  type: ["string", "null"],
+  enum: [...values, null],
+});
+const enumStringSchema = (values: string[]): JsonSchema => ({ type: "string", enum: values });
+const integerSchema = (): JsonSchema => ({ type: "integer" });
+const integerLiteralSchema = (value: number): JsonSchema => ({ type: "integer", enum: [value] });
+const booleanValueSchema = (): JsonSchema => ({ type: "boolean" });
+const stringValueSchema = (): JsonSchema => ({ type: "string" });
+const stringListSchema = (items: JsonSchema = stringValueSchema()): JsonSchema => ({
+  type: "array",
+  items,
+});
+
+const DECISION_DIAGNOSTIC_CODES = Object.keys(decisionDiagnosticRegistry).sort();
+const FAILURE_LAYERS = Object.keys(failureLayerPreconditions).sort();
+const DECISION_PLAN_SCHEMA: JsonSchema = closedObjectSchema({
+  kind: enumStringSchema(["decision-plan"]),
+  compilerSchemaVersion: integerLiteralSchema(DECISION_COMPILER_SCHEMA_VERSION),
+  generationId: stringValueSchema(),
+  decisionId: stringValueSchema(),
+  phase: enumStringSchema([
+    "complete",
+    "direct-work",
+    "finalization",
+    "packet",
+    "paused",
+    "recovery",
+    "setup",
+  ]),
+  action: closedObjectSchema({
+    kind: enumStringSchema([...DECISION_ACTION_KINDS]),
+    reason: stringValueSchema(),
+    command: stringValueSchema(),
+    commandDigest: stringValueSchema(),
+    commandSemanticId: stringValueSchema(),
+  }),
+  primaryBlockerCode: nullableEnumStringSchema(DECISION_DIAGNOSTIC_CODES),
+  capabilities: closedObjectSchema(
+    Object.fromEntries(
+      DECISION_CAPABILITIES.map((capability) => [
+        capability,
+        enumStringSchema(["allowed", "blocked", "recovery-only"]),
+      ]),
+    ),
+  ),
+  loopDisposition: closedObjectSchema({
+    kind: enumStringSchema(["blocked", "complete", "continue", "pause"]),
+    canRunPacket: booleanValueSchema(),
+    shouldContinue: booleanValueSchema(),
+  }),
+  parentDisposition: closedObjectSchema({
+    kind: enumStringSchema(["block-final-answer", "complete", "continue-working", "hand-back"]),
+    mayAnswer: booleanValueSchema(),
+    mayClaimCompletion: booleanValueSchema(),
+  }),
+  contractDigest: stringValueSchema(),
+  evaluatorIdentity: stringValueSchema(),
+  requiredEvidence: closedObjectSchema({
+    preconditionEpoch: stringValueSchema(),
+    acceptedCheckIdentities: stringListSchema(),
+    diagnosticCodes: stringListSchema(enumStringSchema(DECISION_DIAGNOSTIC_CODES)),
+    capabilityEffectCodes: stringListSchema(),
+    failureLayer: nullableEnumStringSchema(FAILURE_LAYERS),
+    failurePreconditions: stringListSchema(),
+  }),
+  outcome: closedObjectSchema({
+    kind: enumStringSchema([...DECISION_OUTCOME_KINDS]),
+  }),
+  learning: closedObjectSchema({
+    latest: {
+      oneOf: [
+        closedObjectSchema({
+          kind: enumStringSchema(["none"]),
+          changedBelief: { type: "null" },
+          evidence: { ...stringListSchema(), maxItems: 0 },
+        }),
+        closedObjectSchema({
+          kind: enumStringSchema(["causal", "discriminating"]),
+          changedBelief: { type: "string", minLength: 1 },
+          evidence: {
+            ...stringListSchema({ type: "string", minLength: 1 }),
+            minItems: 1,
+          },
+        }),
+      ],
+    },
+    consecutiveNoLearningCandidates: { ...integerSchema(), minimum: 0 },
+  }),
+  failures: closedObjectSchema({
+    layer: nullableEnumStringSchema(FAILURE_LAYERS),
+    consecutive: { ...integerSchema(), minimum: 0 },
+  }),
+});
+
+const COMMAND_MUTATION_RECEIPT_SCHEMA: JsonSchema = closedObjectSchema({
+  kind: enumStringSchema(["command-mutation-receipt"]),
+  schemaVersion: integerLiteralSchema(COMMAND_MUTATION_RECEIPT_SCHEMA_VERSION),
+  receiptId: stringValueSchema(),
+  command: stringValueSchema(),
+  status: enumStringSchema(["completed", "failed"]),
+  startedAt: stringValueSchema(),
+  completedAt: stringValueSchema(),
+  workDir: stringValueSchema(),
+  preconditionGenerationId: stringValueSchema(),
+  resultingCaptureStatus: enumStringSchema(["captured", "unavailable"]),
+  resultingGenerationId: { type: ["string", "null"] },
+  generationChanged: { type: ["boolean", "null"] },
+});
+
 const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
   action: stringSchema("Safe next action summary."),
   backupPath: stringSchema("Backup file path written before ledger repair."),
@@ -34,13 +164,14 @@ const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
   healthUrl: stringSchema("Dashboard health-check URL."),
   lastRunPath: stringSchema("Path to the saved last-run packet."),
   ledgerPath: stringSchema("Autoresearch JSONL ledger path."),
+  markerPath: stringSchema("Exact retained process marker removed after dead-process proof."),
   nextAction: stringSchema("Recommended next operator action."),
   output: stringSchema("Output file path or command output."),
   outputPreview: stringSchema("Bounded command output preview."),
   packetFingerprint: stringSchema("Freshness fingerprint from the packet evidence bundle."),
-  preconditionDecision: objectSchema("Canonical decision captured before a session mutation."),
+  preconditionDecision: DECISION_PLAN_SCHEMA,
   registryPath: stringSchema("Local dashboard registry path."),
-  resultingDecision: objectSchema("Canonical decision captured after a session mutation."),
+  resultingDecision: DECISION_PLAN_SCHEMA,
   slug: stringSchema("Research slug."),
   stage: stringSchema("Setup or resume stage."),
   startedAt: stringSchema("ISO timestamp for when the process started."),
@@ -59,6 +190,7 @@ const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
   ok: booleanSchema("True when the tool completed successfully."),
   readOnly: booleanSchema("True when the command made no file changes."),
   ready: booleanSchema("True when the preview is ready to apply."),
+  recovered: booleanSchema("True when the scoped process-integrity marker was recovered."),
   stopRecommended: booleanSchema("True when candidate extraction recommends stopping."),
   verified: booleanSchema("True when the dashboard health check passed."),
   candidates: objectArraySchema("Candidate items."),
@@ -71,9 +203,11 @@ const OUTPUT_FIELD_SCHEMAS: Record<string, JsonSchema> = {
   issues: stringArraySchema("Validation or readiness issues."),
   missing: stringArraySchema("Missing setup fields."),
   missingEssentials: stringArraySchema("Missing essentials for the first valid loop."),
-  mutation: objectSchema("Command-scoped mutation receipt."),
+  mutation: COMMAND_MUTATION_RECEIPT_SCHEMA,
   openItems: stringArraySchema("Open quality-gap items."),
   plannedFiles: stringArraySchema("Planned file paths."),
+  proof: objectSchema("Typed dead-process proof used for scoped marker recovery."),
+  provenDeadPids: numberArraySchema("Process identifiers proven absent before marker removal."),
   recipes: objectArraySchema("Available recipes."),
   templates: objectArraySchema("Report templates."),
   updates: stringArraySchema("Applied config updates."),
@@ -197,24 +331,38 @@ function commandSafety(command: CommandDefinition): string {
 }
 
 function outputSchemaFor(command: CommandDefinition): JsonSchema {
-  const outputFields = [
-    ...command.outputFields,
-    ...(command.decisionProtocol === "session-mutation"
-      ? ["preconditionDecision", "mutation", "resultingDecision"]
-      : []),
-  ];
+  const protocolFields = ["preconditionDecision", "mutation", "resultingDecision"];
+  const usesMutationProtocol = command.decisionProtocol === "session-mutation";
+  const outputFields = [...command.outputFields, ...(usesMutationProtocol ? protocolFields : [])];
   const properties = Object.fromEntries(
     outputFields.map((field) => [
       field,
       command.outputSchemaOverrides?.[field] || schemaForOutputField(field),
     ]),
   );
-  return {
+  const baseRequired = command.outputFields.filter(
+    (field) => field === "ok" || field === "workDir",
+  );
+  const schema: JsonSchema = {
     type: "object",
-    required: command.outputFields.filter((field) => field === "ok" || field === "workDir"),
+    required: [
+      ...baseRequired,
+      ...(usesMutationProtocol && !command.conditionallyMutating ? protocolFields : []),
+    ],
     properties,
     additionalProperties: true,
   };
+  if (usesMutationProtocol && command.conditionallyMutating) {
+    schema.oneOf = [
+      {
+        not: {
+          anyOf: protocolFields.map((field) => ({ required: [field] })),
+        },
+      },
+      { required: protocolFields },
+    ];
+  }
+  return schema;
 }
 
 function toolHintAnnotations(name: string, inputSchema: JsonSchema) {
@@ -268,4 +416,8 @@ function stringArraySchema(description: string): JsonSchema {
 
 function objectArraySchema(description: string): JsonSchema {
   return { type: "array", description, items: objectSchema("Item.") };
+}
+
+function numberArraySchema(description: string): JsonSchema {
+  return { type: "array", description, items: numberSchema("Item.") };
 }

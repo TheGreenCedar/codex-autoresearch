@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { finalizer, git, run, testWithTempRoot, writeFile } from "./helpers.js";
+import { assertGeneratedPlanMetadata } from "../../lib/finalization-plan.js";
+import { finalizePreview } from "../../lib/finalize-preview.js";
+import {
+  finalizer,
+  git,
+  run,
+  testWithTempRoot,
+  writeCompleteFinalizationEvidenceFixture,
+  writeFile,
+} from "./helpers.js";
 
 testWithTempRoot(
   "finalizer plan recommends collapsing overlap and can collapse on request",
@@ -57,7 +66,8 @@ testWithTempRoot(
         }),
       ].join("\n") + "\n",
     );
-    await git(["add", "autoresearch.jsonl"], repo);
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: secondHash });
+    await git(["add", "-f", "autoresearch.jsonl"], repo);
     await git(["commit", "-m", "session log"], repo);
 
     const output = path.join(root, "plans", "nested", "groups.json");
@@ -212,29 +222,40 @@ testWithTempRoot(
         }),
       ].join("\n") + "\n",
     );
-    await git(["add", "autoresearch.jsonl"], repo);
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: secondHash });
+    await git(["add", "-f", "autoresearch.jsonl"], repo);
     await git(["commit", "-m", "session log"], repo);
+
+    const readiness = await finalizePreview({ cwd: repo, trunk: "main" });
+    assert.equal(readiness.ready, false);
+    assert.ok(readiness.excludedPlannedFileConflicts.length > 0);
+    assert.ok(
+      readiness.excludedPlannedFileConflicts.some((commit) => commit.files.includes("src/a.txt")),
+    );
 
     const output = path.join(root, "groups.json");
     const preview = await run(
       process.execPath,
       [finalizer, "plan", "--output", output, "--goal", "collapse-conflict", "--collapse-overlap"],
       repo,
+      true,
     );
-    assert.match(preview.stdout, /Groups: 1/);
+    assert.notEqual(preview.code, 0);
+    const refusal = JSON.parse(preview.stderr);
+    assert.equal(refusal.code, "mutation-precondition-blocked");
+    assert.equal(refusal.preconditionDecision.primaryBlockerCode, "current-tree-finalization");
+    assert.equal(refusal.preconditionDecision.capabilities.finalize, "recovery-only");
+    assert.equal(refusal.mutation, undefined);
+    await assert.rejects(fsp.access(output));
 
-    const tamperedOutput = path.join(root, "tampered-groups.json");
-    const tamperedPlan = JSON.parse(await fsp.readFile(output, "utf8"));
-    assert.ok(tamperedPlan.excluded_commit_count > 0);
-    tamperedPlan.excluded_commits = [];
-    await fsp.writeFile(tamperedOutput, JSON.stringify(tamperedPlan, null, 2) + "\n", "utf8");
-    const tamperedResult = await run(process.execPath, [finalizer, tamperedOutput], repo, true);
-    assert.notEqual(tamperedResult.code, 0);
-    assert.match(tamperedResult.stderr, /excluded_commit_count does not match excluded_commits/);
-
-    const result = await run(process.execPath, [finalizer, output], repo, true);
-    assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /excluded commits touch planned kept files/);
+    assert.throws(
+      () =>
+        assertGeneratedPlanMetadata({
+          excluded_commit_count: 1,
+          excluded_commits: [],
+        }),
+      /excluded_commit_count does not match excluded_commits/,
+    );
     const reviewBranches = (
       await git(["branch", "--list", "autoresearch-review/*"], repo)
     ).stdout.trim();

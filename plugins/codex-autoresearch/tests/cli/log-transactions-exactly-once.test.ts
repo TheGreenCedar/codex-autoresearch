@@ -54,12 +54,6 @@ async function setupTransactionFixture(
     untrackedCandidate?: boolean;
   } = {},
 ) {
-  await setupFixture(dir, {
-    name: "exactly once logging",
-    goal: "Keep only accepted candidate evidence.",
-    metricName: "score",
-    direction: "higher",
-  });
   await mkdir(path.join(dir, "src"), { recursive: true });
   await mkdir(path.join(dir, "contract"), { recursive: true });
   await writeFile(path.join(dir, "src", "score.txt"), `${options.initialScore ?? "1"}\n`);
@@ -96,18 +90,33 @@ async function setupTransactionFixture(
     ].join("\n"),
   );
   await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n");
+  const benchmarkCommand = `${quoteForShell(process.execPath)} contract/evaluator.mjs`;
+  const checksCommand = `${quoteForShell(process.execPath)} contract/checks.mjs`;
+  const setup = await setupFixture(dir, {
+    name: "exactly once logging",
+    goal: "Keep only accepted candidate evidence.",
+    metricName: "score",
+    direction: "higher",
+    completeContract: true,
+    benchmarkCommand,
+    checksCommand,
+    packetBudget: 20,
+    scope: "src",
+  });
+  assert.equal(setup.code, 0, setup.stderr);
   const protectedPaths = ["contract/evaluator.mjs"];
   if (options.protectedArtifact && options.artifactPath) {
     protectedPaths.push(options.artifactPath);
   }
+  const configPath = path.join(dir, "autoresearch.config.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
   await writeFile(
-    path.join(dir, "autoresearch.config.json"),
+    configPath,
     `${JSON.stringify(
       {
-        benchmarkCommand: `${quoteForShell(process.execPath)} contract/evaluator.mjs`,
+        ...config,
         checkImplementationPaths: ["contract/checks.mjs"],
         checksAuthoritative: true,
-        checksCommand: `${quoteForShell(process.execPath)} contract/checks.mjs`,
         commitPaths: options.commitPaths ?? ["src"],
         editableScope: ["src"],
         maxIterations: 20,
@@ -119,23 +128,49 @@ async function setupTransactionFixture(
       2,
     )}\n`,
   );
-  const baseline = await runCli([
-    "log",
-    "--cwd",
-    dir,
-    "--metric",
-    "1",
-    "--status",
-    "measure",
-    "--description",
-    "Manual reference observation",
-  ]);
-  assert.equal(baseline.code, 0, baseline.stderr);
   await git(dir, ["init"]);
   await git(dir, ["add", "."]);
   await git(dir, ["commit", "-m", "initial session"]);
   const initialCommit = await git(dir, ["rev-parse", "HEAD"]);
-  await writeFile(path.join(dir, "src", "score.txt"), `${options.candidateScore ?? "2"}\n`);
+  const acceptContract = async () => {
+    const acceptedContract = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "Accept the exactly-once transaction fixture contract",
+      "--yes",
+    ]);
+    assert.equal(acceptedContract.code, 0, acceptedContract.stderr);
+  };
+  const logBaseline = async () => {
+    const baseline = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "measure",
+      "--description",
+      "Manual reference observation",
+    ]);
+    assert.equal(baseline.code, 0, baseline.stderr);
+  };
+  if (options.outsideDirtyBeforePacket) {
+    await writeFile(path.join(dir, "outside.txt"), "outside accepted dirty state\n");
+  }
+  if (options.commitCandidateBeforePacket) {
+    await writeFile(path.join(dir, "src", "score.txt"), `${options.candidateScore ?? "2"}\n`);
+    await git(dir, ["add", "src/score.txt"]);
+    await git(dir, ["commit", "-m", "imported candidate"]);
+    await acceptContract();
+    await logBaseline();
+  } else {
+    await acceptContract();
+    await logBaseline();
+    await writeFile(path.join(dir, "src", "score.txt"), `${options.candidateScore ?? "2"}\n`);
+  }
   if (options.untrackedCandidate) {
     await writeFile(path.join(dir, "src", "scratch.txt"), "candidate scratch\n");
   }
@@ -159,13 +194,6 @@ async function setupTransactionFixture(
     await writeFile(path.join(dir, "src", "a.txt"), "tracked candidate a\n");
     await writeFile(path.join(dir, "src", "z", "blocked.txt"), "tracked candidate blocked\n");
   }
-  if (options.outsideDirtyBeforePacket) {
-    await writeFile(path.join(dir, "outside.txt"), "outside accepted dirty state\n");
-  }
-  if (options.commitCandidateBeforePacket) {
-    await git(dir, ["add", "src/score.txt"]);
-    await git(dir, ["commit", "-m", "imported candidate"]);
-  }
   if (options.detachBeforePacket) {
     await git(dir, ["switch", "--detach"]);
   }
@@ -174,7 +202,11 @@ async function setupTransactionFixture(
   }
   const packet = await runCli(["next", "--cwd", dir]);
   assert.equal(packet.code, 0, packet.stderr);
-  assert.equal(JSON.parse(packet.stdout).decision.allowedStatuses.includes("keep"), true);
+  assert.equal(
+    JSON.parse(packet.stdout).decision.allowedStatuses.includes("keep"),
+    true,
+    packet.stdout,
+  );
   return { initialCommit };
 }
 
@@ -1533,7 +1565,7 @@ test("cleanup plans structurally exclude session and evidence paths before destr
   });
 });
 
-test("retry repairs only a transaction-owned torn ledger suffix", async () => {
+test("real log retry repairs only a receipt-owned torn ledger suffix", async () => {
   await withTempDir("owned-torn-ledger-suffix", async (dir) => {
     await setupTransactionFixture(dir);
     await assert.rejects(
@@ -1560,9 +1592,10 @@ test("retry repairs only a transaction-owned torn ledger suffix", async () => {
       "utf8",
     );
 
-    const retried = await invokeLog(keepArgs(dir));
+    const retried = await runCli(keepCliArgs(dir));
 
-    assert.equal(retried.ok, true);
+    assert.equal(retried.code, 0, retried.stderr);
+    assert.equal(JSON.parse(retried.stdout).ok, true);
     const rows = await ledgerRows(dir);
     const transactionRows = rows.filter((row) => row.logTransaction?.id === pending.transaction.id);
     assert.equal(transactionRows.length, baseRows.length);
@@ -1570,6 +1603,33 @@ test("retry repairs only a transaction-owned torn ledger suffix", async () => {
       new Set(transactionRows.map((row) => row.logTransaction.entryIndex)).size,
       baseRows.length,
     );
+  });
+});
+
+test("pending log recovery refuses an unrelated malformed ledger suffix", async () => {
+  await withTempDir("foreign-torn-ledger-suffix", async (dir) => {
+    await setupTransactionFixture(dir);
+    await assert.rejects(
+      invokeLog(keepArgs(dir), {
+        faultInjection: (seen) => failAt(seen, "before:ledger-event-present"),
+      }),
+      /before:ledger-event-present/,
+    );
+    const pendingPath = await receiptPath(dir);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const beforeReceipt = await readFile(pendingPath, "utf8");
+    await appendFile(ledgerPath, '{"foreign":"corruption"', "utf8");
+    const beforeLedger = await readFile(ledgerPath, "utf8");
+
+    const refused = await runCli(keepCliArgs(dir));
+
+    assert.notEqual(refused.code, 0);
+    assert.match(
+      refused.stderr,
+      /ledger.*integrity|receipt-owned|unambiguous partial write|malformed/i,
+    );
+    assert.equal(await readFile(ledgerPath, "utf8"), beforeLedger);
+    assert.equal(await readFile(pendingPath, "utf8"), beforeReceipt);
   });
 });
 

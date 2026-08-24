@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -21,13 +21,22 @@ import {
   readAutoresearchLedger,
   type FinalizationEvidenceFingerprint,
 } from "../lib/finalization-plan.js";
-import { buildFinalizationProductClaimCoverageFromLedger } from "../lib/product-claim-coverage.js";
-import { runCommandDecisionProtocol } from "../lib/command-decision-protocol.js";
-import { resolveWorkDir } from "../lib/session-core.js";
+import {
+  buildFinalizationProductClaimCoverageFromLedger,
+  productClaimCoverageFingerprintMaterial,
+} from "../lib/product-claim-coverage.js";
+import {
+  CommandDecisionProtocolError,
+  commandDecisionProtocolFailureEnvelope,
+  runCommandDecisionProtocol,
+} from "../lib/command-decision-protocol.js";
+import { resolveInitialSessionMutationRoute } from "../lib/coherent-session-snapshot.js";
 import {
   sessionMutationLockLocation,
   withSessionMutationLock,
 } from "../lib/session-mutation-lock.js";
+import { appendJsonl } from "../lib/session-records.js";
+import type { DecisionPlan } from "../lib/decision-compiler.js";
 import {
   CLEANUP_SESSION_PATHS,
   REPORT_DIRNAME,
@@ -741,7 +750,8 @@ function renderSuggestedPrBlocks(
   results: BranchResult[],
 ): string[] {
   const lines = ["", "## Suggested PRs", ""];
-  if (productGradeFinalizationIssue(config.product_claim_coverage)) {
+  const productGradeIssue = productGradeFinalizationIssue(config.product_claim_coverage);
+  if (productGradeIssue) {
     lines.push(
       "Experimental review branch only: product-grade proof is missing.",
       "Do not describe this handoff as shippable or merge-ready until the missing proof is recorded.",
@@ -1296,7 +1306,7 @@ async function writeDraftPlan(args: CliArgs, cwd: string): Promise<FinalizePlan>
   return plan;
 }
 
-async function executeFinalizer(cli: CliArgs, cwd: string) {
+async function executeFinalizer(cli: CliArgs, cwd: string, completionAuthority?: DecisionPlan) {
   const command = cli._[0];
   const file = command;
   if (command === "plan") {
@@ -1318,6 +1328,7 @@ async function executeFinalizer(cli: CliArgs, cwd: string) {
     parsed.final_tree = await fullHash(parsed.final_tree, cwd);
     return await hydratePlanProductClaimCoverage(parsed as FinalizePlan, cwd);
   });
+  assertCurrentTreeRecoveryPlan(config, completionAuthority);
 
   const sourceBranch = await withPhase(
     "preflight",
@@ -1470,7 +1481,8 @@ async function executeFinalizer(cli: CliArgs, cwd: string) {
     console.log(`  ${result.branch} (${branchProvenance(result)})`);
   }
   console.log("");
-  if (productGradeFinalizationIssue(config.product_claim_coverage)) {
+  const productGradeIssue = productGradeFinalizationIssue(config.product_claim_coverage);
+  if (productGradeIssue) {
     console.log("Experimental review branch only: product-grade proof is missing.");
     console.log(
       "Runway: preview -> create experimental review branch -> verify -> add proof before merge claim.",
@@ -1486,6 +1498,30 @@ async function executeFinalizer(cli: CliArgs, cwd: string) {
     "  Source branch and session-artifact cleanup commands are intentionally omitted here.",
   );
   console.log("  Use the generated review summary after trunk merge verification succeeds.");
+  if (!completionAuthority) {
+    throw new Error("Finalization completion authority is unavailable under the session lock.");
+  }
+  if (!productGradeIssue) {
+    const acceptedEvidenceBase = config.base;
+    const acceptedEvidenceCommitDomain = (await commitHistory(acceptedEvidenceBase, cwd)).map(
+      ({ hash }) => hash,
+    );
+    const acceptedEvidenceFingerprint = normalizeFinalizationEvidenceFingerprint(
+      config.accepted_evidence_fingerprint,
+    ) as FinalizationEvidenceFingerprint;
+    await persistFinalizationCompletionEvidence({
+      workDir: cwd,
+      sourceHead: config.final_tree,
+      contractDigest: completionAuthority.contractDigest,
+      preconditionEpoch: completionAuthority.requiredEvidence.preconditionEpoch,
+      reviewSummary: summaryPath,
+      reviewBranches,
+      productClaimCoverage: config.product_claim_coverage,
+      acceptedEvidenceBase,
+      acceptedEvidenceCommitDomain,
+      acceptedEvidenceFingerprint,
+    });
+  }
   return {
     ok: true,
     mode: "finalize",
@@ -1493,6 +1529,145 @@ async function executeFinalizer(cli: CliArgs, cwd: string) {
     reviewSummary: summaryPath,
     reviewBranches,
   };
+}
+
+function assertCurrentTreeRecoveryPlan(
+  config: FinalizePlan,
+  completionAuthority?: DecisionPlan,
+): void {
+  if (
+    !completionAuthority?.requiredEvidence.diagnosticCodes.includes("current-tree-finalization")
+  ) {
+    return;
+  }
+  if (config.mode !== "current-final-tree") {
+    throw new Error(
+      "Current-tree recovery requires the exact current-final-tree plan written by autoresearch finalize-current-tree.",
+    );
+  }
+  assertGeneratedPlanMetadata(config);
+  if (config.plan_fingerprint !== planFingerprint(config)) {
+    throw new Error(
+      "Stale current-tree recovery plan: plan fingerprint does not match contents. Rerun autoresearch finalize-current-tree.",
+    );
+  }
+  const evidence = normalizeFinalizationEvidenceFingerprint(config.accepted_evidence_fingerprint);
+  if (
+    evidence.schema_version !== 1 ||
+    !/^[0-9a-f]{64}$/.test(String(evidence.fingerprint || "")) ||
+    FINALIZATION_EVIDENCE_COMPONENT_KEYS.some(
+      (key) => !/^[0-9a-f]{64}$/.test(String(evidence.components?.[key] || "")),
+    )
+  ) {
+    throw new Error(
+      "Current-tree recovery requires a complete accepted-current evidence fingerprint. Rerun autoresearch finalize-current-tree.",
+    );
+  }
+  const coverage = config.current_tree_coverage;
+  if (
+    !coverage ||
+    coverage.review_unit !== "current_tree" ||
+    !/^[0-9a-f]{64}$/.test(String(coverage.current_tree_fingerprint || "")) ||
+    !Array.isArray(coverage.included_files)
+  ) {
+    throw new Error(
+      "Current-tree recovery requires complete current-tree coverage from autoresearch finalize-current-tree.",
+    );
+  }
+}
+
+async function persistFinalizationCompletionEvidence({
+  workDir,
+  sourceHead,
+  contractDigest,
+  preconditionEpoch,
+  reviewSummary,
+  reviewBranches,
+  productClaimCoverage,
+  acceptedEvidenceBase,
+  acceptedEvidenceCommitDomain,
+  acceptedEvidenceFingerprint,
+}: {
+  workDir: string;
+  sourceHead: string;
+  contractDigest: string;
+  preconditionEpoch: string;
+  reviewSummary: string;
+  reviewBranches: string[];
+  productClaimCoverage: unknown;
+  acceptedEvidenceBase: string;
+  acceptedEvidenceCommitDomain: string[];
+  acceptedEvidenceFingerprint: FinalizationEvidenceFingerprint;
+}): Promise<void> {
+  const restoredHead = await fullHash("HEAD", workDir);
+  if (restoredHead !== sourceHead) {
+    throw new Error(
+      "Finalization completion evidence cannot be recorded because the source branch was not restored to the verified final tree.",
+    );
+  }
+  if (!contractDigest || !preconditionEpoch) {
+    throw new Error(
+      "Finalization completion evidence requires an accepted contract digest and precondition epoch.",
+    );
+  }
+  if (
+    !acceptedEvidenceBase ||
+    acceptedEvidenceFingerprint.schema_version !== 1 ||
+    !/^[0-9a-f]{64}$/.test(acceptedEvidenceFingerprint.fingerprint) ||
+    FINALIZATION_EVIDENCE_COMPONENT_KEYS.some(
+      (key) => !/^[0-9a-f]{64}$/.test(acceptedEvidenceFingerprint.components[key]),
+    )
+  ) {
+    throw new Error(
+      "Finalization completion evidence requires the full current accepted-evidence fingerprint.",
+    );
+  }
+  const summaryBytes = await fsp.readFile(reviewSummary);
+  const branchEvidence = await Promise.all(
+    [...reviewBranches].sort().map(async (branch) => {
+      const oid = await fullHash(branch, workDir);
+      return `review-branch:${branch}@${oid}`;
+    }),
+  );
+  const evidence = [
+    `review-summary-sha256:${createHash("sha256").update(summaryBytes).digest("hex")}`,
+    `verified-final-tree:${sourceHead}`,
+    ...branchEvidence,
+  ];
+  // Both commands can refresh and lock the real index. Keep them serialized under the
+  // session mutation lock so finalization cannot race its own completion audit.
+  const indexResult = await git(["write-tree"], workDir);
+  const statusResult = await git(["status", "--porcelain=v1", "-z", "-uall"], workDir);
+  const completionIdentity = {
+    sourceHead,
+    sourceIndexTree: indexResult.stdout.trim(),
+    sourceStatusHash: createHash("sha256").update(statusResult.stdout).digest("hex"),
+    contractDigest,
+    preconditionEpoch,
+    acceptedEvidenceBase,
+    acceptedEvidenceCommitDomain,
+    acceptedEvidenceFingerprint,
+    productClaimCoverageHash: createHash("sha256")
+      .update(JSON.stringify(productClaimCoverageFingerprintMaterial(productClaimCoverage)))
+      .digest("hex"),
+    productGradeReady: true,
+    reviewSummary: path.basename(reviewSummary),
+    evidence,
+  };
+  const eventId = `finalization-completed:${createHash("sha256")
+    .update(JSON.stringify(completionIdentity))
+    .digest("hex")}`;
+  const existing = (await readAutoresearchJsonl(workDir)).some(
+    (record) => record.type === "finalization-completed" && record.eventId === eventId,
+  );
+  if (existing) return;
+  appendJsonl(workDir, {
+    type: "finalization-completed",
+    schemaVersion: 1,
+    eventId,
+    completedAt: new Date().toISOString(),
+    ...completionIdentity,
+  });
 }
 
 function planFingerprint(plan: FinalizePlan): string {
@@ -1648,7 +1823,7 @@ export async function runFinalizerCli(argv: string[] = process.argv.slice(2)): P
     const requestedCwd = resolveFinalizerCwd(cli);
     // The initial read chooses the existing lock. The shared protocol re-captures and verifies
     // this route under the lock before finalization can write an artifact or mutate Git.
-    const resolution = resolveWorkDir(requestedCwd);
+    const resolution = await resolveInitialSessionMutationRoute({ requestedCwd });
     const lock = await sessionMutationLockLocation(resolution.workDir);
     const protocol = await withSessionMutationLock(
       lock.root,
@@ -1658,13 +1833,22 @@ export async function runFinalizerCli(argv: string[] = process.argv.slice(2)): P
           command: `finalize-autoresearch:${command === "plan" ? "plan" : "apply"}`,
           requestedCwd: String(requestedCwd),
           expectedWorkDir: resolution.workDir,
-          mutate: async () => await executeFinalizer(cli, resolution.workDir),
+          mutate: async (accepted) =>
+            await executeFinalizer(
+              cli,
+              resolution.workDir,
+              command === "plan" ? undefined : accepted.preconditionDecision,
+            ),
         }),
       lock.path,
     );
     console.log(JSON.stringify(protocol));
     return 0;
   } catch (error: unknown) {
+    if (error instanceof CommandDecisionProtocolError) {
+      console.error(JSON.stringify(commandDecisionProtocolFailureEnvelope(error)));
+      return 1;
+    }
     const failure =
       error instanceof CliUsageError || isFinalizeError(error)
         ? (error as FinalizePhaseError)
