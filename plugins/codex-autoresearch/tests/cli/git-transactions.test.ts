@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   access,
   chmod,
+  copyFile,
   mkdir,
   readFile,
   rename,
@@ -363,6 +364,90 @@ test("broad discard rejects a moved protected session identity", async () => {
     );
     await assert.rejects(access(path.join(dir, "autoresearch.md")), /ENOENT/);
   });
+});
+
+test("broad discard rejects protected content moved through a replaced source", async () => {
+  await withTempDir("broad-protected-source-replacement", async (dir) => {
+    await git(dir, ["init"]);
+    await setupFixture(dir, { name: "protected source replacement" });
+    await writeFile(path.join(dir, "autoresearch.md"), "protected identity A\n", "utf8");
+    await writeFile(path.join(dir, "ordinary-notes.md"), "ordinary baseline B\n", "utf8");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "tracked protected identity"]);
+    await writeFile(path.join(dir, "ordinary-notes.md"), "protected identity A\n", "utf8");
+    await writeFile(path.join(dir, "autoresearch.md"), "replacement content C\n", "utf8");
+
+    const result = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "discard",
+      "--description",
+      "Reject protected source replacement",
+      "--allow-dirty-revert",
+    ]);
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /protected.*content|protected.*identity|moved protected/i);
+    assert.equal(
+      await readFile(path.join(dir, "autoresearch.md"), "utf8"),
+      "replacement content C\n",
+    );
+    assert.equal(
+      await readFile(path.join(dir, "ordinary-notes.md"), "utf8"),
+      "protected identity A\n",
+    );
+  });
+});
+
+test("scoped discard rejects Git copy records that cross the ownership boundary", async (t) => {
+  for (const direction of ["outside-to-inside", "inside-to-outside"] as const) {
+    await t.test(direction, async () => {
+      await withTempDir(`cross-scope-copy-${direction}`, async (dir) => {
+        await git(dir, ["init"]);
+        await mkdir(path.join(dir, "src"), { recursive: true });
+        await writeFile(path.join(dir, "src", "inside.txt"), "inside original\n");
+        await writeFile(path.join(dir, "outside.txt"), "outside original\n");
+        await setupFixture(dir, { name: "cross-scope copy" });
+        await writeFile(
+          path.join(dir, "autoresearch.config.json"),
+          `${JSON.stringify({ commitPaths: ["src"] }, null, 2)}\n`,
+        );
+        await git(dir, ["add", "-A"]);
+        await git(dir, ["commit", "-m", "initial copy tree"]);
+        await git(dir, ["config", "status.renames", "copies"]);
+        const source = direction === "outside-to-inside" ? "outside.txt" : "src/inside.txt";
+        const destination =
+          direction === "outside-to-inside" ? "src/copied.txt" : "copied-outside.txt";
+        const sourceEdit = `${direction} operator source edit\n`;
+        await copyFile(path.join(dir, source), path.join(dir, destination));
+        await writeFile(path.join(dir, source), sourceEdit);
+        await git(dir, ["add", "--", source, destination]);
+        const before = await git(dir, ["status", "--short"]);
+        assert.match(before, /C\s|C[0-9]*\s|->/i, before);
+
+        const result = await runCli([
+          "log",
+          "--cwd",
+          dir,
+          "--metric",
+          "1",
+          "--status",
+          "discard",
+          "--description",
+          "Reject cross-scope copy",
+        ]);
+
+        assert.notEqual(result.code, 0);
+        assert.match(result.stderr, /copy.*scope|cross.*scope|ownership boundary|rename.*scope/i);
+        assert.equal(await readFile(path.join(dir, source), "utf8"), sourceEdit);
+        await access(path.join(dir, destination));
+      });
+    });
+  }
 });
 
 test("scoped discard rejects edited and split-index cross-boundary move shapes", async (t) => {

@@ -45,7 +45,10 @@ async function setupTransactionFixture(
     dirtySessionBeforePacket?: boolean;
     generateArtifactDuringRun?: boolean;
     initialScore?: string;
+    outsideDirtyBeforePacket?: boolean;
+    outsideTracked?: boolean;
     partialCleanupCandidates?: boolean;
+    partialTrackedCleanupCandidates?: boolean;
     protectedArtifact?: boolean;
     untrackedCandidate?: boolean;
   } = {},
@@ -59,6 +62,14 @@ async function setupTransactionFixture(
   await mkdir(path.join(dir, "src"), { recursive: true });
   await mkdir(path.join(dir, "contract"), { recursive: true });
   await writeFile(path.join(dir, "src", "score.txt"), `${options.initialScore ?? "1"}\n`);
+  if (options.outsideTracked) {
+    await writeFile(path.join(dir, "outside.txt"), "outside baseline\n");
+  }
+  if (options.partialTrackedCleanupCandidates) {
+    await mkdir(path.join(dir, "src", "z"), { recursive: true });
+    await writeFile(path.join(dir, "src", "a.txt"), "tracked baseline a\n");
+    await writeFile(path.join(dir, "src", "z", "blocked.txt"), "tracked baseline blocked\n");
+  }
   await writeFile(
     path.join(dir, "contract", "evaluator.mjs"),
     [
@@ -130,6 +141,13 @@ async function setupTransactionFixture(
     await writeFile(path.join(dir, "src", "z", "blocked.txt"), "blocked cleanup target\n");
     await chmod(path.join(dir, "src", "z"), 0o500);
   }
+  if (options.partialTrackedCleanupCandidates) {
+    await writeFile(path.join(dir, "src", "a.txt"), "tracked candidate a\n");
+    await writeFile(path.join(dir, "src", "z", "blocked.txt"), "tracked candidate blocked\n");
+  }
+  if (options.outsideDirtyBeforePacket) {
+    await writeFile(path.join(dir, "outside.txt"), "outside accepted dirty state\n");
+  }
   if (options.commitCandidateBeforePacket) {
     await git(dir, ["add", "src/score.txt"]);
     await git(dir, ["commit", "-m", "imported candidate"]);
@@ -178,6 +196,47 @@ const discardArgs = (dir: string, description = "Discard candidate") => ({
 async function failAt(point: FaultPoint, expected: FaultPoint) {
   if (point === expected) throw new Error(`Injected log fault at ${point}`);
 }
+
+async function installGitShim(
+  dir: string,
+  name: string,
+  body: string[],
+): Promise<{ env: NodeJS.ProcessEnv; marker: string }> {
+  const realGit = "/usr/bin/git";
+  await access(realGit);
+  const shimDir = path.join(dir, ".git", "autoresearch-test-shims", name);
+  const marker = path.join(shimDir, "marker");
+  await mkdir(shimDir, { recursive: true });
+  const shimPath = path.join(shimDir, "git");
+  await writeFile(
+    shimPath,
+    [
+      "#!/bin/sh",
+      `REAL_GIT=${quoteForShell(realGit)}`,
+      `MARKER=${quoteForShell(marker)}`,
+      ...body,
+      'exec "$REAL_GIT" "$@"',
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await chmod(shimPath, 0o755);
+  return {
+    env: { ...process.env, PATH: `${shimDir}${path.delimiter}${process.env.PATH || ""}` },
+    marker,
+  };
+}
+
+const keepCliArgs = (dir: string, description = "Keep accepted candidate") => [
+  "log",
+  "--cwd",
+  dir,
+  "--from-last",
+  "--status",
+  "keep",
+  "--description",
+  description,
+];
 
 test("manual measurement remains loggable in an unborn Git repository", async () => {
   await withTempDir("unborn-measure", async (dir) => {
@@ -303,6 +362,46 @@ test("create-mode keep rejects an evaluated no-op candidate", async () => {
   });
 });
 
+test("create-mode keep rejects an evaluated-scope no-op even when add-all includes outside changes", async () => {
+  await withTempDir("keep-evaluated-scope-no-op", async (dir) => {
+    await setupTransactionFixture(dir, {
+      candidateScore: "2",
+      commitPaths: [],
+      initialScore: "2",
+      outsideDirtyBeforePacket: true,
+    });
+    const before = await git(dir, ["rev-parse", "HEAD"]);
+
+    await assert.rejects(
+      invokeLog({ ...keepArgs(dir), allow_add_all: true, commit_paths: [] }),
+      /no-op|no changes|candidate.*delta|evaluated.*scope/i,
+    );
+
+    assert.equal(await git(dir, ["rev-parse", "HEAD"]), before);
+    assert.equal(
+      await readFile(path.join(dir, "outside.txt"), "utf8"),
+      "outside accepted dirty state\n",
+    );
+    assert.equal(
+      (await ledgerRows(dir)).filter((row) => row.description === "Keep accepted candidate").length,
+      0,
+    );
+  });
+});
+
+test("create-mode keep includes a newly added accepted editable candidate file", async () => {
+  await withTempDir("keep-new-untracked-candidate", async (dir) => {
+    await setupTransactionFixture(dir, { untrackedCandidate: true });
+
+    const logged = await invokeLog(keepArgs(dir));
+
+    assert.equal(logged.ok, true);
+    assert.equal(await git(dir, ["show", "HEAD:src/score.txt"]), "2");
+    assert.equal(await git(dir, ["show", "HEAD:src/scratch.txt"]), "candidate scratch");
+    assert.equal(await git(dir, ["status", "--short", "--", "src"]), "");
+  });
+});
+
 test("keep retry rejects staged-only index drift after ref advancement", async () => {
   await withTempDir("keep-index-drift-after-ref", async (dir) => {
     await setupTransactionFixture(dir);
@@ -359,6 +458,62 @@ test("keep retry completes a failed index reconciliation before marking commit c
   });
 });
 
+test("OID-present keep recovery atomically excludes a concurrent index writer", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("the one-shot Git shim uses POSIX executable semantics");
+    return;
+  }
+  await withTempDir("keep-atomic-index-reconciliation", async (dir) => {
+    await setupTransactionFixture(dir);
+    const indexLock = path.resolve(dir, await git(dir, ["rev-parse", "--git-path", "index.lock"]));
+    try {
+      await assert.rejects(
+        invokeLog(keepArgs(dir), {
+          faultInjection: async (seen) => {
+            if (seen === "after:commit-ref-updated") {
+              await writeFile(indexLock, "block initial index reconciliation\n");
+            }
+          },
+        }),
+        /index\.lock|index.*lock|reconciliation/i,
+      );
+    } finally {
+      await rm(indexLock, { force: true });
+    }
+    const pending = JSON.parse(await readFile(await receiptPath(dir), "utf8"));
+    assert.match(String(pending.commitExpectation.oid || ""), /^[a-f0-9]{40,64}$/);
+    const shim = await installGitShim(dir, "atomic-index", [
+      'command_name=""',
+      'for arg in "$@"; do',
+      '  case "$arg" in reset|restore|write-tree) command_name="$arg" ;; esac',
+      "done",
+      'if [ ! -e "$MARKER" ] && { [ "$command_name" = "reset" ] || [ -e .git/index.lock ]; }; then',
+      "  printf '99\\n' > src/score.txt",
+      '  if env -u GIT_INDEX_FILE "$REAL_GIT" add src/score.txt 2>/dev/null; then',
+      "    printf 'staged\\n' > \"$MARKER\"",
+      "  else",
+      "    printf 'blocked\\n' > \"$MARKER\"",
+      "  fi",
+      "  printf '2\\n' > src/score.txt",
+      "fi",
+    ]);
+
+    const previousPath = process.env.PATH;
+    let retried: Record<string, any>;
+    try {
+      process.env.PATH = shim.env.PATH;
+      retried = await invokeLog(keepArgs(dir));
+    } finally {
+      process.env.PATH = previousPath;
+    }
+
+    assert.equal(retried.ok, true);
+    assert.equal(await readFile(shim.marker, "utf8"), "blocked\n");
+    assert.equal(await git(dir, ["diff", "--cached", "--name-only"]), "");
+    assert.equal(await git(dir, ["show", "HEAD:src/score.txt"]), "2");
+  });
+});
+
 test("keep retry rejects a same-parent symbolic branch switch", async () => {
   await withTempDir("keep-symbolic-ref-drift", async (dir) => {
     await setupTransactionFixture(dir);
@@ -390,6 +545,159 @@ test("keep commit compare-and-swap preserves prepared detached HEAD state", asyn
     assert.equal(await git(dir, ["branch", "--show-current"]), "");
     assert.equal(await git(dir, ["rev-parse", "refs/heads/main"]), main);
     assert.notEqual(await git(dir, ["rev-parse", "HEAD"]), main);
+    assert.equal(await git(dir, ["show", "HEAD:src/score.txt"]), "2");
+  });
+});
+
+test("symbolic HEAD identity and intended branch update share one atomic ref transaction", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("the one-shot Git shim uses POSIX executable semantics");
+    return;
+  }
+  await withTempDir("keep-atomic-symbolic-head", async (dir) => {
+    await setupTransactionFixture(dir);
+    const parent = await git(dir, ["rev-parse", "HEAD"]);
+    await git(dir, ["branch", "other", parent]);
+    const shim = await installGitShim(dir, "atomic-symbolic-head", [
+      'seen_verify=""',
+      'seen_ref=""',
+      'for arg in "$@"; do',
+      '  [ "$arg" = "--verify" ] && seen_verify="yes"',
+      '  [ "$arg" = "refs/heads/main" ] && seen_ref="yes"',
+      "done",
+      'if [ "$seen_verify" = "yes" ] && [ "$seen_ref" = "yes" ] && [ -e .git/HEAD.lock ] && [ ! -e "$MARKER" ]; then',
+      '  if "$REAL_GIT" switch --quiet other 2>"$MARKER.error"; then',
+      "    printf 'raced\\n' > \"$MARKER\"",
+      "  else",
+      "    printf 'blocked\\n' > \"$MARKER\"",
+      "  fi",
+      "fi",
+    ]);
+
+    const previousPath = process.env.PATH;
+    let logged: Record<string, any>;
+    try {
+      process.env.PATH = shim.env.PATH;
+      logged = await invokeLog(keepArgs(dir));
+    } finally {
+      process.env.PATH = previousPath;
+    }
+
+    assert.equal(logged.ok, true);
+    assert.equal(
+      await readFile(shim.marker, "utf8"),
+      "blocked\n",
+      await readFile(`${shim.marker}.error`, "utf8").catch(() => ""),
+    );
+    assert.equal(await git(dir, ["branch", "--show-current"]), "main");
+    assert.notEqual(await git(dir, ["rev-parse", "refs/heads/main"]), parent);
+    assert.equal(await git(dir, ["rev-parse", "refs/heads/other"]), parent);
+  });
+});
+
+test("detached HEAD identity and update share one atomic ref transaction", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("the one-shot Git shim uses POSIX executable semantics");
+    return;
+  }
+  await withTempDir("keep-atomic-detached-head", async (dir) => {
+    await setupTransactionFixture(dir, { detachBeforePacket: true });
+    const parent = await git(dir, ["rev-parse", "HEAD"]);
+    const shim = await installGitShim(dir, "atomic-detached-head", [
+      'command_name=""',
+      'previous_arg=""',
+      'for arg in "$@"; do',
+      '  [ "$arg" = "update-ref" ] && command_name="update-ref"',
+      '  [ "$previous_arg" = "--git-path" ] && [ "$arg" = "HEAD" ] && command_name="head-path"',
+      '  previous_arg="$arg"',
+      "done",
+      'if { [ "$command_name" = "update-ref" ] || [ "$command_name" = "head-path" ]; } && [ ! -e "$MARKER" ]; then',
+      '  if "$REAL_GIT" switch --quiet main 2>"$MARKER.error"; then',
+      "    printf 'raced\\n' > \"$MARKER\"",
+      "  else",
+      "    printf 'blocked\\n' > \"$MARKER\"",
+      "  fi",
+      "fi",
+    ]);
+
+    const previousPath = process.env.PATH;
+    let failure: unknown = null;
+    try {
+      process.env.PATH = shim.env.PATH;
+      await invokeLog(keepArgs(dir));
+    } catch (error) {
+      failure = error;
+    } finally {
+      process.env.PATH = previousPath;
+    }
+
+    assert.equal(
+      await readFile(shim.marker, "utf8"),
+      "raced\n",
+      await readFile(`${shim.marker}.error`, "utf8").catch(() => ""),
+    );
+    assert.match(
+      failure instanceof Error ? failure.message : String(failure || ""),
+      /prepared.*HEAD|detached.*changed|atomic.*ref|compare-and-swap/i,
+    );
+    assert.equal(await git(dir, ["branch", "--show-current"]), "main");
+    assert.equal(await git(dir, ["rev-parse", "HEAD"]), parent);
+    assert.equal(await git(dir, ["rev-parse", "refs/heads/main"]), parent);
+  });
+});
+
+test("unsupported ref storage fails closed before the atomic symbolic-ref update", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("the one-shot Git shim uses POSIX executable semantics");
+    return;
+  }
+  await withTempDir("keep-unsupported-atomic-ref", async (dir) => {
+    await setupTransactionFixture(dir);
+    const parent = await git(dir, ["rev-parse", "HEAD"]);
+    const shim = await installGitShim(dir, "unsupported-atomic-ref", [
+      'previous_arg=""',
+      'for arg in "$@"; do',
+      '  if [ "$previous_arg" = "rev-parse" ] && [ "$arg" = "--show-ref-format" ]; then',
+      "    printf 'reftable\\n'",
+      "    exit 0",
+      "  fi",
+      '  previous_arg="$arg"',
+      "done",
+    ]);
+
+    const logged = await runCli(keepCliArgs(dir), { env: shim.env, spawn: true });
+
+    assert.notEqual(logged.code, 0);
+    assert.match(logged.stderr, /Git reference storage.*atomic.*symbolic.*files.*upgrade/i);
+    assert.equal(await git(dir, ["rev-parse", "HEAD"]), parent);
+  });
+});
+
+test("older Git without show-ref-format uses the files-ref lock boundary", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("the one-shot Git shim uses POSIX executable semantics");
+    return;
+  }
+  await withTempDir("keep-older-git-files-ref", async (dir) => {
+    await setupTransactionFixture(dir);
+    await git(dir, ["config", "core.repositoryFormatVersion", "1"]);
+    await git(dir, ["config", "extensions.refStorage", "files"]);
+    const parent = await git(dir, ["rev-parse", "HEAD"]);
+    const shim = await installGitShim(dir, "older-files-ref", [
+      'previous_arg=""',
+      'for arg in "$@"; do',
+      '  if [ "$previous_arg" = "rev-parse" ] && [ "$arg" = "--show-ref-format" ]; then',
+      "    printf 'fatal: unknown option: --show-ref-format\\n' >&2",
+      "    exit 129",
+      "  fi",
+      '  previous_arg="$arg"',
+      "done",
+    ]);
+
+    const logged = await runCli(keepCliArgs(dir), { env: shim.env, spawn: true });
+
+    assert.equal(logged.code, 0, logged.stderr);
+    assert.notEqual(await git(dir, ["rev-parse", "HEAD"]), parent);
     assert.equal(await git(dir, ["show", "HEAD:src/score.txt"]), "2");
   });
 });
@@ -435,6 +743,40 @@ test("partial untracked cleanup resumes target by target", async () => {
       assert.equal(retried.ok, true);
       await assert.rejects(access(path.join(dir, "src", "a.txt")), /ENOENT/);
       await assert.rejects(access(path.join(blockedDirectory, "blocked.txt")), /ENOENT/);
+    } finally {
+      await chmod(blockedDirectory, 0o700).catch(() => {});
+    }
+  });
+});
+
+test("partial tracked cleanup separately rejects staged drift behind a clean worktree", async () => {
+  await withTempDir("partial-tracked-cleanup-staged-drift", async (dir) => {
+    const blockedDirectory = path.join(dir, "src", "z");
+    const blockedPath = path.join(blockedDirectory, "blocked.txt");
+    try {
+      await setupTransactionFixture(dir, { partialTrackedCleanupCandidates: true });
+      await chmod(blockedDirectory, 0o500);
+      await assert.rejects(
+        invokeLog(discardArgs(dir)),
+        /Git tracked cleanup failed|Permission denied|could not unlink|unable to create/i,
+      );
+      assert.equal(await readFile(path.join(dir, "src", "a.txt"), "utf8"), "tracked baseline a\n");
+      assert.equal(await readFile(blockedPath, "utf8"), "tracked candidate blocked\n");
+
+      await chmod(blockedDirectory, 0o700);
+      await writeFile(blockedPath, "operator staged drift\n");
+      await git(dir, ["add", "src/z/blocked.txt"]);
+      await git(dir, ["restore", "--worktree", "--source=HEAD", "--", "src/z/blocked.txt"]);
+      assert.equal(await readFile(blockedPath, "utf8"), "tracked baseline blocked\n");
+      assert.equal(await git(dir, ["show", ":src/z/blocked.txt"]), "operator staged drift");
+
+      await assert.rejects(
+        invokeLog(discardArgs(dir)),
+        /tracked cleanup.*index|cleanup.*drift|staged.*changed/i,
+      );
+
+      assert.equal(await git(dir, ["show", ":src/z/blocked.txt"]), "operator staged drift");
+      await access(await receiptPath(dir));
     } finally {
       await chmod(blockedDirectory, 0o700).catch(() => {});
     }
@@ -531,6 +873,88 @@ test("pending keep retry rejects accepted contract input drift before commit", a
       /accepted.*input.*changed|protected.*changed|contract.*no longer/i,
     );
     assert.equal(Number(await git(dir, ["rev-list", "--count", "HEAD"])), 1);
+  });
+});
+
+test("initial keep revalidates accepted protected inputs inside the commit stage", async () => {
+  await withTempDir("initial-contract-input-drift", async (dir) => {
+    await setupTransactionFixture(dir);
+    const parent = await git(dir, ["rev-parse", "HEAD"]);
+
+    await assert.rejects(
+      invokeLog(keepArgs(dir), {
+        faultInjection: async (seen) => {
+          if (seen === "before:commit-applied-or-verified") {
+            await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(1);\n");
+          }
+        },
+      }),
+      /accepted.*input.*changed|protected.*changed|contract.*no longer/i,
+    );
+
+    assert.equal(await git(dir, ["rev-parse", "HEAD"]), parent);
+    assert.equal(
+      (await ledgerRows(dir)).filter((row) => row.description === "Keep accepted candidate").length,
+      0,
+    );
+  });
+});
+
+test("initial keep revalidates accepted repository state inside the commit stage", async () => {
+  await withTempDir("initial-repository-drift", async (dir) => {
+    await setupTransactionFixture(dir, { outsideTracked: true });
+    const parent = await git(dir, ["rev-parse", "HEAD"]);
+
+    await assert.rejects(
+      invokeLog(keepArgs(dir), {
+        faultInjection: async (seen) => {
+          if (seen === "before:commit-applied-or-verified") {
+            await writeFile(path.join(dir, "outside.txt"), "outside drift at commit boundary\n");
+          }
+        },
+      }),
+      /repository.*changed|outside.*editable|accepted.*contract|dirty state/i,
+    );
+
+    assert.equal(await git(dir, ["rev-parse", "HEAD"]), parent);
+    assert.equal(
+      await readFile(path.join(dir, "outside.txt"), "utf8"),
+      "outside drift at commit boundary\n",
+    );
+  });
+});
+
+test("keep revalidates accepted authority after ref advancement before evidence append", async () => {
+  await withTempDir("post-ref-contract-input-drift", async (dir) => {
+    await setupTransactionFixture(dir);
+    const checksPath = path.join(dir, "contract", "checks.mjs");
+    const acceptedChecks = await readFile(checksPath, "utf8");
+
+    await assert.rejects(
+      invokeLog(keepArgs(dir), {
+        faultInjection: async (seen) => {
+          if (seen === "after:commit-ref-updated") {
+            await writeFile(checksPath, "process.exit(1);\n");
+          }
+        },
+      }),
+      /accepted.*input.*changed|protected.*changed|contract.*no longer/i,
+    );
+
+    assert.equal(Number(await git(dir, ["rev-list", "--count", "HEAD"])), 2);
+    assert.equal(
+      (await ledgerRows(dir)).filter((row) => row.description === "Keep accepted candidate").length,
+      0,
+    );
+    await access(await receiptPath(dir));
+
+    await writeFile(checksPath, acceptedChecks);
+    const retried = await invokeLog(keepArgs(dir));
+    assert.equal(retried.ok, true);
+    assert.equal(
+      (await ledgerRows(dir)).filter((row) => row.description === "Keep accepted candidate").length,
+      1,
+    );
   });
 });
 
