@@ -87,7 +87,7 @@ test("keep commits can be scoped to experiment paths", async () => {
     await setupFixture(dir, { name: "scoped commit" });
     await prepareAcceptedKeep(dir, {
       commitPaths: ["tracked.txt"],
-      editableScope: ["tracked.txt", "scratch.txt"],
+      editableScope: ["tracked.txt"],
       mutate: async () => {
         await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
         await writeFile(path.join(dir, "scratch.txt"), "do not commit\n", "utf8");
@@ -331,6 +331,100 @@ test("scoped discard rejects renames that cross the configured ownership boundar
   }
 });
 
+test("broad discard rejects a moved protected session identity", async () => {
+  await withTempDir("broad-protected-session-move", async (dir) => {
+    await git(dir, ["init"]);
+    await setupFixture(dir, { name: "protected session move" });
+    await writeFile(path.join(dir, "autoresearch.md"), "protected operator session\n", "utf8");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "tracked session"]);
+    const destination = path.join(dir, "moved-session-notes.md");
+    await rename(path.join(dir, "autoresearch.md"), destination);
+    await writeFile(destination, "operator notes moved and edited after evaluation\n", "utf8");
+
+    const result = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "discard",
+      "--description",
+      "Reject moved session identity",
+      "--allow-dirty-revert",
+    ]);
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /protected.*move|session.*move|protected.*deleted/i);
+    assert.equal(
+      await readFile(destination, "utf8"),
+      "operator notes moved and edited after evaluation\n",
+    );
+    await assert.rejects(access(path.join(dir, "autoresearch.md")), /ENOENT/);
+  });
+});
+
+test("scoped discard rejects edited and split-index cross-boundary move shapes", async (t) => {
+  for (const direction of ["outside-to-inside", "inside-to-outside"] as const) {
+    for (const shape of [
+      "edited-unstaged",
+      "destination-staged",
+      "deletion-staged",
+      "both-staged",
+      "tracked-destination-overwrite",
+    ] as const) {
+      await t.test(`${direction} ${shape}`, async () => {
+        await withTempDir(`cross-boundary-${direction}-${shape}`, async (dir) => {
+          const source = direction === "outside-to-inside" ? "outside.txt" : "src/inside.txt";
+          const destination =
+            direction === "outside-to-inside" ? "src/moved.txt" : "moved-outside.txt";
+          await git(dir, ["init"]);
+          await mkdir(path.join(dir, "src"), { recursive: true });
+          await writeFile(path.join(dir, "src", "inside.txt"), "inside original\n");
+          await writeFile(path.join(dir, "outside.txt"), "outside original\n");
+          if (shape === "tracked-destination-overwrite") {
+            await writeFile(path.join(dir, destination), "tracked destination baseline\n");
+          }
+          await setupFixture(dir, { name: "ambiguous cross-boundary move" });
+          await writeFile(
+            path.join(dir, "autoresearch.config.json"),
+            `${JSON.stringify({ commitPaths: ["src"] }, null, 2)}\n`,
+          );
+          await git(dir, ["add", "-A"]);
+          await git(dir, ["commit", "-m", "initial scoped tree"]);
+          const edited = `edited destination ${direction} ${shape} with unrelated content\n`;
+          await rename(path.join(dir, source), path.join(dir, destination));
+          await writeFile(path.join(dir, destination), edited, "utf8");
+          if (shape === "destination-staged") {
+            await git(dir, ["add", "--", destination]);
+          } else if (shape === "deletion-staged") {
+            await git(dir, ["add", "-u", "--", source]);
+          } else if (shape === "both-staged") {
+            await git(dir, ["add", "-A", "--", source, destination]);
+          }
+
+          const result = await runCli([
+            "log",
+            "--cwd",
+            dir,
+            "--metric",
+            "1",
+            "--status",
+            "discard",
+            "--description",
+            "Reject ambiguous cross-boundary move",
+          ]);
+
+          assert.notEqual(result.code, 0);
+          assert.match(result.stderr, /rename.*scope|cross.*scope|ownership boundary|ambiguous/i);
+          assert.equal(await readFile(path.join(dir, destination), "utf8"), edited);
+        });
+      });
+    }
+  }
+});
+
 test("discard preservation rejects linked Autoresearch-owned directories", async (t) => {
   await withTempDir("discard-linked-owned-dir", async (dir) => {
     await git(dir, ["init"]);
@@ -438,7 +532,7 @@ test("scoped keep commits preserve unrelated staged files", async () => {
     assert.equal(initialized.code, 0, initialized.stderr);
     await prepareAcceptedKeep(dir, {
       commitPaths: ["scoped.txt"],
-      editableScope: ["scoped.txt", "unrelated.txt"],
+      editableScope: ["scoped.txt"],
       mutate: async () => {
         await writeFile(path.join(dir, "scoped.txt"), "after\n");
         await writeFile(path.join(dir, "unrelated.txt"), "staged elsewhere\n");

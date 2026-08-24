@@ -4,7 +4,11 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { assertSafeDirectoryTree, checkedAtomicWriteFile } from "../checked-write.js";
+import {
+  assertSafeDirectoryTree,
+  checkedAppendFile,
+  checkedAtomicWriteFile,
+} from "../checked-write.js";
 import { defaultCommandShell, quoteShellArg } from "../command-rendering.js";
 import { boolOption } from "../cli/args.js";
 import { enumOption, numberOption, parseJsonFileOption } from "../cli/args.js";
@@ -364,6 +368,7 @@ export async function logExperiment(
   }
   const logWarnings: string[] = [];
   const mutationPlan = await prepareLogMutation({
+    acceptedEditablePaths: acceptedContract?.scope.editable || [],
     args,
     config,
     metric,
@@ -464,6 +469,7 @@ export async function logExperiment(
     stateBefore.config.bestDirection,
   );
   const mutation = await executePreparedLogTransaction({
+    acceptedContract,
     args,
     config,
     contractDigest: acceptedContract?.contractDigest || "",
@@ -567,6 +573,7 @@ export async function clearFilesWithWarnings(
 }
 
 interface LogMutationInput {
+  acceptedEditablePaths: string[];
   args: UnknownRecord;
   config: UnknownRecord;
   metric: number | null;
@@ -585,6 +592,7 @@ export interface LogMutationResult {
 }
 
 interface LogMutationPlan extends LogMutationResult {
+  acceptedEditablePaths: string[];
   allowAddAll: boolean;
   cleanup: {
     broad: boolean;
@@ -603,6 +611,7 @@ export async function assertNoPendingLogTransaction(workDir: string): Promise<vo
 }
 
 async function prepareLogMutation({
+  acceptedEditablePaths,
   args,
   config,
   metric,
@@ -662,6 +671,17 @@ async function prepareLogMutation({
         );
       }
       if (commitPaths.length > 0) await assertCommitPathsExist(workDir, commitPaths);
+      if (
+        !allowAddAll &&
+        acceptedEditablePaths.some(
+          (candidatePath) =>
+            !commitPaths.some((commitPath) => pathIsCoveredByScope(candidatePath, commitPath)),
+        )
+      ) {
+        throw new Error(
+          "The keep commit scope conflicts with the accepted editable candidate scope. Commit every accepted editable path or use explicit add-all.",
+        );
+      }
       await assertNoGitIndexLock(workDir, "git add");
     }
   } else if (status !== "keep" && status !== "measure") {
@@ -686,6 +706,7 @@ async function prepareLogMutation({
     }
   }
   return {
+    acceptedEditablePaths,
     allowAddAll,
     cleanup,
     commit,
@@ -771,9 +792,15 @@ interface CleanupTargetIdentity extends UnknownRecord {
   path: string;
   kind: "absent" | "directory" | "file" | "other" | "symlink";
   digest: string;
+  indexDigest: string;
   mode: number;
   size: number;
 }
+
+type PreparedHeadState =
+  | { kind: "none"; ref: "" }
+  | { kind: "detached"; ref: "" }
+  | { kind: "symbolic"; ref: string };
 
 interface LogTransactionReceipt extends UnknownRecord {
   type: "autoresearch.log.transaction";
@@ -806,6 +833,7 @@ interface LogTransactionReceipt extends UnknownRecord {
   preGit: {
     digest: string;
     headOid: string;
+    headState: PreparedHeadState;
     indexTree: string;
     statusDigest: string;
   };
@@ -821,6 +849,8 @@ interface LogTransactionReceipt extends UnknownRecord {
     message: string;
     messageDigest: string;
     paths: string[];
+    candidatePaths: string[];
+    reconciledIndexTree: string;
     allowAddAll: boolean;
   };
   ledgerEvent: {
@@ -828,6 +858,7 @@ interface LogTransactionReceipt extends UnknownRecord {
     eventDigest: string;
     prefixByteLength: number;
     prefixDigest: string;
+    prefixDelimiter: "" | "\n";
   };
   cleanup: {
     digest: string;
@@ -910,11 +941,15 @@ async function readPendingLogTransaction(workDir: string): Promise<LogTransactio
     !receipt.packet ||
     !receipt.contract ||
     !receipt.preGit ||
+    !isPreparedHeadState(receipt.preGit.headState) ||
     !receipt.commitExpectation ||
+    !Array.isArray(receipt.commitExpectation.candidatePaths) ||
+    typeof receipt.commitExpectation.reconciledIndexTree !== "string" ||
     !receipt.ledgerEvent ||
     !Number.isSafeInteger(receipt.ledgerEvent.prefixByteLength) ||
     receipt.ledgerEvent.prefixByteLength < 0 ||
     typeof receipt.ledgerEvent.prefixDigest !== "string" ||
+    !["", "\n"].includes(receipt.ledgerEvent.prefixDelimiter) ||
     !receipt.cleanup ||
     !Array.isArray(receipt.cleanup.scopedPaths) ||
     !Array.isArray(receipt.cleanup.trackedPaths) ||
@@ -957,6 +992,7 @@ async function assertLogTransactionReceiptIntegrity(
   }
   const preGitDigest = sha256Json({
     headOid: receipt.preGit.headOid,
+    headState: receipt.preGit.headState,
     indexTree: receipt.preGit.indexTree,
     statusDigest: receipt.preGit.statusDigest,
   });
@@ -1013,6 +1049,7 @@ async function assertLogTransactionReceiptIntegrity(
   }
   for (const [label, paths] of [
     ["commit", receipt.commitExpectation.paths],
+    ["candidate", receipt.commitExpectation.candidatePaths],
     ["cleanup scope", receipt.cleanup.scopedPaths],
     ["tracked cleanup", receipt.cleanup.trackedPaths],
     ["untracked cleanup", receipt.cleanup.untrackedPaths],
@@ -1029,7 +1066,8 @@ async function assertLogTransactionReceiptIntegrity(
   ] as const) {
     if (
       JSON.stringify(uniqueSorted(paths)) !==
-      JSON.stringify(uniqueSorted(targets.map((target) => target.path)))
+        JSON.stringify(uniqueSorted(targets.map((target) => target.path))) ||
+      targets.some((target) => typeof target.indexDigest !== "string")
     ) {
       reject(`${label} target identities do not match their cleanup paths.`);
     }
@@ -1052,6 +1090,7 @@ async function assertLogTransactionReceiptIntegrity(
 }
 
 async function executePreparedLogTransaction({
+  acceptedContract,
   args,
   config,
   contractDigest,
@@ -1063,6 +1102,7 @@ async function executePreparedLogTransaction({
   verifiedArtifacts,
   workDir,
 }: {
+  acceptedContract: ExperimentContract | null;
   args: UnknownRecord;
   config: UnknownRecord;
   contractDigest: string;
@@ -1075,6 +1115,7 @@ async function executePreparedLogTransaction({
   workDir: string;
 }): Promise<LogMutationResult> {
   const receipt = await buildLogTransactionReceipt({
+    acceptedContract,
     args,
     config,
     contractDigest,
@@ -1151,12 +1192,9 @@ async function verifyPendingKeepCandidate(
   config: UnknownRecord,
   receipt: LogTransactionReceipt,
 ): Promise<void> {
-  if (
-    receipt.transaction.kind !== "keep" ||
-    receipt.completedStages.includes("commit-applied-or-verified")
-  ) {
-    return;
-  }
+  if (receipt.transaction.kind !== "keep") return;
+  await assertPreparedHeadState(workDir, receipt.preGit.headState);
+  if (receipt.completedStages.includes("commit-applied-or-verified")) return;
   const contractEvidence = record(receipt.evidence.experiment.contractEvaluationEvidence);
   const packet = await readLastRunPacket(workDir);
   const authority = await deriveExperimentContract({
@@ -1184,7 +1222,9 @@ async function verifyPendingKeepCandidate(
     !accepted ||
     accepted.contractDigest !== receipt.contract.digest ||
     contractEvidence.contractDigest !== accepted.contractDigest ||
-    typeof contractEvidence.candidateFingerprint !== "string"
+    typeof contractEvidence.candidateFingerprint !== "string" ||
+    JSON.stringify(uniqueSorted(receipt.commitExpectation.candidatePaths)) !==
+      JSON.stringify(uniqueSorted(accepted.scope.editable))
   ) {
     throw new Error("Pending keep candidate authority no longer matches the accepted contract.");
   }
@@ -1203,14 +1243,15 @@ async function pendingCreatedCommitExplainsHeadChange(
   const expectation = receipt.commitExpectation;
   if (expectation.mode !== "create") return false;
   if (expectation.oid) {
-    await verifyRecordedCommit(workDir, receipt);
+    await verifyRecordedCommitIdentity(workDir, receipt);
     return true;
   }
-  const currentHead = await requiredGitText(workDir, ["rev-parse", "HEAD"], "read pending HEAD");
+  const currentHead = await preparedRefOid(workDir, receipt.preGit.headState);
   return await commitMatchesInterruptedCreation(workDir, currentHead, expectation);
 }
 
 async function buildLogTransactionReceipt({
+  acceptedContract,
   args,
   config,
   contractDigest,
@@ -1221,6 +1262,7 @@ async function buildLogTransactionReceipt({
   verifiedArtifacts,
   workDir,
 }: {
+  acceptedContract: ExperimentContract | null;
   args: UnknownRecord;
   config: UnknownRecord;
   contractDigest: string;
@@ -1258,11 +1300,40 @@ async function buildLogTransactionReceipt({
         : "create"
       : "none";
   let intendedTreeOid = "";
+  let reconciledIndexTree = "";
   if (commitMode === "create") {
-    intendedTreeOid = await intendedCommitTree(workDir, preGit.headOid, mutationPlan.commitPaths);
-    if (intendedTreeOid === (await parentTreeOid(workDir, preGit.headOid))) {
-      commitMode = "none";
+    const recordedCandidateFingerprint = String(
+      record(experiment.contractEvaluationEvidence).candidateFingerprint || "",
+    );
+    if (!acceptedContract || !recordedCandidateFingerprint) {
+      throw new Error("Create-mode keep lacks accepted evaluated candidate authority.");
     }
+    intendedTreeOid = await intendedCommitTree(workDir, preGit.headOid, mutationPlan.commitPaths);
+    const currentCandidateFingerprint = await contractCandidateFingerprintForWorkDir(
+      workDir,
+      acceptedContract,
+    );
+    if (currentCandidateFingerprint !== recordedCandidateFingerprint) {
+      throw new Error(
+        "The accepted evaluated candidate changed before keep transaction preparation.",
+      );
+    }
+    await assertTreeContainsEvaluatedCandidate(
+      workDir,
+      intendedTreeOid,
+      mutationPlan.acceptedEditablePaths,
+    );
+    if (intendedTreeOid === (await parentTreeOid(workDir, preGit.headOid))) {
+      throw new Error(
+        "Refusing a no-op keep because the accepted evaluated candidate produces no commit changes.",
+      );
+    }
+    reconciledIndexTree = await expectedReconciledIndexTree(
+      workDir,
+      preGit.indexTree,
+      intendedTreeOid,
+      mutationPlan.commitPaths,
+    );
   }
   const receipt: LogTransactionReceipt = {
     type: "autoresearch.log.transaction",
@@ -1305,6 +1376,8 @@ async function buildLogTransactionReceipt({
       message: commitMessage,
       messageDigest: sha256Text(commitMessage),
       paths: mutationPlan.commitPaths,
+      candidatePaths: mutationPlan.acceptedEditablePaths,
+      reconciledIndexTree,
       allowAddAll: mutationPlan.allowAddAll,
     },
     ledgerEvent: {
@@ -1312,6 +1385,7 @@ async function buildLogTransactionReceipt({
       eventDigest: "",
       prefixByteLength: ledgerPrefix.byteLength,
       prefixDigest: ledgerPrefix.digest,
+      prefixDelimiter: ledgerPrefix.delimiter,
     },
     cleanup: {
       digest: "",
@@ -1548,6 +1622,81 @@ async function intendedCommitTree(
   });
 }
 
+async function assertTreeContainsEvaluatedCandidate(
+  workDir: string,
+  treeOid: string,
+  candidatePaths: string[],
+): Promise<void> {
+  if (candidatePaths.length === 0) return;
+  const tracked = await runGit(
+    ["--literal-pathspecs", "diff", "--quiet", treeOid, "--", ...candidatePaths],
+    workDir,
+  );
+  if (tracked.code === 1) {
+    throw new Error(
+      "The keep commit scope omits part of the accepted editable evaluated candidate.",
+    );
+  }
+  if (tracked.code !== 0 || tracked.stdoutTruncated) {
+    throw new Error(
+      `Git could not compare the intended tree with the evaluated candidate: ${gitOutput(tracked, "unknown error")}`,
+    );
+  }
+  const untrackedCommands = [
+    ["--literal-pathspecs", "ls-files", "--others", "--exclude-standard", "-z", "--"],
+    ["--literal-pathspecs", "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--"],
+  ];
+  for (const command of untrackedCommands) {
+    const untracked = await runGit([...command, ...candidatePaths], workDir);
+    if (untracked.code !== 0 || untracked.stdoutTruncated) {
+      throw new Error(
+        `Git could not verify the evaluated candidate tree: ${gitOutput(untracked, "unknown error")}`,
+      );
+    }
+    if (untracked.stdout.length > 0) {
+      throw new Error(
+        "The keep commit scope omits untracked accepted editable evaluated candidate content.",
+      );
+    }
+  }
+}
+
+async function expectedReconciledIndexTree(
+  workDir: string,
+  preparedIndexTree: string,
+  intendedTree: string,
+  paths: string[],
+): Promise<string> {
+  if (paths.length === 0) return intendedTree;
+  return await withTemporaryGitIndex(workDir, async (indexEnvironment) => {
+    const initialize = await runGit(["read-tree", preparedIndexTree], workDir, {
+      env: indexEnvironment,
+    });
+    if (initialize.code !== 0) {
+      throw new Error(
+        `Git could not initialize the reconciled index tree: ${gitOutput(initialize, "unknown error")}`,
+      );
+    }
+    const restore = await runGit(
+      ["--literal-pathspecs", "restore", `--source=${intendedTree}`, "--staged", "--", ...paths],
+      workDir,
+      { env: indexEnvironment },
+    );
+    if (restore.code !== 0) {
+      throw new Error(
+        `Git could not prepare the reconciled index tree: ${gitOutput(restore, "unknown error")}`,
+      );
+    }
+    const tree = await runGit(["write-tree"], workDir, { env: indexEnvironment });
+    if (tree.code !== 0 || tree.stdoutTruncated) {
+      throw new Error(
+        `Git could not write the reconciled index tree: ${gitOutput(tree, "unknown error")}`,
+      );
+    }
+    return tree.stdout.trim();
+  });
+}
+
 async function parentTreeOid(workDir: string, parentOid: string): Promise<string> {
   if (parentOid) {
     return await requiredGitText(
@@ -1602,19 +1751,23 @@ async function applyOrVerifyKeepCommit(
     return;
   }
   if (expectation.oid) {
+    await verifyRecordedCommitIdentity(workDir, receipt);
+    await reconcileCommittedIndex(workDir, receipt);
     await verifyRecordedCommit(workDir, receipt);
     receipt.evidence.experiment.commit = expectation.oid.slice(0, 12);
     receipt.result.commit = expectation.oid;
     refreshLedgerEventIdentity(receipt);
     return;
   }
-  const currentHead = await gitHeadOrEmpty(workDir);
+  await assertPreparedHeadState(workDir, receipt.preGit.headState);
+  const currentHead = await preparedRefOid(workDir, receipt.preGit.headState);
   if (currentHead !== expectation.parentOid) {
     if (await commitMatchesInterruptedCreation(workDir, currentHead, expectation)) {
       expectation.oid = currentHead;
-      await reconcileCommittedIndex(workDir, expectation);
+      await reconcileCommittedIndex(workDir, receipt);
       recordCreatedCommit(receipt, currentHead);
       await writeLogTransactionReceipt(workDir, receipt);
+      await verifyRecordedCommit(workDir, receipt);
       return;
     }
     throw new Error("Git HEAD changed while the keep transaction was pending.");
@@ -1623,6 +1776,8 @@ async function applyOrVerifyKeepCommit(
   if (liveTree !== expectation.treeOid) {
     throw new Error("The intended commit tree changed after transaction preparation.");
   }
+  await assertTreeContainsEvaluatedCandidate(workDir, liveTree, expectation.candidatePaths);
+  await assertPreparedIndex(workDir, receipt);
   const hooksPath = await fsp.mkdtemp(path.join(os.tmpdir(), "autoresearch-empty-hooks-"));
   let createdOid = "";
   try {
@@ -1646,19 +1801,23 @@ async function applyOrVerifyKeepCommit(
       throw new Error("Git commit creation did not match the immutable intended tree.");
     }
     const zeroOid = "0".repeat(createdOid.length);
+    const preparedRef =
+      receipt.preGit.headState.kind === "symbolic" ? receipt.preGit.headState.ref : "HEAD";
     const update = await runGit(
       [
         "-c",
         `core.hooksPath=${hooksPath}`,
         "update-ref",
-        "HEAD",
+        ...(receipt.preGit.headState.kind === "detached" ? ["--no-deref"] : []),
+        preparedRef,
         createdOid,
         expectation.parentOid || zeroOid,
       ],
       workDir,
     );
     if (update.code !== 0) {
-      const observedHead = await gitHeadOrEmpty(workDir);
+      await assertPreparedHeadState(workDir, receipt.preGit.headState);
+      const observedHead = await preparedRefOid(workDir, receipt.preGit.headState);
       if (!(await commitMatchesInterruptedCreation(workDir, observedHead, expectation))) {
         throw new Error(
           `Git HEAD compare-and-swap failed: ${gitOutput(update, "HEAD changed concurrently")}`,
@@ -1666,12 +1825,16 @@ async function applyOrVerifyKeepCommit(
       }
       createdOid = observedHead;
     }
+    await assertPreparedHeadState(workDir, receipt.preGit.headState);
+    if ((await preparedRefOid(workDir, receipt.preGit.headState)) !== createdOid) {
+      throw new Error("The prepared Git ref did not retain the created keep commit.");
+    }
     await options.faultInjection?.("after:commit-ref-updated");
   } finally {
     await fsp.rm(hooksPath, { recursive: true, force: true });
   }
   expectation.oid = createdOid;
-  await reconcileCommittedIndex(workDir, expectation);
+  await reconcileCommittedIndex(workDir, receipt);
   recordCreatedCommit(receipt, createdOid);
   await writeLogTransactionReceipt(workDir, receipt);
   await verifyRecordedCommit(workDir, receipt);
@@ -1679,8 +1842,16 @@ async function applyOrVerifyKeepCommit(
 
 async function reconcileCommittedIndex(
   workDir: string,
-  expectation: LogTransactionReceipt["commitExpectation"],
+  receipt: LogTransactionReceipt,
 ): Promise<void> {
+  const expectation = receipt.commitExpectation;
+  const currentIndex = await currentIndexTree(workDir, "verify commit index reconciliation");
+  if (currentIndex === expectation.reconciledIndexTree) return;
+  if (currentIndex !== receipt.preGit.indexTree) {
+    throw new Error(
+      "Git index changed from both the prepared and reconciled transaction states; refusing staged drift.",
+    );
+  }
   const reset = await runGit(
     expectation.paths.length > 0
       ? ["--literal-pathspecs", "reset", "--quiet", expectation.oid, "--", ...expectation.paths]
@@ -1696,6 +1867,21 @@ async function reconcileCommittedIndex(
     }
     throw new Error(`Git index reconciliation failed: ${gitOutput(reset, "unknown error")}`);
   }
+  const reconciled = await currentIndexTree(workDir, "verify reconciled commit index");
+  if (reconciled !== expectation.reconciledIndexTree) {
+    throw new Error("Git index reconciliation did not produce the receipt-bound index tree.");
+  }
+}
+
+async function assertPreparedIndex(workDir: string, receipt: LogTransactionReceipt): Promise<void> {
+  const current = await currentIndexTree(workDir, "verify prepared keep index");
+  if (current !== receipt.preGit.indexTree) {
+    throw new Error("Git index changed after keep transaction preparation; refusing staged drift.");
+  }
+}
+
+async function currentIndexTree(workDir: string, label: string): Promise<string> {
+  return await requiredGitText(workDir, ["write-tree"], label);
 }
 
 function recordCreatedCommit(receipt: LogTransactionReceipt, oid: string): void {
@@ -1712,12 +1898,26 @@ async function verifyRecordedCommit(
   workDir: string,
   receipt: LogTransactionReceipt,
 ): Promise<void> {
+  await verifyRecordedCommitIdentity(workDir, receipt);
+  if (receipt.commitExpectation.mode === "create") {
+    const indexTree = await currentIndexTree(workDir, "verify recorded keep index");
+    if (indexTree !== receipt.commitExpectation.reconciledIndexTree) {
+      throw new Error("Recorded keep commit index reconciliation is incomplete or changed.");
+    }
+  }
+}
+
+async function verifyRecordedCommitIdentity(
+  workDir: string,
+  receipt: LogTransactionReceipt,
+): Promise<void> {
   const expectation = receipt.commitExpectation;
   if (expectation.mode === "none") return;
   if (!expectation.oid) throw new Error("Pending keep transaction has no recorded commit OID.");
-  const head = await requiredGitText(workDir, ["rev-parse", "HEAD"], "verify committed HEAD");
+  await assertPreparedHeadState(workDir, receipt.preGit.headState);
+  const head = await preparedRefOid(workDir, receipt.preGit.headState);
   if (head !== expectation.oid) {
-    throw new Error("Recorded keep commit is no longer the current Git HEAD.");
+    throw new Error("Recorded keep commit is no longer on the prepared Git ref.");
   }
   const metadata = await commitMetadata(workDir, expectation.oid);
   if (
@@ -1727,6 +1927,17 @@ async function verifyRecordedCommit(
   ) {
     throw new Error("Recorded keep commit parent, tree, or message digest changed.");
   }
+}
+
+async function preparedRefOid(workDir: string, headState: PreparedHeadState): Promise<string> {
+  if (headState.kind === "none") return "";
+  const ref = headState.kind === "symbolic" ? headState.ref : "HEAD";
+  const result = await runGit(["rev-parse", "--verify", "--quiet", ref], workDir);
+  if (result.code === 1 && !result.stdoutTruncated) return "";
+  if (result.code !== 0 || result.stdoutTruncated) {
+    throw new Error(`Git could not read the prepared ref: ${gitOutput(result, "unknown error")}`);
+  }
+  return result.stdout.trim();
 }
 
 async function commitMatchesInterruptedCreation(
@@ -1788,7 +1999,13 @@ async function ensureLedgerEvent(workDir: string, receipt: LogTransactionReceipt
       mode: 0o600,
     });
   }
-  appendJsonlEntries(workDir, expected);
+  const sessionPaths = resolveSessionPaths({ workDir });
+  await checkedAppendFile(
+    sessionPaths.sessionDir,
+    sessionPaths.ledgerPath,
+    ledgerSuffixBytes(receipt, expected),
+    { mode: 0o600 },
+  );
   await verifyLedgerEvent(workDir, receipt);
 }
 
@@ -1825,8 +2042,13 @@ async function inspectTransactionLedgerSuffix(
   if (sha256Bytes(prefix) !== receipt.ledgerEvent.prefixDigest) {
     throw new Error("The ledger prefix changed while the log transaction was pending.");
   }
+  const requiredDelimiter =
+    prefix.byteLength > 0 && prefix[prefix.byteLength - 1] !== 0x0a ? "\n" : "";
+  if (receipt.ledgerEvent.prefixDelimiter !== requiredDelimiter) {
+    throw new Error("The receipt-owned ledger row delimiter does not match the prepared prefix.");
+  }
   const suffix = current.subarray(prefixByteLength);
-  const expected = Buffer.from(serializeLedgerRows(expectedRows), "utf8");
+  const expected = ledgerSuffixBytes(receipt, expectedRows);
   if (suffix.equals(expected)) return { state: "complete", prefix };
   if (suffix.byteLength === 0) return { state: "absent", prefix };
   if (
@@ -1842,9 +2064,13 @@ async function inspectTransactionLedgerSuffix(
 
 async function snapshotLedgerPrefix(
   workDir: string,
-): Promise<{ byteLength: number; digest: string }> {
+): Promise<{ byteLength: number; delimiter: "" | "\n"; digest: string }> {
   const bytes = await readLedgerBytes(workDir);
-  return { byteLength: bytes.byteLength, digest: sha256Bytes(bytes) };
+  return {
+    byteLength: bytes.byteLength,
+    delimiter: bytes.byteLength > 0 && bytes[bytes.byteLength - 1] !== 0x0a ? "\n" : "",
+    digest: sha256Bytes(bytes),
+  };
 }
 
 async function readLedgerBytes(workDir: string): Promise<Buffer> {
@@ -1859,6 +2085,10 @@ async function readLedgerBytes(workDir: string): Promise<Buffer> {
 
 function serializeLedgerRows(rows: UnknownRecord[]): string {
   return `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`;
+}
+
+function ledgerSuffixBytes(receipt: LogTransactionReceipt, rows: UnknownRecord[]): Buffer {
+  return Buffer.from(`${receipt.ledgerEvent.prefixDelimiter}${serializeLedgerRows(rows)}`, "utf8");
 }
 
 function transactionLedgerRows(workDir: string, transactionId: string): UnknownRecord[] {
@@ -1990,15 +2220,65 @@ async function preGitDigests(
   inGit: boolean,
 ): Promise<LogTransactionReceipt["preGit"]> {
   if (!inGit) {
-    const empty = { headOid: "", indexTree: "", statusDigest: sha256Text("") };
+    const empty = {
+      headOid: "",
+      headState: { kind: "none" as const, ref: "" as const },
+      indexTree: "",
+      statusDigest: sha256Text(""),
+    };
     return { ...empty, digest: sha256Json(empty) };
   }
+  const headState = await gitHeadState(workDir);
   const snapshot = {
-    headOid: await gitHeadOrEmpty(workDir),
+    headOid: await preparedRefOid(workDir, headState),
+    headState,
     indexTree: await requiredGitText(workDir, ["write-tree"], "read pre-Git index tree"),
     statusDigest: sha256Text(await gitStatusShort(workDir)),
   };
   return { ...snapshot, digest: sha256Json(snapshot) };
+}
+
+function isPreparedHeadState(value: unknown): value is PreparedHeadState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const state = value as { kind?: unknown; ref?: unknown };
+  if (state.kind === "none" || state.kind === "detached") return state.ref === "";
+  return (
+    state.kind === "symbolic" &&
+    typeof state.ref === "string" &&
+    state.ref.startsWith("refs/") &&
+    state.ref.length > "refs/".length
+  );
+}
+
+async function gitHeadState(workDir: string): Promise<PreparedHeadState> {
+  const symbolic = await runGit(["symbolic-ref", "--quiet", "HEAD"], workDir);
+  if (symbolic.code === 0 && !symbolic.stdoutTruncated) {
+    const ref = symbolic.stdout.trim();
+    if (!ref) throw new Error("Git returned an empty symbolic HEAD reference.");
+    return { kind: "symbolic", ref };
+  }
+  if (symbolic.code === 1 && !symbolic.stdoutTruncated) return { kind: "detached", ref: "" };
+  throw new Error(
+    `Git could not read symbolic HEAD state: ${gitOutput(symbolic, "unknown error")}`,
+  );
+}
+
+async function assertPreparedHeadState(
+  workDir: string,
+  expected: PreparedHeadState,
+): Promise<void> {
+  if (expected.kind === "none") {
+    if (await insideGitRepo(workDir)) {
+      throw new Error("Git repository state appeared after transaction preparation.");
+    }
+    return;
+  }
+  const current = await gitHeadState(workDir);
+  if (sha256Json(current) !== sha256Json(expected)) {
+    throw new Error(
+      "Git symbolic branch or detached HEAD state changed after transaction preparation.",
+    );
+  }
 }
 
 async function gitHeadOrEmpty(workDir: string): Promise<string> {
@@ -2123,6 +2403,29 @@ async function discardCleanupPlan(
   );
   const statusShort = await gitStatusShort(workDir);
   const statusEntries = parsePorcelainV1Z(statusShort);
+  const deletedPaths = uniqueSorted(
+    statusEntries.flatMap((entry) => {
+      if (entry.originalPath && entry.status.includes("R")) return [entry.originalPath];
+      return entry.status.includes("D") ? [entry.path] : [];
+    }),
+  );
+  const possibleDestinationPaths = uniqueSorted(
+    statusEntries.flatMap((entry) => {
+      if (entry.originalPath && /[RC]/.test(entry.status)) return [entry.path];
+      return entry.status === "??" || /[AMTU]/.test(entry.status) ? [entry.path] : [];
+    }),
+  );
+  const deletedProtected = deletedPaths.find((deletedPath) =>
+    protectedPaths.some((protectedPath) => pathsOverlap(deletedPath, protectedPath)),
+  );
+  const protectedDestination = possibleDestinationPaths.find(
+    (destinationPath) => destinationPath !== deletedProtected,
+  );
+  if (deletedProtected && protectedDestination) {
+    throw new Error(
+      `Refusing a moved protected session or evidence identity: ${deletedProtected} -> ${protectedDestination}.`,
+    );
+  }
   if (scopedPaths.length > 0) {
     for (const entry of statusEntries) {
       if (!entry.originalPath || !entry.status.includes("R")) continue;
@@ -2135,24 +2438,17 @@ async function discardCleanupPlan(
         );
       }
     }
-    const deletedEntries = statusEntries.filter(
-      (entry) => !entry.originalPath && entry.status.includes("D"),
-    );
-    const untrackedEntries = statusEntries.filter((entry) => entry.status === "??");
-    for (const deleted of deletedEntries) {
-      for (const untracked of untrackedEntries) {
+    for (const deletedPath of deletedPaths) {
+      for (const createdPath of possibleDestinationPaths) {
         const deletedOwned = scopedPaths.some((scopePath) =>
-          pathIsCoveredByScope(deleted.path, scopePath),
+          pathIsCoveredByScope(deletedPath, scopePath),
         );
-        const untrackedOwned = scopedPaths.some((scopePath) =>
-          pathIsCoveredByScope(untracked.path, scopePath),
+        const createdOwned = scopedPaths.some((scopePath) =>
+          pathIsCoveredByScope(createdPath, scopePath),
         );
-        if (
-          deletedOwned !== untrackedOwned &&
-          (await pathsHaveSameGitBlob(workDir, deleted.path, untracked.path))
-        ) {
+        if (deletedOwned !== createdOwned) {
           throw new Error(
-            `Refusing an unstaged rename across the configured Git-scope ownership boundary: ${deleted.path} -> ${untracked.path}.`,
+            `Refusing an ambiguous edited or split-index rename across the configured Git-scope ownership boundary: ${deletedPath} -> ${createdPath}.`,
           );
         }
       }
@@ -2222,24 +2518,6 @@ async function assertProtectedCleanupPathsAreSafe(
   }
 }
 
-async function pathsHaveSameGitBlob(
-  workDir: string,
-  trackedPath: string,
-  untrackedPath: string,
-): Promise<boolean> {
-  const staged = await runGit(
-    ["--literal-pathspecs", "ls-files", "--stage", "-z", "--", trackedPath],
-    workDir,
-  );
-  if (staged.code !== 0 || staged.stdoutTruncated) return false;
-  const trackedOid = staged.stdout.match(/^[0-7]+ ([0-9a-f]{40,64}) [0-3]\t/)?.[1] || "";
-  if (!trackedOid) return false;
-  const untracked = await runGit(["hash-object", "--no-filters", "--", untrackedPath], workDir);
-  return (
-    untracked.code === 0 && !untracked.stdoutTruncated && untracked.stdout.trim() === trackedOid
-  );
-}
-
 function discardCleanupMessage(plan: DiscardCleanupPlan): string {
   if (!plan.dirtyPaths.length) return "Git: clean tree, no discard cleanup needed.";
   if (plan.scopedPaths.length > 0) {
@@ -2254,9 +2532,18 @@ function discardCleanupMessage(plan: DiscardCleanupPlan): string {
 async function applyTrackedCleanup(workDir: string, receipt: LogTransactionReceipt): Promise<void> {
   if (receipt.cleanup.trackedPaths.length === 0) return;
   if (await trackedCleanupPostconditionSatisfied(workDir, receipt)) return;
-  await assertCleanupGitIdentity(workDir, receipt, true);
-  await assertCleanupTargetsUnchanged(workDir, receipt.cleanup.trackedTargets, "tracked cleanup");
-  await cleanupTrackedChanges(workDir, receipt.cleanup);
+  await assertCleanupGitIdentity(workDir, receipt);
+  for (const target of receipt.cleanup.trackedTargets) {
+    await assertCleanupGitIdentity(workDir, receipt);
+    if (await trackedTargetCleanupPostconditionSatisfied(workDir, target.path)) continue;
+    await assertCleanupTargetPrepared(workDir, target, "tracked cleanup");
+    await cleanupTrackedPath(workDir, target.path);
+    if (!(await trackedTargetCleanupPostconditionSatisfied(workDir, target.path))) {
+      throw new Error(
+        `Tracked cleanup postcondition is not satisfied for ${target.path}; worktree content changed.`,
+      );
+    }
+  }
   await verifyTrackedCleanupPostcondition(workDir, receipt);
 }
 
@@ -2266,50 +2553,42 @@ async function applyUntrackedCleanup(
 ): Promise<void> {
   if (receipt.cleanup.untrackedPaths.length === 0) return;
   if (await untrackedCleanupPostconditionSatisfied(workDir, receipt)) return;
-  await assertCleanupGitIdentity(workDir, receipt, false);
-  await assertCleanupTargetsUnchanged(
-    workDir,
-    receipt.cleanup.untrackedTargets,
-    "untracked cleanup",
-  );
-  await cleanupUntrackedChanges(workDir, receipt.cleanup);
+  await assertCleanupGitIdentity(workDir, receipt);
+  for (const target of receipt.cleanup.untrackedTargets) {
+    await assertCleanupGitIdentity(workDir, receipt);
+    if (await untrackedTargetCleanupPostconditionSatisfied(workDir, target)) continue;
+    await assertCleanupTargetPrepared(workDir, target, "untracked cleanup");
+    await cleanupUntrackedPath(workDir, target.path);
+    if (!(await untrackedTargetCleanupPostconditionSatisfied(workDir, target))) {
+      throw new Error(
+        `Untracked cleanup postcondition is not satisfied for ${target.path}; worktree content changed.`,
+      );
+    }
+  }
   await verifyUntrackedCleanupPostcondition(workDir, receipt);
 }
 
 async function assertCleanupGitIdentity(
   workDir: string,
   receipt: LogTransactionReceipt,
-  verifyIndex: boolean,
 ): Promise<void> {
+  await assertPreparedHeadState(workDir, receipt.preGit.headState);
   const currentHead = await gitHeadOrEmpty(workDir);
   if (currentHead !== receipt.cleanup.headOid) {
     throw new Error("Git HEAD changed after non-keep cleanup preparation; refusing cleanup drift.");
   }
-  if (verifyIndex) {
-    const currentIndex = await requiredGitText(
-      workDir,
-      ["write-tree"],
-      "verify pending cleanup index",
-    );
-    if (currentIndex !== receipt.cleanup.indexTree) {
-      throw new Error(
-        "Git index changed after non-keep cleanup preparation; refusing cleanup drift.",
-      );
-    }
-  }
 }
 
-async function assertCleanupTargetsUnchanged(
+async function assertCleanupTargetPrepared(
   workDir: string,
-  expected: CleanupTargetIdentity[],
+  expected: CleanupTargetIdentity,
   label: string,
 ): Promise<void> {
-  const current = await cleanupTargetIdentities(
-    workDir,
-    expected.map((target) => target.path),
-  );
+  const current = await cleanupTargetIdentity(workDir, expected.path);
   if (sha256Json(current) !== sha256Json(expected)) {
-    throw new Error(`The ${label} worktree targets changed after transaction preparation.`);
+    throw new Error(
+      `The ${label} target ${expected.path} changed after transaction preparation; refusing cleanup drift.`,
+    );
   }
 }
 
@@ -2328,12 +2607,25 @@ async function trackedCleanupPostconditionSatisfied(
 ): Promise<boolean> {
   const paths = receipt.cleanup.trackedPaths;
   if (paths.length === 0) return true;
+  await assertPreparedHeadState(workDir, receipt.preGit.headState);
   if ((await gitHeadOrEmpty(workDir)) !== receipt.cleanup.headOid) return false;
+  for (const target of receipt.cleanup.trackedTargets) {
+    if (!(await trackedTargetCleanupPostconditionSatisfied(workDir, target.path))) return false;
+  }
+  return true;
+}
+
+async function trackedTargetCleanupPostconditionSatisfied(
+  workDir: string,
+  relativePath: string,
+): Promise<boolean> {
   const clean = await runGit(
-    ["--literal-pathspecs", "diff", "--quiet", "HEAD", "--", ...paths],
+    ["--literal-pathspecs", "diff", "--quiet", "HEAD", "--", relativePath],
     workDir,
   );
-  return clean.code === 0 && !clean.stdoutTruncated;
+  if (clean.code === 0 && !clean.stdoutTruncated) return true;
+  if (clean.code === 1 && !clean.stdoutTruncated) return false;
+  throw new Error(`Git could not verify tracked cleanup for ${relativePath}.`);
 }
 
 async function verifyUntrackedCleanupPostcondition(
@@ -2350,12 +2642,20 @@ async function untrackedCleanupPostconditionSatisfied(
   receipt: LogTransactionReceipt,
 ): Promise<boolean> {
   if (receipt.cleanup.untrackedTargets.length === 0) return true;
+  await assertPreparedHeadState(workDir, receipt.preGit.headState);
   if ((await gitHeadOrEmpty(workDir)) !== receipt.cleanup.headOid) return false;
   for (const target of receipt.cleanup.untrackedTargets) {
-    const current = await cleanupTargetIdentity(workDir, target.path);
-    if (current.kind !== "absent") return false;
+    if (!(await untrackedTargetCleanupPostconditionSatisfied(workDir, target))) return false;
   }
   return true;
+}
+
+async function untrackedTargetCleanupPostconditionSatisfied(
+  workDir: string,
+  expected: CleanupTargetIdentity,
+): Promise<boolean> {
+  const current = await cleanupTargetIdentity(workDir, expected.path);
+  return current.kind === "absent" && current.indexDigest === expected.indexDigest;
 }
 
 async function cleanupTargetIdentities(
@@ -2376,12 +2676,13 @@ async function cleanupTargetIdentity(
   if (!target.inside || !target.relativePath) {
     throw new Error(`Cleanup target escapes the working directory: ${relativePath}.`);
   }
+  const indexDigest = await cleanupTargetIndexDigest(workDir, target.relativePath);
   const stat = await fsp.lstat(target.absolutePath).catch((error) => {
     if (hasErrorCode(error, "ENOENT")) return null;
     throw error;
   });
   if (!stat) {
-    const state = { kind: "absent" as const, mode: 0, size: 0 };
+    const state = { kind: "absent" as const, mode: 0, size: 0, indexDigest };
     return { path: target.relativePath, ...state, digest: sha256Json(state) };
   }
   if (stat.isSymbolicLink()) {
@@ -2391,6 +2692,7 @@ async function cleanupTargetIdentity(
       mode: stat.mode & 0o777,
       size: Buffer.byteLength(link),
       link,
+      indexDigest,
     };
     return { path: target.relativePath, ...state, digest: sha256Json(state) };
   }
@@ -2401,6 +2703,7 @@ async function cleanupTargetIdentity(
       mode: stat.mode & 0o777,
       size: bytes.length,
       contentDigest: createHash("sha256").update(bytes).digest("hex"),
+      indexDigest,
     };
     return { path: target.relativePath, ...state, digest: sha256Json(state) };
   }
@@ -2411,11 +2714,30 @@ async function cleanupTargetIdentity(
       mode: stat.mode & 0o777,
       size: entries.reduce((total, entry) => total + entry.size, 0),
       entries,
+      indexDigest,
     };
     return { path: target.relativePath, ...state, digest: sha256Json(state) };
   }
-  const state = { kind: "other" as const, mode: stat.mode & 0o777, size: stat.size };
+  const state = {
+    kind: "other" as const,
+    mode: stat.mode & 0o777,
+    size: stat.size,
+    indexDigest,
+  };
   return { path: target.relativePath, ...state, digest: sha256Json(state) };
+}
+
+async function cleanupTargetIndexDigest(workDir: string, relativePath: string): Promise<string> {
+  const staged = await runGit(
+    ["--literal-pathspecs", "ls-files", "--stage", "-z", "--", relativePath],
+    workDir,
+  );
+  if (staged.code !== 0 || staged.stdoutTruncated) {
+    throw new Error(
+      `Git could not capture cleanup index state for ${relativePath}: ${gitOutput(staged, "unknown error")}`,
+    );
+  }
+  return sha256Text(staged.stdout);
 }
 
 async function cleanupDirectoryEntries(
@@ -2474,15 +2796,10 @@ async function cleanupDirectoryEntries(
   return entries;
 }
 
-async function cleanupTrackedChanges(
-  workDir: string,
-  cleanup: LogMutationPlan["cleanup"],
-): Promise<void> {
+async function cleanupTrackedPath(workDir: string, relativePath: string): Promise<void> {
   if (!(await insideGitRepo(workDir))) return;
-  const paths = cleanup.trackedPaths;
-  if (paths.length === 0) return;
   const restore = await runGit(
-    ["--literal-pathspecs", "restore", "--worktree", "--staged", "--", ...paths],
+    ["--literal-pathspecs", "restore", "--worktree", "--staged", "--", relativePath],
     workDir,
   );
   if (restore.code !== 0) {
@@ -2490,14 +2807,9 @@ async function cleanupTrackedChanges(
   }
 }
 
-async function cleanupUntrackedChanges(
-  workDir: string,
-  cleanup: LogMutationPlan["cleanup"],
-): Promise<void> {
+async function cleanupUntrackedPath(workDir: string, relativePath: string): Promise<void> {
   if (!(await insideGitRepo(workDir))) return;
-  const paths = cleanup.untrackedPaths;
-  if (paths.length === 0) return;
-  const clean = await runGit(["--literal-pathspecs", "clean", "-fd", "--", ...paths], workDir);
+  const clean = await runGit(["--literal-pathspecs", "clean", "-fd", "--", relativePath], workDir);
   if (clean.code !== 0) {
     throw new Error(`Git untracked cleanup failed: ${gitOutput(clean, "unknown error")}`);
   }
@@ -2552,27 +2864,30 @@ async function assertCommitMatchesEvaluatedCandidate(
       `Git could not compare the imported commit with the evaluated candidate: ${gitOutput(changed, "unknown error")}`,
     );
   }
-  const untracked = await runGit(
-    [
-      "--literal-pathspecs",
-      "ls-files",
-      "--others",
-      "--exclude-standard",
-      "-z",
-      "--",
-      ...editablePaths,
-    ],
-    workDir,
-  );
-  if (untracked.code !== 0 || untracked.stdoutTruncated) {
-    throw new Error(
-      `Git could not verify untracked evaluated candidate paths: ${gitOutput(untracked, "unknown error")}`,
+  for (const ignored of [false, true]) {
+    const untracked = await runGit(
+      [
+        "--literal-pathspecs",
+        "ls-files",
+        "--others",
+        ...(ignored ? ["--ignored"] : []),
+        "--exclude-standard",
+        "-z",
+        "--",
+        ...editablePaths,
+      ],
+      workDir,
     );
-  }
-  if (untracked.stdout.length > 0) {
-    throw new Error(
-      "An imported keep commit omits untracked editable candidate paths evaluated by the accepted-contract packet.",
-    );
+    if (untracked.code !== 0 || untracked.stdoutTruncated) {
+      throw new Error(
+        `Git could not verify untracked evaluated candidate paths: ${gitOutput(untracked, "unknown error")}`,
+      );
+    }
+    if (untracked.stdout.length > 0) {
+      throw new Error(
+        "An imported keep commit omits untracked editable candidate paths evaluated by the accepted-contract packet.",
+      );
+    }
   }
 }
 

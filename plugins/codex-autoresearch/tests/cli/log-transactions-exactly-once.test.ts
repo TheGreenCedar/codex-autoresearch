@@ -40,8 +40,12 @@ async function setupTransactionFixture(
     artifactPath?: string;
     commitPaths?: string[];
     commitCandidateBeforePacket?: boolean;
+    candidateScore?: string;
+    detachBeforePacket?: boolean;
     dirtySessionBeforePacket?: boolean;
     generateArtifactDuringRun?: boolean;
+    initialScore?: string;
+    partialCleanupCandidates?: boolean;
     protectedArtifact?: boolean;
     untrackedCandidate?: boolean;
   } = {},
@@ -54,7 +58,7 @@ async function setupTransactionFixture(
   });
   await mkdir(path.join(dir, "src"), { recursive: true });
   await mkdir(path.join(dir, "contract"), { recursive: true });
-  await writeFile(path.join(dir, "src", "score.txt"), "1\n");
+  await writeFile(path.join(dir, "src", "score.txt"), `${options.initialScore ?? "1"}\n`);
   await writeFile(
     path.join(dir, "contract", "evaluator.mjs"),
     [
@@ -116,13 +120,22 @@ async function setupTransactionFixture(
   await git(dir, ["add", "."]);
   await git(dir, ["commit", "-m", "initial session"]);
   const initialCommit = await git(dir, ["rev-parse", "HEAD"]);
-  await writeFile(path.join(dir, "src", "score.txt"), "2\n");
+  await writeFile(path.join(dir, "src", "score.txt"), `${options.candidateScore ?? "2"}\n`);
   if (options.untrackedCandidate) {
     await writeFile(path.join(dir, "src", "scratch.txt"), "candidate scratch\n");
+  }
+  if (options.partialCleanupCandidates) {
+    await mkdir(path.join(dir, "src", "z"), { recursive: true });
+    await writeFile(path.join(dir, "src", "a.txt"), "first cleanup target\n");
+    await writeFile(path.join(dir, "src", "z", "blocked.txt"), "blocked cleanup target\n");
+    await chmod(path.join(dir, "src", "z"), 0o500);
   }
   if (options.commitCandidateBeforePacket) {
     await git(dir, ["add", "src/score.txt"]);
     await git(dir, ["commit", "-m", "imported candidate"]);
+  }
+  if (options.detachBeforePacket) {
+    await git(dir, ["switch", "--detach"]);
   }
   if (options.dirtySessionBeforePacket) {
     await writeFile(path.join(dir, "autoresearch.md"), "operator state that must survive\n");
@@ -257,6 +270,174 @@ test("keep retry recovers a recorded commit before its stage checkpoint", async 
       (await ledgerRows(dir)).filter((row) => row.description === "Keep accepted candidate").length,
       1,
     );
+  });
+});
+
+test("keep rejects commit scope that omits the accepted editable candidate", async () => {
+  await withTempDir("keep-omitted-accepted-candidate", async (dir) => {
+    await setupTransactionFixture(dir);
+    const before = await git(dir, ["rev-parse", "HEAD"]);
+
+    await assert.rejects(
+      invokeLog({ ...keepArgs(dir), commit_paths: ["contract"] }),
+      /commit.*scope|accepted.*editable|evaluated candidate/i,
+    );
+
+    assert.equal(await git(dir, ["rev-parse", "HEAD"]), before);
+    assert.equal(await readFile(path.join(dir, "src", "score.txt"), "utf8"), "2\n");
+  });
+});
+
+test("create-mode keep rejects an evaluated no-op candidate", async () => {
+  await withTempDir("keep-evaluated-no-op", async (dir) => {
+    await setupTransactionFixture(dir, { candidateScore: "2", initialScore: "2" });
+    const before = await git(dir, ["rev-parse", "HEAD"]);
+
+    await assert.rejects(invokeLog(keepArgs(dir)), /no-op|no changes|candidate tree/i);
+
+    assert.equal(await git(dir, ["rev-parse", "HEAD"]), before);
+    assert.equal(
+      (await ledgerRows(dir)).filter((row) => row.description === "Keep accepted candidate").length,
+      0,
+    );
+  });
+});
+
+test("keep retry rejects staged-only index drift after ref advancement", async () => {
+  await withTempDir("keep-index-drift-after-ref", async (dir) => {
+    await setupTransactionFixture(dir);
+    await assert.rejects(
+      invokeLog(keepArgs(dir), {
+        faultInjection: (seen) => failAt(seen, "after:commit-ref-updated"),
+      }),
+      /after:commit-ref-updated/,
+    );
+    await writeFile(path.join(dir, "src", "score.txt"), "99\n");
+    await git(dir, ["add", "src/score.txt"]);
+    await writeFile(path.join(dir, "src", "score.txt"), "2\n");
+    assert.equal(await git(dir, ["show", ":src/score.txt"]), "99");
+
+    await assert.rejects(
+      invokeLog(keepArgs(dir)),
+      /index.*changed|prepared.*index|staged.*changed/i,
+    );
+
+    assert.equal(await git(dir, ["show", ":src/score.txt"]), "99");
+  });
+});
+
+test("keep retry completes a failed index reconciliation before marking commit complete", async () => {
+  await withTempDir("keep-retry-index-reconciliation", async (dir) => {
+    await setupTransactionFixture(dir);
+    const indexLock = path.resolve(dir, await git(dir, ["rev-parse", "--git-path", "index.lock"]));
+    try {
+      await assert.rejects(
+        invokeLog(keepArgs(dir), {
+          faultInjection: async (seen) => {
+            if (seen === "after:commit-ref-updated") {
+              await writeFile(indexLock, "block index reconciliation\n");
+            }
+          },
+        }),
+        /index\.lock|index.*lock|reconciliation/i,
+      );
+    } finally {
+      await rm(indexLock, { force: true });
+    }
+    const pending = JSON.parse(await readFile(await receiptPath(dir), "utf8"));
+    assert.match(String(pending.commitExpectation.oid || ""), /^[a-f0-9]{40,64}$/);
+
+    const retried = await invokeLog(keepArgs(dir));
+
+    assert.equal(retried.ok, true);
+    assert.equal(await git(dir, ["diff", "--cached", "--name-only"]), "");
+    assert.equal(Number(await git(dir, ["rev-list", "--count", "HEAD"])), 2);
+    assert.equal(
+      (await ledgerRows(dir)).filter((row) => row.description === "Keep accepted candidate").length,
+      1,
+    );
+  });
+});
+
+test("keep retry rejects a same-parent symbolic branch switch", async () => {
+  await withTempDir("keep-symbolic-ref-drift", async (dir) => {
+    await setupTransactionFixture(dir);
+    const preparedParent = await git(dir, ["rev-parse", "HEAD"]);
+    await assert.rejects(
+      invokeLog(keepArgs(dir), {
+        faultInjection: (seen) => failAt(seen, "before:commit-applied-or-verified"),
+      }),
+      /before:commit-applied-or-verified/,
+    );
+    await git(dir, ["switch", "-c", "other"]);
+
+    await assert.rejects(invokeLog(keepArgs(dir)), /branch|symbolic|prepared ref|HEAD state/i);
+
+    assert.equal(await git(dir, ["rev-parse", "refs/heads/main"]), preparedParent);
+    assert.equal(await git(dir, ["rev-parse", "refs/heads/other"]), preparedParent);
+    assert.equal(await readFile(path.join(dir, "src", "score.txt"), "utf8"), "2\n");
+  });
+});
+
+test("keep commit compare-and-swap preserves prepared detached HEAD state", async () => {
+  await withTempDir("keep-prepared-detached-head", async (dir) => {
+    await setupTransactionFixture(dir, { detachBeforePacket: true });
+    const main = await git(dir, ["rev-parse", "refs/heads/main"]);
+
+    const logged = await invokeLog(keepArgs(dir));
+
+    assert.equal(logged.ok, true);
+    assert.equal(await git(dir, ["branch", "--show-current"]), "");
+    assert.equal(await git(dir, ["rev-parse", "refs/heads/main"]), main);
+    assert.notEqual(await git(dir, ["rev-parse", "HEAD"]), main);
+    assert.equal(await git(dir, ["show", "HEAD:src/score.txt"]), "2");
+  });
+});
+
+test("ledger append inserts a receipt-owned delimiter after a valid unterminated prefix", async () => {
+  await withTempDir("ledger-prefix-delimiter", async (dir) => {
+    await setupFixture(dir, { name: "ledger delimiter" });
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const prefix = await readFile(ledgerPath, "utf8");
+    assert.equal(prefix.endsWith("\n"), true);
+    await writeFile(ledgerPath, prefix.slice(0, -1), "utf8");
+
+    const logged = await invokeLog({
+      cwd: dir,
+      metric: 1,
+      status: "measure",
+      description: "Delimited measure",
+    });
+
+    assert.equal(logged.ok, true);
+    assert.equal(
+      (await ledgerRows(dir)).filter((row) => row.description === "Delimited measure").length,
+      1,
+    );
+  });
+});
+
+test("partial untracked cleanup resumes target by target", async () => {
+  await withTempDir("partial-untracked-cleanup", async (dir) => {
+    const blockedDirectory = path.join(dir, "src", "z");
+    try {
+      await setupTransactionFixture(dir, { partialCleanupCandidates: true });
+      await assert.rejects(
+        invokeLog(discardArgs(dir)),
+        /Git untracked cleanup failed|failed to remove|Permission denied/i,
+      );
+      await assert.rejects(access(path.join(dir, "src", "a.txt")), /ENOENT/);
+      await access(path.join(blockedDirectory, "blocked.txt"));
+
+      await chmod(blockedDirectory, 0o700);
+      const retried = await invokeLog(discardArgs(dir));
+
+      assert.equal(retried.ok, true);
+      await assert.rejects(access(path.join(dir, "src", "a.txt")), /ENOENT/);
+      await assert.rejects(access(path.join(blockedDirectory, "blocked.txt")), /ENOENT/);
+    } finally {
+      await chmod(blockedDirectory, 0o700).catch(() => {});
+    }
   });
 });
 
