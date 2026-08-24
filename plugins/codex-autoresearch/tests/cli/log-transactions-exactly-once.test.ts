@@ -128,7 +128,7 @@ async function setupTransactionFixture(
       2,
     )}\n`,
   );
-  await git(dir, ["init"]);
+  await git(dir, ["init", "--initial-branch", "main"]);
   await git(dir, ["add", "."]);
   await git(dir, ["commit", "-m", "initial session"]);
   const initialCommit = await git(dir, ["rev-parse", "HEAD"]);
