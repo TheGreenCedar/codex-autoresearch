@@ -67,8 +67,17 @@ export function jsonlPath(workDir: string): string {
 }
 
 export function appendJsonl(workDir: string, entry: UnknownRecord): void {
+  appendJsonlEntries(workDir, [entry]);
+}
+
+export function appendJsonlEntries(workDir: string, entries: UnknownRecord[]): void {
+  if (entries.length === 0) return;
   const paths = resolveSessionPaths({ workDir });
-  checkedAppendFileSync(paths.sessionDir, paths.ledgerPath, `${JSON.stringify(entry)}\n`);
+  checkedAppendFileSync(
+    paths.sessionDir,
+    paths.ledgerPath,
+    `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+  );
 }
 
 export function readJsonl(workDir: string): SessionRecord[] {

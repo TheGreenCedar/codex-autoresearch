@@ -40,17 +40,22 @@ async function setupFixture(dir: string, options: Parameters<typeof setupSession
 test("config persists operator settings and extends iteration limits", async () => {
   await withTempDir("operator-config", async (dir) => {
     await setupSessionFixture(dir, { name: "operator config" });
-    await runCli([
+    const baseline = await runCli([
       "log",
       "--cwd",
       dir,
       "--metric",
       "5",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Baseline",
     ]);
+    assert.equal(baseline.code, 0, baseline.stderr);
+    const baselineRecord = JSON.parse(baseline.stdout).experiment;
+    assert.equal(baselineRecord.runPurpose, "baseline");
+    assert.equal(baselineRecord.evaluationAuthority, "manual");
+    assert.deepEqual(baselineRecord.candidateOrigin, { kind: "none" });
 
     const result = await runCli([
       "config",
@@ -76,7 +81,7 @@ test("config persists operator settings and extends iteration limits", async () 
     assert.equal(payload.config.checksPolicy, "on-improvement");
     assert.equal(payload.config.keepPolicy, "primary-or-risk-reduction");
     assert.equal(payload.config.dashboardRefreshSeconds, 2);
-    assert.equal(payload.config.maxIterations, 5);
+    assert.equal(payload.config.maxIterations, 4);
     assert.deepEqual(payload.config.commitPaths, ["src", "tests"]);
 
     const state = await runCli(["state", "--cwd", dir, "--json-full"]);
@@ -267,17 +272,18 @@ test("next parses metrics from the full benchmark output before display truncati
 test("successful last-run packets require explicit status and suggest discard for regressions", async () => {
   await withTempDir("last-run-suggest-discard", async (dir) => {
     await setupFixture(dir, { name: "suggest discard", direction: "lower" });
-    await runCli([
+    const baseline = await runCli([
       "log",
       "--cwd",
       dir,
       "--metric",
       "3",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Baseline",
     ]);
+    assert.equal(baseline.code, 0, baseline.stderr);
     const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=4')"`;
 
     const next = await runCli([

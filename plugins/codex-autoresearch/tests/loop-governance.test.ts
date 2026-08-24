@@ -14,7 +14,7 @@ import { buildBudgetStatus } from "../lib/benchmark/budget-contract.js";
 import { buildLoopContractStatus, canonicalNextActionForLoop } from "../lib/loop-governance.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
 import { firstSafeCommand, resolveCommandByKeys } from "../lib/safe-command-resolver.js";
-import { buildDecisionEnvelope } from "../lib/session-core.js";
+import { buildDecisionEnvelope, iterationLimitInfo } from "../lib/session-core.js";
 import {
   buildSessionDecisionCapsule,
   matchDecisionRules,
@@ -93,6 +93,81 @@ test("budget exhaustion is a segment-transition blocker, not goal completion", (
   assert.equal(status.canRunNextPacket, false);
   assert.equal(status.strongestAction?.kind, "segment-transition");
   assert.doesNotMatch(status.strongestAction?.reason || "", /complete/i);
+});
+
+test("packet budget counts baseline and candidate packets but excludes manual, diagnostic, and holdout rows", () => {
+  const budget = buildBudgetStatus({
+    state: {
+      current: [
+        {
+          run: 1,
+          runPurpose: "diagnostic",
+          evaluationAuthority: "manual",
+          candidateOrigin: { kind: "none" },
+        },
+        {
+          run: 2,
+          runPurpose: "baseline",
+          evaluationAuthority: "accepted-contract",
+          candidateOrigin: { kind: "working-tree" },
+        },
+        {
+          run: 3,
+          runPurpose: "candidate",
+          evaluationAuthority: "accepted-contract",
+          candidateOrigin: { kind: "commit", oid: "b".repeat(40) },
+        },
+        {
+          run: 4,
+          runPurpose: "diagnostic",
+          evaluationAuthority: "accepted-contract",
+          candidateOrigin: { kind: "working-tree" },
+        },
+        {
+          run: 5,
+          runPurpose: "holdout",
+          evaluationAuthority: "external",
+          candidateOrigin: { kind: "commit", oid: "c".repeat(40) },
+        },
+        {
+          run: 6,
+          runPurpose: "baseline",
+          evaluationAuthority: "manual",
+          candidateOrigin: { kind: "none" },
+        },
+      ],
+    },
+    runtimeConfig: { packetBudget: 3 },
+  });
+
+  assert.equal(budget.packetsUsed, 2);
+  assert.equal(budget.packetsRemaining, 1);
+  assert.equal(budget.exhausted, false);
+});
+
+test("iteration limits use packet-purpose rows instead of manual observations", () => {
+  const limit = iterationLimitInfo(
+    {
+      current: [
+        {
+          run: 1,
+          status: "measure",
+          runPurpose: "baseline",
+          evaluationAuthority: "manual",
+        },
+        {
+          run: 2,
+          status: "measure",
+          runPurpose: "baseline",
+          evaluationAuthority: "accepted-contract",
+        },
+      ],
+    } as any,
+    { maxIterations: 2 },
+  );
+
+  assert.equal(limit.remainingIterations, 1);
+  assert.equal(limit.limitReached, false);
 });
 
 test("unbounded iteration budget does not trigger segment transition", () => {

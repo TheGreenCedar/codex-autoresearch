@@ -96,6 +96,7 @@ import {
   withResolvedSessionDecision,
 } from "../lib/session-read-model.js";
 import { normalizeProtectedBenchmarkPaths } from "../lib/benchmark/contract-guards.js";
+import { packetBudgetUsage } from "../lib/benchmark/budget-contract.js";
 import {
   defaultBenchmarkCommand,
   defaultBenchmarkCommandExists,
@@ -3672,7 +3673,7 @@ async function configureSession(args: LooseObject) {
   if (maxIterations != null) updates.maxIterations = maxIterations;
   if (extend != null) {
     const state = currentState(workDir);
-    const activeRuns = state.current.length;
+    const activeRuns = packetBudgetUsage(state.current);
     const currentMax = Number.isFinite(Number(config.maxIterations))
       ? Math.floor(Number(config.maxIterations))
       : activeRuns;

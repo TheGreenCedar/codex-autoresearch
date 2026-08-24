@@ -16,6 +16,7 @@ import {
   evaluateContractKeepEligibility,
   executionCommandText,
   materializeExecutionEnvironment,
+  type CandidateOrigin,
   type ExecutionSpec,
 } from "../experiment-contract.js";
 import {
@@ -220,6 +221,8 @@ async function runExperimentWithProgressWriter(
     primaryMetric != null &&
     (state.best == null || isBetter(primaryMetric, state.best, state.config.bestDirection));
   const isBaseline = state.current.filter(isBaselineEligibleMetricRun).length === 0;
+  const runPurpose = isBaseline ? "baseline" : "candidate";
+  const candidateOrigin: CandidateOrigin = isBaseline ? { kind: "none" } : { kind: "working-tree" };
   const checkRuns: Array<{
     check: (typeof experimentContract.checks)[number];
     result: ShellRunResult;
@@ -278,6 +281,9 @@ async function runExperimentWithProgressWriter(
           metric: primaryMetric,
         });
   const contractKeepEligibility = evaluateContractKeepEligibility(experimentContract, {
+    purpose: runPurpose,
+    evaluationAuthority: "accepted-contract",
+    candidateOrigin,
     acceptedEvaluation: benchmarkPassed && primaryPresent,
     checkOutcomes: contractCheckOutcomes,
     completedRepeats: completedNoiseRepeats,
@@ -339,6 +345,9 @@ async function runExperimentWithProgressWriter(
     workDir,
     command,
     executionAuthority: "accepted-contract",
+    runPurpose,
+    evaluationAuthority: "accepted-contract",
+    candidateOrigin,
     experimentContractDigest: experimentContract.contractDigest,
     contractCandidateFingerprint,
     contractKeepEligibility,

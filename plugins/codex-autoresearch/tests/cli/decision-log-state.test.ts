@@ -36,6 +36,16 @@ async function setupFixture(dir: string, options: Parameters<typeof setupSession
   return result;
 }
 
+async function appendLegacyLedgerRows(dir: string, rows: Record<string, unknown>[]) {
+  const ledgerPath = path.join(dir, "autoresearch.jsonl");
+  const ledger = await readFile(ledgerPath, "utf8");
+  await writeFile(
+    ledgerPath,
+    `${ledger}${rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    "utf8",
+  );
+}
+
 test("next returns only mechanically eligible decision options instead of a fake status", async () => {
   await withTempDir("decision-hint", async (dir) => {
     await setupFixture(dir, { name: "decision hint" });
@@ -55,18 +65,9 @@ test("next returns only mechanically eligible decision options instead of a fake
 test("state and dashboard math keep zero-valued metrics visible", async () => {
   await withTempDir("zero-metric", async (dir) => {
     await setupFixture(dir, { name: "zero metric", metricName: "failures" });
-    const log = await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "0",
-      "--status",
-      "keep",
-      "--description",
-      "Reach zero failures",
+    await appendLegacyLedgerRows(dir, [
+      { run: 1, metric: 0, status: "keep", description: "Reach zero failures" },
     ]);
-    assert.equal(log.code, 0, log.stderr);
 
     const state = await runCli(["state", "--cwd", dir]);
     assert.equal(state.code, 0, state.stderr);
@@ -92,7 +93,7 @@ test("showcase export scrubs local paths from embedded ledger entries", async ()
       "--metric",
       "1",
       "--status",
-      "keep",
+      "measure",
       "--description",
       `Evidence at ${localPath}`,
     ]);
@@ -208,7 +209,7 @@ test("log accepts metrics from a JSON file for PowerShell-safe logging", async (
       "--metric",
       "1",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "File-backed metrics",
       "--metrics-file",
@@ -221,8 +222,8 @@ test("log accepts metrics from a JSON file for PowerShell-safe logging", async (
     assert.equal(payload.experiment.metrics.queryCount, 12);
     assert.equal(payload.experiment.metrics.evidenceLabel, 'holdout "quoted" path');
     assert.equal(payload.experiment.metrics.windowsPath, "C:\\tmp\\artifact.json");
-    assert.equal(payload.experiment.evidenceStatus, "accepted");
-    assert.equal(payload.experiment.promotion.label, "promotion_eligible");
+    assert.equal(payload.experiment.evidenceStatus, "provisional");
+    assert.equal(payload.experiment.promotion.label, "measurement");
   });
 });
 
@@ -258,27 +259,9 @@ test("log succeeds with recovery warning when session note update fails", async 
 test("state supports negative metrics when lower is better", async () => {
   await withTempDir("negative-metric", async (dir) => {
     await setupFixture(dir, { name: "negative metric", metricName: "delta", direction: "lower" });
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "1",
-      "--status",
-      "keep",
-      "--description",
-      "Baseline positive delta",
-    ]);
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "-2",
-      "--status",
-      "keep",
-      "--description",
-      "Beat baseline below zero",
+    await appendLegacyLedgerRows(dir, [
+      { run: 1, metric: 1, status: "keep", description: "Baseline positive delta" },
+      { run: 2, metric: -2, status: "keep", description: "Beat baseline below zero" },
     ]);
 
     const state = await runCli(["state", "--cwd", dir]);
@@ -397,16 +380,8 @@ test("discarded metrics do not become best or suppress on-improvement checks", a
       process.platform === "win32" ? "autoresearch.checks.ps1" : "autoresearch.checks.sh";
     const checksBody = process.platform === "win32" ? "exit 1\n" : "#!/bin/sh\nexit 1\n";
     await writeFile(path.join(dir, checksFile), checksBody, "utf8");
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "10",
-      "--status",
-      "keep",
-      "--description",
-      "Baseline",
+    await appendLegacyLedgerRows(dir, [
+      { run: 1, metric: 10, status: "keep", description: "Legacy accepted baseline" },
     ]);
     await runCli([
       "log",

@@ -30,6 +30,16 @@ async function writeCompleteContractConfig(dir: string, overrides: Record<string
   );
 }
 
+async function appendLegacyLedgerRows(dir: string, rows: Record<string, unknown>[]) {
+  const ledgerPath = path.join(dir, "autoresearch.jsonl");
+  const ledger = await readFile(ledgerPath, "utf8");
+  await writeFile(
+    ledgerPath,
+    `${ledger}${rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    "utf8",
+  );
+}
+
 test("state and doctor surface scaffold health and evidence labels", async () => {
   await withTempDir("truth-layer-state", async (dir) => {
     await setupFixture(dir, { name: "truth layer", metricName: "score", direction: "higher" });
@@ -45,18 +55,14 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
     );
     await writeFile(path.join(dir, "autoresearch.sh"), "bash ./autoresearch.sh\n", "utf8");
 
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "1",
-      "--status",
-      "keep",
-      "--description",
-      "perfect dev slice pending repeat",
-      "--metrics",
-      JSON.stringify({ repeatRequired: 1 }),
+    await appendLegacyLedgerRows(dir, [
+      {
+        run: 1,
+        metric: 1,
+        metrics: { repeatRequired: 1 },
+        status: "keep",
+        description: "perfect dev slice pending repeat",
+      },
     ]);
 
     const state = await runCli(["state", "--cwd", dir, "--json-full"]);
@@ -304,7 +310,7 @@ test("run notes append inside the managed ledger block", async () => {
         "--metric",
         metric,
         "--status",
-        "keep",
+        "measure",
         "--description",
         `Run ${metric}`,
       ]);
@@ -313,7 +319,7 @@ test("run notes append inside the managed ledger block", async () => {
     const note = await readFile(path.join(dir, "autoresearch.md"), "utf8");
     assert.match(note, /## Run Ledger/);
     assert.equal((note.match(/AUTORESEARCH_RUN_LEDGER:START/g) || []).length, 1);
-    assert.match(note, /Run 1 keep: Run 3[\s\S]+Run 2 keep: Run 2/);
+    assert.match(note, /Run 1 measure: Run 3[\s\S]+Run 2 measure: Run 2/);
     assert.match(note, /## Guardrails\nKeep this section stable\.\n\n## Run Ledger/);
   });
 });
@@ -428,7 +434,7 @@ test("new segment warns when metric semantics change across segments", async () 
       "--metric",
       "3",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Seconds baseline",
     ]);
@@ -475,7 +481,7 @@ test("new segment honors explicit lower direction after a higher segment", async
       "--metric",
       "10",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Higher baseline",
     ]);
@@ -507,7 +513,7 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
     await setupFixture(dir, { name: "segment" });
     await writeCompleteContractConfig(dir, { commitPaths: ["src", "tracked.txt"] });
-    await runCli([
+    const measurement = await runCli([
       "log",
       "--cwd",
       dir,
@@ -518,6 +524,7 @@ test("new segment does not treat its own ledger append as dirty source drift", a
       "--description",
       "Initial segment measurement",
     ]);
+    assert.equal(measurement.code, 0, measurement.stderr);
     await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-m", "initial session"]);
 
@@ -534,7 +541,7 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
-    assert.equal(payload.segment, 1);
+    assert.equal(payload.segment, 1, segment.stdout);
     assert.equal(payload.sourceCleanliness.sourceDirty, false);
     assert.equal(payload.sourceCleanliness.status, "session-artifacts-dirty");
     assert.equal(payload.sourceCleanliness.sourceDirty, false);
@@ -660,28 +667,12 @@ test("state and recommend-next share watchdog canonical next-action parity", asy
 test("dashboard includes segment controls and visual-aid layout", async () => {
   await withTempDir("dashboard-cockpit", async (dir) => {
     await setupFixture(dir, { name: "first segment" });
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "4",
-      "--status",
-      "keep",
-      "--description",
-      "Baseline",
+    await appendLegacyLedgerRows(dir, [
+      { run: 1, metric: 4, status: "keep", description: "Baseline" },
     ]);
     await setupFixture(dir, { name: "second segment" });
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "3",
-      "--status",
-      "keep",
-      "--description",
-      "Second baseline",
+    await appendLegacyLedgerRows(dir, [
+      { run: 2, metric: 3, status: "keep", description: "Second baseline" },
     ]);
 
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);

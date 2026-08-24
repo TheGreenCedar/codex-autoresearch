@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
+import { countsTowardPacketBudget } from "./benchmark/budget-contract.js";
 import { buildProtectedBenchmarkSnapshot } from "./benchmark/contract-guards.js";
 import { parsePorcelainV1Z } from "./git-paths.js";
 import { insideGitRepo, runGit } from "./git-private-state.js";
@@ -255,6 +256,23 @@ export interface ContractEvaluationEvidence extends UnknownRecord {
   checksPassed: true;
 }
 
+export type RunPurpose = "baseline" | "candidate" | "holdout" | "diagnostic";
+export type EvaluationAuthority = "accepted-contract" | "manual" | "external";
+export type CandidateOrigin =
+  | { kind: "working-tree" }
+  | { kind: "commit"; oid: string }
+  | { kind: "none" };
+
+export interface KeepAuthorizationInput {
+  purpose: RunPurpose;
+  evaluationAuthority: EvaluationAuthority;
+  candidateOrigin: CandidateOrigin;
+  acceptedEvaluation: boolean;
+  checksPassed: boolean;
+  comparisonSatisfied: boolean;
+  noiseQualified: boolean;
+}
+
 export type ContractKeepEligibility =
   | {
       eligible: true;
@@ -278,6 +296,7 @@ export interface DeriveExperimentContractInput {
   entries?: UnknownRecord[];
   packet?: UnknownRecord | null;
   ignoreAccepted?: boolean;
+  verifiedEvidencePaths?: string[];
 }
 
 const DEFAULT_EVALUATOR_TIMEOUT_SECONDS = 600;
@@ -322,6 +341,7 @@ export async function deriveExperimentContract({
   entries = readJsonl(workDir),
   packet = null,
   ignoreAccepted = false,
+  verifiedEvidencePaths = [],
 }: DeriveExperimentContractInput): Promise<ContractDerivation> {
   const state = stateFromSessionRecords(workDir, entries);
   if (!ignoreAccepted) {
@@ -334,6 +354,7 @@ export async function deriveExperimentContract({
         state,
         packet,
         event,
+        verifiedEvidencePaths,
       });
       if (conflicts.length > 0) {
         return { status: "invalid", contract: null, missing: [], conflicts, event: null };
@@ -802,6 +823,7 @@ async function acceptedContractConflicts({
   state,
   packet,
   event,
+  verifiedEvidencePaths,
 }: {
   workDir: string;
   args: UnknownRecord;
@@ -809,12 +831,28 @@ async function acceptedContractConflicts({
   state: ReturnType<typeof stateFromSessionRecords>;
   packet: UnknownRecord | null;
   event: ExperimentContractAcceptedEvent;
+  verifiedEvidencePaths: string[];
 }): Promise<ContractConflict[]> {
   const conflicts = acceptedContractBoundaryConflicts(event);
   if (conflicts.length > 0) return conflicts;
+  let evidencePaths: string[] = [];
+  try {
+    evidencePaths = acceptedEvidenceTreePolicyPaths(verifiedEvidencePaths, event.contract);
+  } catch (error) {
+    conflicts.push({
+      field: "repository.treePolicy",
+      sources: ["accepted-contract", "evidence-artifacts"],
+      message: errorMessage(error),
+    });
+    return conflicts;
+  }
   let currentRepository: RepositoryContract;
   try {
-    currentRepository = await repositoryContract(workDir, event.contract.scope.editable);
+    currentRepository = await repositoryContract(
+      workDir,
+      event.contract.scope.editable,
+      evidencePaths,
+    );
   } catch (error) {
     const fingerprintConflict = contractFingerprintConflict(error, [
       "accepted-contract",
@@ -1317,6 +1355,26 @@ export async function appendExperimentContractAcceptance(
   };
   appendJsonl(workDir, event);
   return event;
+}
+
+export function acceptedExperimentContractForEvidenceValidation(
+  workDir: string,
+  entries: UnknownRecord[] = readJsonl(workDir),
+): ExperimentContract | null {
+  const state = stateFromSessionRecords(workDir, entries);
+  const event = latestAcceptedEvent(entries, state.segment);
+  if (!event) return null;
+  const conflicts = acceptedContractBoundaryConflicts(event);
+  if (conflicts.length > 0) {
+    throw contractDerivationError({
+      status: "invalid",
+      contract: null,
+      missing: [],
+      conflicts,
+      event: null,
+    });
+  }
+  return event.contract;
 }
 
 export async function acceptedExperimentContractForMutation(
@@ -2155,6 +2213,7 @@ async function legacyRepositoryIdentityConflicts({
 async function repositoryContract(
   workDir: string,
   editable: string[] = [],
+  ignoredOutsideEditablePaths: string[] = [],
 ): Promise<RepositoryContract> {
   const resolved = await fsp.realpath(workDir).catch(() => path.resolve(workDir));
   const git = await insideGitRepo(workDir).catch(() => false);
@@ -2183,6 +2242,7 @@ async function repositoryContract(
     workDir,
     status,
     editable,
+    ignoredOutsideEditablePaths,
   );
   return {
     repositoryIdentity,
@@ -2226,11 +2286,15 @@ async function dirtyStateOutsideEditableFingerprint(
   workDir: string,
   status: string,
   editable: string[],
+  ignoredPaths: string[] = [],
 ): Promise<string> {
   if (!status) return digestJson([]);
   const outsidePaths = (entryPaths: string[]) =>
     entryPaths.filter(
-      (entryPath) => !pathCoveredByAnyScope(entryPath, editable) && !isSessionOwnedPath(entryPath),
+      (entryPath) =>
+        !pathCoveredByAnyScope(entryPath, editable) &&
+        !pathCoveredByAnyScope(entryPath, ignoredPaths) &&
+        !isSessionOwnedPath(entryPath),
     );
   const entries = parsePorcelainV1Z(status)
     .map((entry) => ({ status: entry.status, paths: outsidePaths(entry.paths).sort() }))
@@ -2255,6 +2319,32 @@ async function dirtyStateOutsideEditableFingerprint(
     surfaceHash: snapshot.surfaceHash,
     quarantined: snapshot.quarantined,
   });
+}
+
+function acceptedEvidenceTreePolicyPaths(paths: string[], contract: ExperimentContract): string[] {
+  const normalized = normalizeRelativePaths(paths, "verifiedEvidencePaths");
+  const protectedScopes = [
+    ...contract.scope.editable,
+    ...contract.scope.protected,
+    ".git",
+    ...AUTORESEARCH_SESSION_FILES,
+    AUTORESEARCH_DASHBOARD_FILE,
+    ...SESSION_OWNED_DIRS,
+  ];
+  for (const evidencePath of normalized) {
+    if (
+      protectedScopes.some(
+        (scopePath) =>
+          pathCoveredByAnyScope(evidencePath, [scopePath]) ||
+          pathCoveredByAnyScope(scopePath, [evidencePath]),
+      )
+    ) {
+      throw new Error(
+        `Verified evidence path overlaps editable, protected, or session-owned scope: ${evidencePath}.`,
+      );
+    }
+  }
+  return normalized;
 }
 
 function pathCoveredByAnyScope(filePath: string, scopes: string[]): boolean {
@@ -2666,6 +2756,9 @@ export function completedContractNoiseRepeats(
 export function evaluateContractKeepEligibility(
   contract: ExperimentContract,
   input: {
+    purpose: RunPurpose;
+    evaluationAuthority: EvaluationAuthority;
+    candidateOrigin: CandidateOrigin;
     acceptedEvaluation: boolean;
     checkOutcomes: ContractCheckOutcome[];
     completedRepeats: number;
@@ -2674,6 +2767,15 @@ export function evaluateContractKeepEligibility(
   },
 ): ContractKeepEligibility {
   const reasons: string[] = [];
+  if (input.purpose !== "candidate") {
+    reasons.push("Keep requires candidate-purpose evidence.");
+  }
+  if (input.evaluationAuthority !== "accepted-contract") {
+    reasons.push("Keep requires accepted-contract evaluation authority.");
+  }
+  if (input.candidateOrigin.kind === "none") {
+    reasons.push("Keep requires a working-tree or commit candidate origin.");
+  }
   if (!input.acceptedEvaluation) {
     reasons.push("Keep requires an accepted-contract evaluator result.");
   }
@@ -2700,15 +2802,16 @@ export function evaluateContractKeepEligibility(
   ) {
     reasons.push("Keep requires every authoritative check to pass.");
   }
-  if (input.metric != null && Number.isFinite(input.metric)) {
-    const metricReason = metricComparisonFailureReason(
-      contract.metric,
-      contract.noise,
-      input.metric,
-      input.referenceMetric,
-    );
-    if (metricReason) reasons.push(metricReason);
-  }
+  const metricReason =
+    input.metric != null && Number.isFinite(input.metric)
+      ? metricComparisonFailureReason(
+          contract.metric,
+          contract.noise,
+          input.metric,
+          input.referenceMetric,
+        )
+      : null;
+  if (metricReason) reasons.push(metricReason);
   const qualification = noiseQualificationStatus(contract.noise, {
     completedRepeats: input.completedRepeats,
     purpose: "candidate",
@@ -2723,13 +2826,40 @@ export function evaluateContractKeepEligibility(
     requiredRepeats: qualification.requiredRepeats,
     referenceMetric: input.referenceMetric,
   };
-  return reasons.length === 0
+  const authorized = mayAuthorizeKeep({
+    purpose: input.purpose,
+    evaluationAuthority: input.evaluationAuthority,
+    candidateOrigin: input.candidateOrigin,
+    acceptedEvaluation: input.acceptedEvaluation,
+    checksPassed:
+      allChecksPassed &&
+      contract.keepPolicy.authoritativeCheckIds.length > 0 &&
+      contract.keepPolicy.authoritativeCheckIds.every((id) => outcomeById.get(id)?.passed === true),
+    comparisonSatisfied: input.metric != null && Number.isFinite(input.metric) && !metricReason,
+    noiseQualified: qualification.keepEligible,
+  });
+  return authorized && reasons.length === 0
     ? { eligible: true, reasons: [], ...shared }
     : {
         eligible: false,
         reasons: reasons as [string, ...string[]],
         ...shared,
       };
+}
+
+export function mayAuthorizeKeep(input: KeepAuthorizationInput): boolean {
+  const hasCandidate =
+    input.candidateOrigin.kind === "working-tree" ||
+    (input.candidateOrigin.kind === "commit" && input.candidateOrigin.oid.trim().length > 0);
+  return (
+    input.purpose === "candidate" &&
+    input.evaluationAuthority === "accepted-contract" &&
+    hasCandidate &&
+    input.acceptedEvaluation &&
+    input.checksPassed &&
+    input.comparisonSatisfied &&
+    input.noiseQualified
+  );
 }
 
 function metricComparisonFailureReason(
@@ -2785,8 +2915,9 @@ export function contractStopStatus(
   if (!Number.isFinite(acceptedAtMilliseconds) || !Number.isFinite(nowMilliseconds)) {
     throw new Error("Accepted contract wall-clock timestamps must be valid ISO dates.");
   }
-  const packets = input.currentRuns.length;
-  const evaluatorRuns = input.currentRuns.reduce(
+  const packetRuns = input.currentRuns.filter(countsTowardPacketBudget);
+  const packets = packetRuns.length;
+  const evaluatorRuns = packetRuns.reduce(
     (total, run) => total + (positiveInteger(run.evaluatorRuns) ?? 1),
     0,
   );

@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 
 import { buildEvidenceRegistry, isAcceptedCurrentRun } from "./evidence-registry.js";
 import { selectDecisionAuthority } from "./decision-authority.js";
-import { buildBudgetStatus } from "./benchmark/budget-contract.js";
+import { buildBudgetStatus, packetBudgetUsage } from "./benchmark/budget-contract.js";
 import { buildLoopContractStatus, canonicalNextActionForLoop } from "./loop-governance.js";
 import { buildOperatorReadout } from "./operator-readout.js";
 import { buildProductClaimCoverage, evidenceTextFromRun } from "./product-claim-coverage.js";
@@ -36,6 +36,7 @@ import { isPathInside } from "./path-containment.js";
 
 export {
   appendJsonl,
+  appendJsonlEntries,
   createSessionReadCache,
   jsonlPath,
   loadSessionRecords,
@@ -1349,8 +1350,9 @@ export function iterationLimitInfo(state: SessionState, runtimeConfig: LooseObje
     };
   }
   const max = Math.floor(maxIterations);
-  const remaining = Math.max(0, max - state.current.length);
-  const maxReached = state.current.length >= max;
+  const packetsUsed = packetBudgetUsage(state.current);
+  const remaining = Math.max(0, max - packetsUsed);
+  const maxReached = packetsUsed >= max;
   return {
     maxIterations: max,
     remainingIterations: remaining,

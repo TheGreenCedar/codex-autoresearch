@@ -9,6 +9,7 @@ import {
   createExecutionSpec,
   createExperimentContract,
   deriveExperimentContract,
+  mayAuthorizeKeep,
   noiseQualificationStatus,
   verifyExecutionSpecForWorkDir,
   type ExecutableCommand,
@@ -1219,6 +1220,32 @@ test("unknown noise allows baselines but blocks keeps until qualification repeat
   assert.equal(qualified.remainingRepeats, 0);
 });
 
+test("keep authority requires candidate purpose, accepted evaluation, a candidate origin, checks, comparison, and noise", () => {
+  const qualified = {
+    purpose: "candidate",
+    evaluationAuthority: "accepted-contract",
+    candidateOrigin: { kind: "working-tree" },
+    acceptedEvaluation: true,
+    checksPassed: true,
+    comparisonSatisfied: true,
+    noiseQualified: true,
+  } as const;
+
+  assert.equal(mayAuthorizeKeep(qualified), true);
+  assert.equal(
+    mayAuthorizeKeep({ ...qualified, candidateOrigin: { kind: "commit", oid: "a".repeat(40) } }),
+    true,
+  );
+  assert.equal(mayAuthorizeKeep({ ...qualified, purpose: "baseline" }), false);
+  assert.equal(mayAuthorizeKeep({ ...qualified, evaluationAuthority: "manual" }), false);
+  assert.equal(mayAuthorizeKeep({ ...qualified, evaluationAuthority: "external" }), false);
+  assert.equal(mayAuthorizeKeep({ ...qualified, candidateOrigin: { kind: "none" } }), false);
+  assert.equal(mayAuthorizeKeep({ ...qualified, acceptedEvaluation: false }), false);
+  assert.equal(mayAuthorizeKeep({ ...qualified, checksPassed: false }), false);
+  assert.equal(mayAuthorizeKeep({ ...qualified, comparisonSatisfied: false }), false);
+  assert.equal(mayAuthorizeKeep({ ...qualified, noiseQualified: false }), false);
+});
+
 test("budget dimensions enforce plugin ceilings without inventing model usage", async () => {
   await withNamedTempDir("experiment-contract", "budget-truth", async (dir) => {
     await mkdir(path.join(dir, "src"), { recursive: true });
@@ -1317,6 +1344,31 @@ test("the accepted stop policy mechanically enforces every plugin-owned ceiling"
       contractStopStatus(packetLimited, {
         acceptedAt,
         currentRuns: [{ status: "measure" }],
+        now,
+      }),
+      {
+        status: "exhausted",
+        dimension: "packets",
+        limit: 1,
+        used: 1,
+        message: "Accepted packet ceiling reached (1/1). Start a new segment.",
+      },
+    );
+    assert.deepEqual(
+      contractStopStatus(packetLimited, {
+        acceptedAt,
+        currentRuns: [
+          {
+            status: "measure",
+            runPurpose: "diagnostic",
+            evaluationAuthority: "manual",
+          },
+          {
+            status: "measure",
+            runPurpose: "baseline",
+            evaluationAuthority: "accepted-contract",
+          },
+        ],
         now,
       }),
       {
