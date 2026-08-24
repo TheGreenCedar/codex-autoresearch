@@ -1,4 +1,5 @@
 import type { UnknownRecord } from "../types/json.js";
+import { parseEvidenceAxes } from "../evidence-axes.js";
 
 export interface BudgetStatus {
   configured: boolean;
@@ -75,18 +76,12 @@ export function packetBudgetUsage(value: unknown): number {
 }
 
 export function countsTowardPacketBudget(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const row = value as UnknownRecord;
-  if (
-    typeof row.evaluationAuthority === "string" &&
-    row.evaluationAuthority !== "accepted-contract"
-  ) {
-    return false;
-  }
-  if (typeof row.runPurpose === "string") {
-    return row.runPurpose === "baseline" || row.runPurpose === "candidate";
-  }
-  return true;
+  const axes = parseEvidenceAxes(value);
+  if (!axes.valid) return true;
+  return (
+    axes.evaluationAuthority === "accepted-contract" &&
+    (axes.runPurpose === "baseline" || axes.runPurpose === "candidate")
+  );
 }
 
 function positiveInteger(value: unknown): number | null {

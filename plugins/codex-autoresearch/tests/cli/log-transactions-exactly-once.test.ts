@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { access, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  appendFile,
+  chmod,
+  mkdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -17,7 +26,8 @@ type FaultPoint =
   | "before:untracked-cleanup-complete"
   | "after:untracked-cleanup-complete"
   | "before:packet-cleanup-complete"
-  | "after:packet-cleanup-complete";
+  | "after:packet-cleanup-complete"
+  | "after:commit-ref-updated";
 
 const invokeLog = logExperiment as unknown as (
   args: Record<string, unknown>,
@@ -30,6 +40,7 @@ async function setupTransactionFixture(
     artifactPath?: string;
     commitPaths?: string[];
     commitCandidateBeforePacket?: boolean;
+    dirtySessionBeforePacket?: boolean;
     generateArtifactDuringRun?: boolean;
     protectedArtifact?: boolean;
     untrackedCandidate?: boolean;
@@ -112,6 +123,9 @@ async function setupTransactionFixture(
   if (options.commitCandidateBeforePacket) {
     await git(dir, ["add", "src/score.txt"]);
     await git(dir, ["commit", "-m", "imported candidate"]);
+  }
+  if (options.dirtySessionBeforePacket) {
+    await writeFile(path.join(dir, "autoresearch.md"), "operator state that must survive\n");
   }
   const packet = await runCli(["next", "--cwd", dir]);
   assert.equal(packet.code, 0, packet.stderr);
@@ -231,15 +245,10 @@ test("keep retry recovers a recorded commit before its stage checkpoint", async 
     await setupTransactionFixture(dir);
     await assert.rejects(
       invokeLog(keepArgs(dir), {
-        faultInjection: (seen) => failAt(seen, "after:commit-applied-or-verified"),
+        faultInjection: (seen) => failAt(seen, "after:commit-ref-updated"),
       }),
-      /after:commit-applied-or-verified/,
+      /after:commit-ref-updated/,
     );
-    const pendingPath = await receiptPath(dir);
-    const receipt = JSON.parse(await readFile(pendingPath, "utf8"));
-    receipt.completedStages = ["prepared"];
-    receipt.status = "pending";
-    await writeFile(pendingPath, `${JSON.stringify(receipt, null, 2)}\n`);
 
     const retried = await invokeLog(keepArgs(dir));
     assert.equal(retried.ok, true);
@@ -409,7 +418,10 @@ test("pending retry rejects a transaction row whose content no longer matches it
     transactionRow.description = "Corrupted transaction row";
     await writeFile(ledgerPath, `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`);
 
-    await assert.rejects(invokeLog(keepArgs(dir)), /ledger event.*content|different.*digest/i);
+    await assert.rejects(
+      invokeLog(keepArgs(dir)),
+      /ledger event.*content|different.*digest|not an unambiguous partial write/i,
+    );
   });
 });
 
@@ -727,4 +739,305 @@ test("imported commits require accepted evaluation of the current candidate", as
       1,
     );
   });
+});
+
+test("pending keep recovery rejects a same-message commit with the wrong intended tree", async () => {
+  await withTempDir("wrong-tree-interrupted-commit", async (dir) => {
+    await setupTransactionFixture(dir, { commitPaths: [] });
+    const args = { ...keepArgs(dir), allow_add_all: true, commit_paths: [] };
+    await assert.rejects(
+      invokeLog(args, {
+        faultInjection: (seen) => failAt(seen, "before:commit-applied-or-verified"),
+      }),
+      /before:commit-applied-or-verified/,
+    );
+    const pending = JSON.parse(await readFile(await receiptPath(dir), "utf8"));
+    const messagePath = path.join(dir, ".git", "unrelated-commit-message.txt");
+    await writeFile(messagePath, pending.commitExpectation.message, "utf8");
+    await git(dir, ["commit", "--allow-empty", "-F", messagePath]);
+    const unrelatedHead = await git(dir, ["rev-parse", "HEAD"]);
+
+    await assert.rejects(
+      invokeLog(args),
+      /HEAD changed|tree.*changed|intended.*tree|repository revision.*expected HEAD/i,
+    );
+    assert.equal(await git(dir, ["rev-parse", "HEAD"]), unrelatedHead);
+    assert.equal(await readFile(path.join(dir, "src", "score.txt"), "utf8"), "2\n");
+    assert.equal(await git(dir, ["show", "--name-only", "--format=", "HEAD"]), "");
+  });
+});
+
+test("keep commit creation is hook-free and stays bound to the evaluated candidate tree", async () => {
+  await withTempDir("hook-free-intended-tree", async (dir) => {
+    await setupTransactionFixture(dir);
+    await git(dir, ["config", "core.hooksPath", ".git/hooks"]);
+    const hookPath = path.join(dir, ".git", "hooks", "pre-commit");
+    await mkdir(path.dirname(hookPath), { recursive: true });
+    await writeFile(
+      hookPath,
+      [
+        "#!/bin/sh",
+        "printf '99\\n' > src/score.txt",
+        "git add src/score.txt",
+        "printf 'ran\\n' > .git/autoresearch-hook-ran",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(hookPath, 0o755);
+
+    const logged = await invokeLog(keepArgs(dir));
+
+    assert.equal(logged.ok, true);
+    assert.equal(await git(dir, ["show", "HEAD:src/score.txt"]), "2");
+    await assert.rejects(access(path.join(dir, ".git", "autoresearch-hook-ran")), /ENOENT/);
+  });
+});
+
+test("non-keep retry rejects tracked candidate work created after the crash", async () => {
+  await withTempDir("discard-post-crash-drift", async (dir) => {
+    await setupTransactionFixture(dir);
+    await assert.rejects(
+      invokeLog(discardArgs(dir), {
+        faultInjection: (seen) => failAt(seen, "before:tracked-cleanup-complete"),
+      }),
+      /before:tracked-cleanup-complete/,
+    );
+    await writeFile(path.join(dir, "src", "score.txt"), "99 user work after crash\n");
+
+    await assert.rejects(invokeLog(discardArgs(dir)), /cleanup.*drift|worktree.*changed/i);
+    assert.equal(
+      await readFile(path.join(dir, "src", "score.txt"), "utf8"),
+      "99 user work after crash\n",
+    );
+  });
+});
+
+test("non-keep retry rejects untracked candidate work changed after the crash", async () => {
+  await withTempDir("discard-untracked-post-crash-drift", async (dir) => {
+    await setupTransactionFixture(dir, { untrackedCandidate: true });
+    await assert.rejects(
+      invokeLog(discardArgs(dir), {
+        faultInjection: (seen) => failAt(seen, "before:untracked-cleanup-complete"),
+      }),
+      /before:untracked-cleanup-complete/,
+    );
+    await writeFile(path.join(dir, "src", "scratch.txt"), "operator work after crash\n");
+
+    await assert.rejects(invokeLog(discardArgs(dir)), /cleanup.*drift|worktree.*changed/i);
+    assert.equal(
+      await readFile(path.join(dir, "src", "scratch.txt"), "utf8"),
+      "operator work after crash\n",
+    );
+  });
+});
+
+test("cleanup plans structurally exclude session and evidence paths before destructive stages", async () => {
+  await withTempDir("cleanup-structural-exclusions", async (dir) => {
+    await setupTransactionFixture(dir, {
+      artifactPath: "evidence/proof.json",
+      commitPaths: [],
+      dirtySessionBeforePacket: true,
+      generateArtifactDuringRun: true,
+    });
+    await assert.rejects(
+      invokeLog(
+        { ...discardArgs(dir), allow_dirty_revert: true },
+        {
+          faultInjection: (seen) => failAt(seen, "before:tracked-cleanup-complete"),
+        },
+      ),
+      /before:tracked-cleanup-complete/,
+    );
+
+    const pending = JSON.parse(await readFile(await receiptPath(dir), "utf8"));
+    assert.equal(pending.cleanup.trackedPaths.includes("autoresearch.md"), false);
+    assert.equal(pending.cleanup.untrackedPaths.includes("evidence/proof.json"), false);
+    assert.equal(
+      await readFile(path.join(dir, "autoresearch.md"), "utf8"),
+      "operator state that must survive\n",
+    );
+    assert.equal(
+      await readFile(path.join(dir, "evidence", "proof.json"), "utf8"),
+      '{"proof":true}\n',
+    );
+  });
+});
+
+test("retry repairs only a transaction-owned torn ledger suffix", async () => {
+  await withTempDir("owned-torn-ledger-suffix", async (dir) => {
+    await setupTransactionFixture(dir);
+    await assert.rejects(
+      invokeLog(keepArgs(dir), {
+        faultInjection: (seen) => failAt(seen, "before:ledger-event-present"),
+      }),
+      /before:ledger-event-present/,
+    );
+    const pending = JSON.parse(await readFile(await receiptPath(dir), "utf8"));
+    const baseRows = [...pending.evidence.processLifecycle, pending.evidence.experiment];
+    const firstExpected = {
+      ...baseRows[0],
+      logTransaction: {
+        id: pending.transaction.id,
+        eventDigest: pending.ledgerEvent.eventDigest,
+        entryIndex: 0,
+        entryCount: baseRows.length,
+      },
+    };
+    const serialized = JSON.stringify(firstExpected);
+    await appendFile(
+      path.join(dir, "autoresearch.jsonl"),
+      serialized.slice(0, Math.floor(serialized.length / 2)),
+      "utf8",
+    );
+
+    const retried = await invokeLog(keepArgs(dir));
+
+    assert.equal(retried.ok, true);
+    const rows = await ledgerRows(dir);
+    const transactionRows = rows.filter((row) => row.logTransaction?.id === pending.transaction.id);
+    assert.equal(transactionRows.length, baseRows.length);
+    assert.equal(
+      new Set(transactionRows.map((row) => row.logTransaction.entryIndex)).size,
+      baseRows.length,
+    );
+  });
+});
+
+test("forged done stages cannot skip non-keep cleanup or packet clearing", async () => {
+  await withTempDir("forged-done-stages", async (dir) => {
+    await setupTransactionFixture(dir, { untrackedCandidate: true });
+    await assert.rejects(
+      invokeLog(discardArgs(dir), {
+        faultInjection: (seen) => failAt(seen, "before:tracked-cleanup-complete"),
+      }),
+      /before:tracked-cleanup-complete/,
+    );
+    const pendingPath = await receiptPath(dir);
+    const pending = JSON.parse(await readFile(pendingPath, "utf8"));
+    pending.completedStages = [
+      "prepared",
+      "ledger-event-present",
+      "tracked-cleanup-complete",
+      "untracked-cleanup-complete",
+      "packet-cleanup-complete",
+      "done",
+    ];
+    pending.status = "done";
+    await writeFile(pendingPath, `${JSON.stringify(pending, null, 2)}\n`);
+
+    await assert.rejects(invokeLog(discardArgs(dir)), /receipt.*integrity|completed.*stage/i);
+    assert.equal(await readFile(path.join(dir, "src", "score.txt"), "utf8"), "2\n");
+    await assert.rejects(access(path.join(dir, "src", "scratch.txt")), /ENOENT/);
+    await access(pendingPath);
+  });
+});
+
+test("completed cleanup and packet stages are reverified before retry skips them", async (t) => {
+  await t.test("tracked cleanup postcondition", async () => {
+    await withTempDir("completed-tracked-cleanup-drift", async (dir) => {
+      await setupTransactionFixture(dir, { untrackedCandidate: true });
+      await assert.rejects(
+        invokeLog(discardArgs(dir), {
+          faultInjection: (seen) => failAt(seen, "after:tracked-cleanup-complete"),
+        }),
+        /after:tracked-cleanup-complete/,
+      );
+      await writeFile(path.join(dir, "src", "score.txt"), "operator edit after cleanup\n");
+
+      await assert.rejects(
+        invokeLog(discardArgs(dir)),
+        /cleanup.*postcondition|worktree.*changed/i,
+      );
+      assert.equal(
+        await readFile(path.join(dir, "src", "score.txt"), "utf8"),
+        "operator edit after cleanup\n",
+      );
+    });
+  });
+
+  await t.test("untracked cleanup postcondition", async () => {
+    await withTempDir("completed-untracked-cleanup-drift", async (dir) => {
+      await setupTransactionFixture(dir, { untrackedCandidate: true });
+      await assert.rejects(
+        invokeLog(discardArgs(dir), {
+          faultInjection: (seen) => failAt(seen, "after:untracked-cleanup-complete"),
+        }),
+        /after:untracked-cleanup-complete/,
+      );
+      await writeFile(path.join(dir, "src", "scratch.txt"), "operator edit after cleanup\n");
+
+      await assert.rejects(
+        invokeLog(discardArgs(dir)),
+        /cleanup.*postcondition|worktree.*changed/i,
+      );
+      assert.equal(
+        await readFile(path.join(dir, "src", "scratch.txt"), "utf8"),
+        "operator edit after cleanup\n",
+      );
+    });
+  });
+
+  await t.test("packet cleanup postcondition", async () => {
+    await withTempDir("completed-packet-cleanup-drift", async (dir) => {
+      await setupTransactionFixture(dir);
+      const packetPath = path.join(dir, ".git", "autoresearch", "last-run.json");
+      const packet = await readFile(packetPath, "utf8");
+      await assert.rejects(
+        invokeLog(keepArgs(dir), {
+          faultInjection: (seen) => failAt(seen, "after:packet-cleanup-complete"),
+        }),
+        /after:packet-cleanup-complete/,
+      );
+      await writeFile(packetPath, packet, "utf8");
+
+      await assert.rejects(
+        invokeLog(keepArgs(dir)),
+        /packet.*cleanup.*postcondition|packet.*present/i,
+      );
+      await access(await receiptPath(dir));
+    });
+  });
+});
+
+test("last-run keep rejects missing or conflicting evidence axes", async (t) => {
+  for (const [label, mutatePacket] of [
+    [
+      "missing axes",
+      (packet: Record<string, any>) => {
+        delete packet.run.runPurpose;
+        delete packet.run.evaluationAuthority;
+        delete packet.run.candidateOrigin;
+      },
+    ],
+    [
+      "conflicting authority",
+      (packet: Record<string, any>) => {
+        packet.run.evaluationAuthority = "manual";
+        packet.run.executionAuthority = "accepted-contract";
+      },
+    ],
+    [
+      "invalid candidate origin",
+      (packet: Record<string, any>) => {
+        packet.run.candidateOrigin = { kind: "commit", oid: "short" };
+      },
+    ],
+  ] as const) {
+    await t.test(label, async () => {
+      await withTempDir(`packet-axes-${label.replaceAll(" ", "-")}`, async (dir) => {
+        await setupTransactionFixture(dir);
+        const packetPath = path.join(dir, ".git", "autoresearch", "last-run.json");
+        const packet = JSON.parse(await readFile(packetPath, "utf8"));
+        mutatePacket(packet);
+        await writeFile(packetPath, `${JSON.stringify(packet, null, 2)}\n`);
+
+        await assert.rejects(
+          invokeLog(keepArgs(dir)),
+          /evidence axes|run purpose|authority|origin/i,
+        );
+        assert.equal(Number(await git(dir, ["rev-list", "--count", "HEAD"])), 1);
+      });
+    });
+  }
 });

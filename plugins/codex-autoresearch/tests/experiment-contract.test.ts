@@ -1362,11 +1362,13 @@ test("the accepted stop policy mechanically enforces every plugin-owned ceiling"
             status: "measure",
             runPurpose: "diagnostic",
             evaluationAuthority: "manual",
+            candidateOrigin: { kind: "none" },
           },
           {
             status: "measure",
             runPurpose: "baseline",
             evaluationAuthority: "accepted-contract",
+            candidateOrigin: { kind: "working-tree" },
           },
         ],
         now,

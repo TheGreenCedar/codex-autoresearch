@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
-import { access, chmod, mkdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -269,6 +279,56 @@ test("discard cleanup rejects Git pathspec magic in revert paths", async () => {
     assert.match(await git(dir, ["status", "--short"]), /M a\.txt/);
     assert.match(await git(dir, ["status", "--short"]), /M b\.txt/);
   });
+});
+
+test("scoped discard rejects renames that cross the configured ownership boundary", async (t) => {
+  for (const [direction, staged] of [
+    ["outside-to-inside", true],
+    ["outside-to-inside", false],
+    ["inside-to-outside", true],
+    ["inside-to-outside", false],
+  ] as const) {
+    await t.test(`${direction} ${staged ? "staged" : "unstaged"}`, async () => {
+      await withTempDir(`cross-scope-rename-${direction}-${staged}`, async (dir) => {
+        await git(dir, ["init"]);
+        await mkdir(path.join(dir, "src"), { recursive: true });
+        await writeFile(path.join(dir, "src", "inside.txt"), "inside\n");
+        await writeFile(path.join(dir, "outside.txt"), "outside\n");
+        await setupFixture(dir, { name: "cross-scope rename" });
+        await writeFile(
+          path.join(dir, "autoresearch.config.json"),
+          `${JSON.stringify({ commitPaths: ["src"] }, null, 2)}\n`,
+        );
+        await git(dir, ["add", "-A"]);
+        await git(dir, ["commit", "-m", "initial scoped tree"]);
+        const source = direction === "outside-to-inside" ? "outside.txt" : "src/inside.txt";
+        const destination =
+          direction === "outside-to-inside" ? "src/moved.txt" : "moved-outside.txt";
+        if (staged) {
+          await git(dir, ["mv", source, destination]);
+        } else {
+          await rename(path.join(dir, source), path.join(dir, destination));
+        }
+
+        const result = await runCli([
+          "log",
+          "--cwd",
+          dir,
+          "--metric",
+          "1",
+          "--status",
+          "discard",
+          "--description",
+          "Reject cross-scope rename",
+        ]);
+
+        assert.notEqual(result.code, 0);
+        assert.match(result.stderr, /rename.*scope|cross.*scope|ownership boundary/i);
+        assert.match(await git(dir, ["status", "--short"]), /R|D.*\n.*\?\?/s);
+        await access(path.join(dir, destination));
+      });
+    });
+  }
 });
 
 test("discard preservation rejects linked Autoresearch-owned directories", async (t) => {
@@ -768,7 +828,7 @@ test("keep logs fail instead of recording success when git add fails", async () 
   });
 });
 
-test("keep logs fail instead of recording success when git commit fails", async () => {
+test("keep commit creation does not execute repository hooks", async () => {
   await withTempDir("keep-commit-failure", async (dir) => {
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
@@ -798,15 +858,15 @@ test("keep logs fail instead of recording success when git commit fails", async 
       "--status",
       "keep",
       "--description",
-      "Should not commit",
+      "Hook-free commit",
       "--commit-paths",
       "tracked.txt",
     ]);
-    assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /Git commit failed/);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(await git(dir, ["show", "HEAD:tracked.txt"]), "after");
 
     const log = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
-    assert.doesNotMatch(log, /Should not commit/);
+    assert.match(log, /Hook-free commit/);
   });
 });
 

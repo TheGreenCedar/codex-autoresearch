@@ -3,6 +3,14 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { countsTowardPacketBudget } from "./benchmark/budget-contract.js";
+import type { CandidateOrigin, EvaluationAuthority, RunPurpose } from "./evidence-axes.js";
+export {
+  parseEvidenceAxes,
+  type CandidateOrigin,
+  type EvaluationAuthority,
+  type EvidenceAxesParseResult,
+  type RunPurpose,
+} from "./evidence-axes.js";
 import { buildProtectedBenchmarkSnapshot } from "./benchmark/contract-guards.js";
 import { parsePorcelainV1Z } from "./git-paths.js";
 import { insideGitRepo, runGit } from "./git-private-state.js";
@@ -255,13 +263,6 @@ export interface ContractEvaluationEvidence extends UnknownRecord {
   metric: number;
   checksPassed: true;
 }
-
-export type RunPurpose = "baseline" | "candidate" | "holdout" | "diagnostic";
-export type EvaluationAuthority = "accepted-contract" | "manual" | "external";
-export type CandidateOrigin =
-  | { kind: "working-tree" }
-  | { kind: "commit"; oid: string }
-  | { kind: "none" };
 
 export interface KeepAuthorizationInput {
   purpose: RunPurpose;

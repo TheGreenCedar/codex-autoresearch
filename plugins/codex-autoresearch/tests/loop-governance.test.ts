@@ -145,6 +145,32 @@ test("packet budget counts baseline and candidate packets but excludes manual, d
   assert.equal(budget.exhausted, false);
 });
 
+test("packet budget conservatively counts malformed and legacy evidence axes", () => {
+  const budget = buildBudgetStatus({
+    state: {
+      current: [
+        {
+          run: 1,
+          runPurpose: "candidate",
+          evaluationAuthority: "typo",
+          candidateOrigin: { kind: "working-tree" },
+        },
+        {
+          run: 2,
+          runPurpose: "typo",
+          evaluationAuthority: "accepted-contract",
+          candidateOrigin: { kind: "working-tree" },
+        },
+        { run: 3, status: "measure" },
+      ],
+    },
+    runtimeConfig: { packetBudget: 4 },
+  });
+
+  assert.equal(budget.packetsUsed, 3);
+  assert.equal(budget.packetsRemaining, 1);
+});
+
 test("iteration limits use packet-purpose rows instead of manual observations", () => {
   const limit = iterationLimitInfo(
     {
@@ -154,12 +180,14 @@ test("iteration limits use packet-purpose rows instead of manual observations", 
           status: "measure",
           runPurpose: "baseline",
           evaluationAuthority: "manual",
+          candidateOrigin: { kind: "none" },
         },
         {
           run: 2,
           status: "measure",
           runPurpose: "baseline",
           evaluationAuthority: "accepted-contract",
+          candidateOrigin: { kind: "working-tree" },
         },
       ],
     } as any,

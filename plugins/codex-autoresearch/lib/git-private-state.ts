@@ -61,8 +61,16 @@ function hasGitMarker(cwd: string): boolean {
   }
 }
 
-export async function runGit(args: string[], cwd: string) {
-  return await runProcess("git", args, { cwd, maxOutputBytes: 16 * 1024 * 1024 });
+export async function runGit(
+  args: string[],
+  cwd: string,
+  options: { env?: NodeJS.ProcessEnv } = {},
+) {
+  return await runProcess("git", args, {
+    cwd,
+    env: options.env,
+    maxOutputBytes: 16 * 1024 * 1024,
+  });
 }
 
 export function gitOutput(result: { stderr: string; stdout: string }, fallback: string): string {
