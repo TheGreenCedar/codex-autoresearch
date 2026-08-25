@@ -6,7 +6,7 @@ import {
   prepareCurrentTreeFinalizationBlocker,
   writeDecisionCapsule,
 } from "../helpers/git-fixtures.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 import type { UnknownRecord } from "../../lib/types/json.js";
 
 import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
@@ -26,7 +26,7 @@ function capabilityStatus(plan: UnknownRecord, capability: string): string {
 
 test("compact state, recommend-next, and onboarding-packet project one decision plan", async () => {
   await withTempDir("decision-envelope", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
     await setupFixture(dir, {
       name: "envelope",
       acceptedContract: true,
@@ -69,9 +69,9 @@ test("compact state, recommend-next, and onboarding-packet project one decision 
 });
 
 test("canonical next action stays consistent across state, report, recommend-next, and dashboard", async () => {
-  const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-  const passingChecks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
-  const failingChecks = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
+  const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+  const passingChecks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
+  const failingChecks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(1)"`;
   const fixtures = [
     {
       name: "active-artifact",
@@ -95,7 +95,7 @@ test("canonical next action stays consistent across state, report, recommend-nex
         await setupFixture(dir, {
           name: "active artifact",
           acceptedContract: true,
-          benchmarkCommand: `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+          benchmarkCommand: `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(script)}`,
         });
         const packet = await runCli(["next", "--cwd", dir]);
         assert.equal(packet.code, 0, packet.stderr);
@@ -263,7 +263,7 @@ test("canonical next action stays consistent across state, report, recommend-nex
 
 test("recommend-next compact returns the state plan and its capability-scoped handoff", async () => {
   await withTempDir("recommend-next-compact-state-first", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
     await setupFixture(dir, {
       name: "compact recommend",
       acceptedContract: true,
@@ -314,8 +314,8 @@ test("recommend-next compact returns the state plan and its capability-scoped ha
 
 test("recommend-next pauses packets after two accepted no-learning candidates without auto-transition", async () => {
   await withTempDir("plateau-pivot-command", async (dir) => {
-    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=10')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=10')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     await setupFixture(dir, {
       name: "no-learning pause",
       acceptedContract: true,
@@ -446,7 +446,7 @@ test("pending log receipts block state, doctor, and new log attempts", async () 
 test("doctor keeps current-tree finalization blockers scoped to finalization", async () => {
   await withTempDir("doctor-current-tree-finalization", async (dir) => {
     await prepareCurrentTreeFinalizationBlocker(dir, runCli);
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
 
     const doctor = await runCli([
       "doctor",
@@ -473,7 +473,7 @@ test("doctor keeps current-tree finalization blockers scoped to finalization", a
 test("state, recommend-next, doctor, and dashboard share finalization-scoped capability authority", async () => {
   await withTempDir("shared-current-tree-finalization", async (dir) => {
     await prepareCurrentTreeFinalizationBlocker(dir, runCli);
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
 
     const state = await runCli(["state", "--cwd", dir, "--compact", "--report"]);
     assert.equal(state.code, 0, state.stderr);
@@ -587,8 +587,8 @@ test("codex goal audit hands back direct work but blocks a finalization completi
 
 test("stale packet compact state recommends replacement next command", async () => {
   await withTempDir("state-stale-last-run-replacement", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const checksCommand = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     await setupFixture(dir, {
       name: "stale state",
       acceptedContract: true,
@@ -724,7 +724,7 @@ test("legacy decision capsules remain display facts and never become compiler au
 
 test("state report does not promote empty promotion evidence", async () => {
   await withTempDir("state-report-empty-promotion", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const setup = await runCli([
       "setup",
       "--cwd",
@@ -756,7 +756,7 @@ test("state report does not promote empty promotion evidence", async () => {
 
 test("persisted quality constraints gate state quality posture end-to-end", async () => {
   await withTempDir("quality-constraints-e2e", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const setup = await runCli([
       "setup",
       "--cwd",

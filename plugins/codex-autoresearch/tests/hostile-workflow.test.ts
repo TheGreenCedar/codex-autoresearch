@@ -8,7 +8,7 @@ import { parseNameStatusZ, parsePorcelainV1Z } from "../lib/git-paths.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import {
   createCliRunner,
-  quoteForShell,
+  quoteForAcceptedShell,
   runGit,
   runProcess,
   testGitArgs,
@@ -87,7 +87,7 @@ test("protected benchmark edits block next and keep until a new segment", async 
     await runGit(dir, ["add", "bench.mjs"]);
     await runGit(dir, ["commit", "-m", "baseline benchmark"]);
 
-    const benchmarkCommand = `node ${quoteForShell(benchmarkPath)}`;
+    const benchmarkCommand = `node ${quoteForAcceptedShell(benchmarkPath)}`;
     await setupProtectedBenchmarkSession(dir, {
       name: "protected",
       benchmarkCommand,
@@ -176,7 +176,7 @@ test("dirty protected benchmark paths block the first keep baseline", async () =
 
     await setupProtectedBenchmarkSession(dir, {
       name: "dirty protected baseline",
-      benchmarkCommand: `node ${quoteForShell(benchmarkPath)}`,
+      benchmarkCommand: `node ${quoteForAcceptedShell(benchmarkPath)}`,
       protectedBenchmarkPath: "bench.mjs",
     });
 
@@ -213,7 +213,7 @@ test("ordinary editable source dirt blocks keep without blocking packet executio
     await runGit(dir, ["commit", "-m", "benchmark contract"]);
     await setupProtectedBenchmarkSession(dir, {
       name: "ordinary editable source",
-      benchmarkCommand: `node ${quoteForShell(benchmarkPath)}`,
+      benchmarkCommand: `node ${quoteForAcceptedShell(benchmarkPath)}`,
       protectedBenchmarkPath: "bench.mjs",
     });
 
@@ -248,7 +248,7 @@ test("renaming a protected hostile path out of scope blocks the first baseline",
 
     await setupProtectedBenchmarkSession(dir, {
       name: "hostile protected rename",
-      benchmarkCommand: `node ${quoteForShell(original)}`,
+      benchmarkCommand: `node ${quoteForAcceptedShell(original)}`,
       protectedBenchmarkPath: protectedRelative,
     });
     await rename(original, current);
@@ -383,7 +383,7 @@ async function setupProtectedBenchmarkSession(
     "--benchmark-prints-metric",
     "true",
     "--checks-command",
-    `${quoteForShell(process.execPath)} contract/checks.mjs`,
+    `${quoteForAcceptedShell(process.execPath)} contract/checks.mjs`,
     "--scope",
     "src",
     "--commit-paths",

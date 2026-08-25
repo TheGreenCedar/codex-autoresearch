@@ -7,7 +7,7 @@ import { dashboardCommandSafety } from "../../lib/dashboard-command-safety.js";
 import { PLUGIN_VERSION } from "../../lib/plugin-version.js";
 import type { UnknownRecord } from "../../lib/types/json.js";
 import { isolatedRuntimeEnv, writeInstalledRuntimeFixture } from "../helpers/cli-session.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 
 import { pluginRoot, runCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
 
@@ -37,7 +37,7 @@ function acceptedCheckIdentities(plan: UnknownRecord): string[] {
 
 test("next command suggests measure for a first baseline decision packet", async () => {
   await withTempDir("next-command", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
     const setup = await setupFixture(dir, {
       name: "next command",
       acceptedContract: true,
@@ -84,7 +84,7 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
         "console.log(`METRIC seconds=${metric}`);",
       ].join("\n"),
     );
-    const benchmarkCommand = `${quoteForShell(process.execPath)} ${quoteForShell(evaluatorPath)}`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(evaluatorPath)}`;
     const setup = await setupFixture(dir, {
       name: "dashboard readout",
       metricUnit: "s",
@@ -290,7 +290,7 @@ test("dashboard routes an incomplete manual session to accepted-contract setup",
 
 test("dashboard surfaces stale last-run packets before normal next guidance", async () => {
   await withTempDir("dashboard-stale-last-run", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     const setup = await setupFixture(dir, {
       name: "stale dashboard",
       acceptedContract: true,
@@ -341,7 +341,7 @@ test("dashboard surfaces stale last-run packets before normal next guidance", as
 
 test("doctor summarizes readiness and detects missing benchmark metrics", async () => {
   await withTempDir("doctor", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('no metric')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('no metric')"`;
     await setupFixture(dir, {
       name: "doctor",
       acceptedContract: true,
@@ -371,9 +371,9 @@ test("doctor summarizes readiness and detects missing benchmark metrics", async 
 
 test("doctor check-benchmark rejects a command outside the accepted evaluator", async () => {
   await withTempDir("doctor-accepted-evaluator-only", async (dir) => {
-    const accepted = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const accepted = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const overrideSentinel = path.join(dir, "override-ran.txt");
-    const override = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC seconds=999')" ${quoteForShell(overrideSentinel)}`;
+    const override = `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC seconds=999')" ${quoteForAcceptedShell(overrideSentinel)}`;
     await setupFixture(dir, {
       name: "doctor accepted evaluator",
       acceptedContract: true,
@@ -554,7 +554,7 @@ test("doctor --check-installed blocks non-fresh installed runtime before packet 
 
 test("state and doctor use checksCommand from config for gate quality", async () => {
   await withTempDir("config-checks-gate-quality", async (dir) => {
-    const checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)" check`;
+    const checksCommand = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)" check`;
     const displayedChecksCommand = redactCommandDisplay(checksCommand);
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
@@ -565,7 +565,7 @@ test("state and doctor use checksCommand from config for gate quality", async ()
           metricName: "seconds",
           metricUnit: "seconds",
           bestDirection: "lower",
-          benchmarkCommand: `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
+          benchmarkCommand: `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
           checksCommand,
         },
         null,
@@ -591,7 +591,7 @@ test("state and doctor use checksCommand from config for gate quality", async ()
 
 test("setup state and doctor expose gate quality and preflight readiness", async () => {
   await withTempDir("gate-quality-preflight", async (dir) => {
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const setupPlanResult = await runCli([
       "setup-plan",
       "--cwd",

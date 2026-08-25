@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 
 import { runCli, runSpawnedCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
 
@@ -117,7 +117,7 @@ test("export progress writes stderr heartbeats without corrupting JSON stdout", 
 
 test("large benchmark output is capped and marked truncated", async () => {
   await withTempDir("large-output", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('x'.repeat(30000)); console.log('METRIC seconds=1')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('x'.repeat(30000)); console.log('METRIC seconds=1')"`;
     await setupFixture(dir, {
       name: "large output",
       acceptedContract: true,
@@ -134,7 +134,7 @@ test("large benchmark output is capped and marked truncated", async () => {
 
 test("large no-newline benchmark tails do not hide early metrics", async () => {
   await withTempDir("large-no-newline-output", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "process.stdout.write('METRIC seconds=2\\n'); process.stdout.write('x'.repeat(300000))"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "process.stdout.write('METRIC seconds=2\\n'); process.stdout.write('x'.repeat(300000))"`;
     await setupFixture(dir, {
       name: "large no newline",
       acceptedContract: true,
@@ -151,7 +151,7 @@ test("large no-newline benchmark tails do not hide early metrics", async () => {
 
 test("large metric streams retain bounded metrics and primary evidence", async () => {
   await withTempDir("large-metric-stream", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "for (let i = 0; i < 20000; i++) console.log('METRIC m' + i + '=' + i); console.log('METRIC seconds=1')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "for (let i = 0; i < 20000; i++) console.log('METRIC m' + i + '=' + i); console.log('METRIC seconds=1')"`;
     await setupFixture(dir, {
       name: "large metric stream",
       acceptedContract: true,
@@ -187,7 +187,7 @@ test("large metric streams keep a primary metric outside retained output tails",
       ].join("\n"),
       "utf8",
     );
-    const command = `${quoteForShell(process.execPath)} ${quoteForShell(emitter)}`;
+    const command = `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(emitter)}`;
     await setupFixture(dir, {
       name: "large primary stream",
       acceptedContract: true,

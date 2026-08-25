@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { access, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 
 import { git, runCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
 
-const contractChecksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+const contractChecksCommand = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
 
 async function appendLegacyLedgerRows(dir: string, rows: Record<string, unknown>[]) {
   const ledgerPath = path.join(dir, "autoresearch.jsonl");
@@ -33,7 +33,7 @@ async function prepareAcceptedCandidateFixture(
 ) {
   await mkdir(path.join(dir, "contract"), { recursive: true });
   await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n", "utf8");
-  const checksCommand = `${quoteForShell(process.execPath)} contract/checks.mjs`;
+  const checksCommand = `${quoteForAcceptedShell(process.execPath)} contract/checks.mjs`;
   const setup = await setupFixture(
     dir,
     options.commandFileContract
@@ -249,7 +249,7 @@ test("next supports command-file, env-file, and ARTIFACT output contracts", asyn
 
 test("malformed task manifests are quarantined without invalidating primary metrics", async () => {
   await withTempDir("task-manifest-malformed", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1'); console.log('ARTIFACT task_manifest=task-manifest.json')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=1'); console.log('ARTIFACT task_manifest=task-manifest.json')"`;
     await setupFixture(dir, {
       name: "task manifest",
       metricName: "score",
@@ -288,7 +288,7 @@ test("symlinked task manifests outside the workdir are quarantined", async (t) =
         return;
       }
 
-      const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1'); console.log('ARTIFACT task_manifest=task-manifest.json')"`;
+      const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=1'); console.log('ARTIFACT task_manifest=task-manifest.json')"`;
       await setupFixture(dir, {
         name: "task manifest symlink",
         metricName: "score",
@@ -322,7 +322,7 @@ test("external catalog recipes require trust and record provenance", async () =>
           metricName: "seconds",
           metricUnit: "s",
           direction: "lower",
-          benchmarkCommand: `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
+          benchmarkCommand: `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
           benchmarkPrintsMetric: true,
           checksCommand: contractChecksCommand,
           scope: ["src"],
@@ -393,7 +393,7 @@ test("external catalog recipes require trust and record provenance", async () =>
     ]);
     assert.equal(accepted.code, 0, accepted.stderr);
 
-    catalog.recipes[0].benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
+    catalog.recipes[0].benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
     await writeFile(catalogPath, JSON.stringify(catalog, null, 2), "utf8");
     const doctor = await runCli(["doctor", "--cwd", dir, "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
@@ -462,7 +462,7 @@ test("doctor skips remote catalog requests unless revalidation is explicit", asy
 
 test("external ARTIFACT paths are quarantined instead of stored as usable paths", async () => {
   await withTempDir("external-artifact", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} packet-runner.mjs`;
+    const command = `${quoteForAcceptedShell(process.execPath)} packet-runner.mjs`;
     const outside = path.join(path.dirname(dir), "outside-manifest.json");
     await writeFile(
       path.join(dir, "packet-runner.mjs"),
@@ -524,7 +524,7 @@ test("ARTIFACT paths through linked directories outside the workdir are quaranti
         return;
       }
 
-      const command = `${quoteForShell(process.execPath)} packet-runner.mjs`;
+      const command = `${quoteForAcceptedShell(process.execPath)} packet-runner.mjs`;
       await writeFile(
         path.join(dir, "packet-runner.mjs"),
         [
@@ -586,7 +586,7 @@ test("accepted logged artifacts become current evidence in state registry", asyn
       name: "accepted artifact registry",
       metricName: "score",
       direction: "higher",
-      benchmarkCommand: `${quoteForShell(process.execPath)} packet-runner.mjs`,
+      benchmarkCommand: `${quoteForAcceptedShell(process.execPath)} packet-runner.mjs`,
     });
 
     const packet = await runCli(["next", "--cwd", dir]);
@@ -616,7 +616,7 @@ test("accepted logged artifacts become current evidence in state registry", asyn
 
 test("last-run packet storage redacts raw benchmark evidence and still logs from last", async () => {
   await withTempDir("last-run-redaction", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} runner.mjs`;
+    const command = `${quoteForAcceptedShell(process.execPath)} runner.mjs`;
     await writeFile(
       path.join(dir, "runner.mjs"),
       [
@@ -672,8 +672,8 @@ test("last-run packet storage redacts run benchmark contract command and option-
     const checksSecret = "checks-secret-zyxwvutsrqpon";
     const commandFile = path.join(dir, "private-packet.command");
     const envFile = path.join(dir, ".env.private");
-    const checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)" -- --token ${checksSecret}`;
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')" -- --api-key ${commandSecret}`;
+    const checksCommand = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)" -- --token ${checksSecret}`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=2')" -- --api-key ${commandSecret}`;
     await writeFile(commandFile, benchmarkCommand, "utf8");
     await writeFile(envFile, "PACKET_TOKEN=env-secret-qwertyuiop\n", "utf8");
     await setupCommandFileContract(dir, {
@@ -721,7 +721,7 @@ test("last-run packet storage does not corrupt common option-file basenames", as
   await withTempDir("last-run-common-basename-redaction", async (dir) => {
     const commandFile = path.join(dir, "run");
     const envFile = path.join(dir, "env");
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3'); console.log('ordinary run env node packet text')"`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=3'); console.log('ordinary run env node packet text')"`;
     await writeFile(commandFile, benchmarkCommand, "utf8");
     await writeFile(envFile, "PACKET_TOKEN=common-name-env-value\n", "utf8");
     await setupCommandFileContract(dir, {
@@ -761,7 +761,7 @@ test("last-run packet storage does not corrupt common option-file basenames", as
 
 test("next command response redacts raw benchmark evidence", async () => {
   await withTempDir("run-response-redaction", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} runner.mjs`;
+    const command = `${quoteForAcceptedShell(process.execPath)} runner.mjs`;
     await writeFile(
       path.join(dir, "runner.mjs"),
       [
@@ -883,7 +883,7 @@ test("packet env defaults to minimal and is part of benchmark contract and docto
       ].join("\n"),
       "utf8",
     );
-    const command = `${quoteForShell(process.execPath)} ${quoteForShell(scriptPath)}`;
+    const command = `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(scriptPath)}`;
     await setupFixture(dir, {
       name: "env mode contract",
       metricName: "score",

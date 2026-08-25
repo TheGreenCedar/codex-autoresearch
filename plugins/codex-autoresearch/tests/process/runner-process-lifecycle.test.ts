@@ -18,7 +18,7 @@ import { DASHBOARD_LEDGER_MAX_ENTRIES } from "../../lib/dashboard-ledger-bounds.
 import { createExecutionSpec, createExperimentContract } from "../../lib/experiment-contract.js";
 import { parseLedger, writeLedger } from "../helpers/ledger.js";
 import { pathExists } from "../helpers/cli-session.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell, quoteForRunShell } from "../helpers/process.js";
 
 import {
   cli,
@@ -31,7 +31,7 @@ import {
 async function setupRunnerFixture(
   dir: string,
   options: Parameters<typeof setupFixture>[1],
-  checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
+  checksCommand = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`,
 ) {
   const setup = await setupFixture(dir, {
     ...options,
@@ -47,7 +47,7 @@ async function setupRunnerFixture(
 
 test("next reports missing primary metric as a failed experiment", async () => {
   await withTempDir("missing-metric", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('no metric here')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('no metric here')"`;
     await setupRunnerFixture(dir, { name: "missing metric", benchmarkCommand: command });
 
     const result = await runCli(["next", "--cwd", dir]);
@@ -75,7 +75,7 @@ test("partial-results records diagnostic measure evidence from a failed packet a
         "process.exit(1);",
       ].join("\n"),
     );
-    const benchmarkCommand = `${quoteForShell(process.execPath)} ${quoteForShell(script)}`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(script)}`;
     await setupRunnerFixture(dir, {
       name: "partial salvage",
       completeContract: true,
@@ -154,7 +154,7 @@ test("partial-results refuses to record or clear a packet after trust configurat
     await setupRunnerFixture(dir, {
       name: "partial stale trust",
       acceptedContract: true,
-      benchmarkCommand: `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+      benchmarkCommand: `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(script)}`,
     });
     const packet = await runCli(["next", "--cwd", dir]);
     assert.equal(packet.code, 0, packet.stderr);
@@ -196,7 +196,7 @@ test("partial-results treats missing accepted packet trust metadata as stale", a
     await setupRunnerFixture(dir, {
       name: "partial missing trust",
       acceptedContract: true,
-      benchmarkCommand: `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+      benchmarkCommand: `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(script)}`,
     });
     const packetResult = await runCli(["next", "--cwd", dir]);
     assert.equal(packetResult.code, 0, packetResult.stderr);
@@ -350,7 +350,7 @@ test("state surfaces active runner progress while next is still executing", asyn
         "}, 100);",
       ].join("\n"),
     );
-    const benchmarkCommand = `${quoteForShell(process.execPath)} ${quoteForShell(script)} ${quoteForShell(releaseFile)}`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(script)} ${quoteForAcceptedShell(releaseFile)}`;
     await setupRunnerFixture(dir, { name: "active progress", benchmarkCommand });
 
     const child = spawn(process.execPath, [cli, "next", "--cwd", dir]);
@@ -537,7 +537,7 @@ test("coherent pre-snapshot rejects a wrong-entry progress path before execution
       "--cwd",
       dir,
       "--command",
-      `${quoteForShell(process.execPath)} -e ${quoteForShell(
+      `${quoteForAcceptedShell(process.execPath)} -e ${quoteForAcceptedShell(
         `require('node:fs').writeFileSync(${JSON.stringify(sideEffect)}, 'ran'); console.log('METRIC seconds=1')`,
       )}`,
     ]);
@@ -560,7 +560,7 @@ test("coherent pre-snapshot rejects a wrong-entry packet path before progress st
       "--cwd",
       dir,
       "--command",
-      `${quoteForShell(process.execPath)} -e ${quoteForShell("console.log('METRIC seconds=1')")}`,
+      `${quoteForAcceptedShell(process.execPath)} -e ${quoteForAcceptedShell("console.log('METRIC seconds=1')")}`,
     ]);
 
     assert.notEqual(result.code, 0);
@@ -584,7 +584,7 @@ test("chatty completion and failure cannot resurrect active progress", async () 
           `process.exitCode = ${exitCode};`,
         ].join("\n"),
       );
-      const benchmarkCommand = `${quoteForShell(process.execPath)} ${quoteForShell(script)}`;
+      const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(script)}`;
       await setupRunnerFixture(dir, { name, benchmarkCommand });
 
       const result = await runCli(["next", "--cwd", dir]);
@@ -607,8 +607,8 @@ test("checks-phase timeout flushes its newest generation before cleanup", async 
         "setTimeout(() => {}, 30000);",
       ].join("\n"),
     );
-    const checksCommand = `${quoteForShell(process.execPath)} ${quoteForShell(checks)}`;
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e ${quoteForShell("console.log('METRIC seconds=1')")}`;
+    const checksCommand = `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(checks)}`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e ${quoteForAcceptedShell("console.log('METRIC seconds=1')")}`;
     await setupRunnerFixture(dir, { name: "checks timeout", benchmarkCommand }, checksCommand);
     const configPath = path.join(dir, "autoresearch.config.json");
     const config = JSON.parse(await readFile(configPath, "utf8"));
@@ -675,7 +675,7 @@ test("unproven process-tree termination blocks state and next", async () => {
       }),
     );
     const sideEffect = path.join(dir, "should-not-run.txt");
-    const command = `${quoteForShell(process.execPath)} -e ${quoteForShell(
+    const command = `${quoteForAcceptedShell(process.execPath)} -e ${quoteForAcceptedShell(
       `require('node:fs').writeFileSync(${JSON.stringify(sideEffect)}, 'ran')`,
     )}`;
 
@@ -898,7 +898,7 @@ test("non-packet termination failure persists the same packet brake", async () =
       "--cwd",
       dir,
       "--command",
-      `${quoteForShell(process.execPath)} -e ${quoteForShell("console.log('METRIC seconds=1')")}`,
+      `${quoteForAcceptedShell(process.execPath)} -e ${quoteForAcceptedShell("console.log('METRIC seconds=1')")}`,
     ]);
     assert.equal(next.code, 1);
     assert.equal(next.stdout.trim(), "");
@@ -930,7 +930,7 @@ test("benchmark inspection holds the session lock through process execution", as
       "--cwd",
       dir,
       "--command",
-      `${quoteForShell(process.execPath)} -e ${quoteForShell(inspectScript)}`,
+      `${quoteForRunShell(process.execPath)} -e ${quoteForRunShell(inspectScript)}`,
       "--timeout-seconds",
       "30",
     ]);
@@ -945,7 +945,7 @@ test("benchmark inspection holds the session lock through process execution", as
         "--cwd",
         dir,
         "--command",
-        `${quoteForShell(process.execPath)} -e ${quoteForShell(
+        `${quoteForAcceptedShell(process.execPath)} -e ${quoteForAcceptedShell(
           `require('node:fs').writeFileSync(${JSON.stringify(sideEffect)}, 'ran'); console.log('METRIC seconds=1')`,
         )}`,
       ]);
@@ -962,7 +962,7 @@ test("benchmark inspection holds the session lock through process execution", as
 
 test("packet lifecycle records keep state doctor and dashboard process trust aligned", async () => {
   await withTempDir("typed-process-lifecycle", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     await setupRunnerFixture(dir, {
       name: "process lifecycle",
       completeContract: true,

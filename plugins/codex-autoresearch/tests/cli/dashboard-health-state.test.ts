@@ -7,7 +7,7 @@ import { PLUGIN_VERSION } from "../../lib/plugin-version.js";
 import { resolveSessionPaths, sessionPathIdentity } from "../../lib/session-paths.js";
 import { writeServeRegistry } from "../../lib/dashboard-server-registry.js";
 import { renderExportedDashboard } from "../helpers/dashboard-export.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 import { addressPort, closeServer, listenOnRandomPort } from "../helpers/server.js";
 
 import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
@@ -223,7 +223,7 @@ test("state health accepts an alive same-cwd current-version HTTP response", asy
 
 test("legacy failed sentinel metrics do not suppress next-run baseline measure guidance", async () => {
   await withTempDir("legacy-sentinel-baseline", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=5')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=5')"`;
     await setupFixture(dir, {
       name: "legacy sentinel",
       acceptedContract: true,
@@ -252,7 +252,7 @@ test("legacy failed sentinel metrics do not suppress next-run baseline measure g
 
 test("metricless failed last-run packets log cleanly and preserve packet on invalid status", async () => {
   await withTempDir("metricless-last-run", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(1)"`;
     await setupFixture(dir, {
       name: "metricless last run",
       acceptedContract: true,
@@ -390,7 +390,7 @@ test("last-run packet keeps source clean while contract acceptance dirties only 
     await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     await setupFixture(dir, {
       name: "git last run",
       completeContract: true,
@@ -446,13 +446,13 @@ test("no-change packet cannot record a fake kept commit", async () => {
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     await mkdir(path.join(dir, "contract"), { recursive: true });
     await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n", "utf8");
     await setupFixture(dir, {
       name: "no change keep",
       benchmarkCommand: command,
-      checksCommand: `${quoteForShell(process.execPath)} contract/checks.mjs`,
+      checksCommand: `${quoteForAcceptedShell(process.execPath)} contract/checks.mjs`,
       completeContract: true,
     });
     const configPath = path.join(dir, "autoresearch.config.json");
@@ -548,7 +548,7 @@ test("config extend is based on the active segment run count", async () => {
 
 test("dashboard script renders zero and negative metric points", async () => {
   await withTempDir("dashboard-runtime", async (dir) => {
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC delta=0')"`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC delta=0')"`;
     await setupFixture(dir, {
       name: "runtime dashboard",
       metricName: "delta",

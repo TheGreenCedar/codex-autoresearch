@@ -3,15 +3,15 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 import { git, runCli, setupFixture, withTempDir } from "../helpers/cli-test-context.js";
 import { createExecutionSpec, createExperimentContract } from "../../lib/experiment-contract.js";
 
 test("an interrupted segment transition never inherits old contract pauses", async () => {
   await withTempDir("segment-contract-interruption", async (dir) => {
     await mkdir(path.join(dir, "src"), { recursive: true });
-    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=2')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=2')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     const setup = await setupFixture(dir, {
       acceptedContract: true,
       benchmarkCommand: benchmark,
@@ -109,8 +109,8 @@ async function setupKeepPolicyFixture(
     `console.log("METRIC score=${input.candidate}");\n`,
   );
   await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n");
-  const evaluator = `${quoteForShell(process.execPath)} contract/evaluator.mjs`;
-  const checks = `${quoteForShell(process.execPath)} contract/checks.mjs`;
+  const evaluator = `${quoteForAcceptedShell(process.execPath)} contract/evaluator.mjs`;
+  const checks = `${quoteForAcceptedShell(process.execPath)} contract/checks.mjs`;
   const setup = await setupFixture(dir, {
     name: "mechanical keep policy",
     goal: "Only keep contract-qualified improvements.",
@@ -212,8 +212,8 @@ async function setupGitContractFixture(dir: string) {
     ].join("\n"),
   );
   await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n");
-  const evaluator = `${quoteForShell(process.execPath)} contract/evaluator.mjs`;
-  const checks = `${quoteForShell(process.execPath)} contract/checks.mjs`;
+  const evaluator = `${quoteForAcceptedShell(process.execPath)} contract/evaluator.mjs`;
+  const checks = `${quoteForAcceptedShell(process.execPath)} contract/checks.mjs`;
   await writeFile(
     path.join(dir, "autoresearch.config.json"),
     `${JSON.stringify(
@@ -267,8 +267,8 @@ test("new-segment accepts one executable contract and next runs its evaluator an
       ].join("\n"),
       "utf8",
     );
-    const evaluator = `${quoteForShell(process.execPath)} contract/evaluator.mjs`;
-    const checks = `${quoteForShell(process.execPath)} contract/checks.mjs`;
+    const evaluator = `${quoteForAcceptedShell(process.execPath)} contract/evaluator.mjs`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} contract/checks.mjs`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       `${JSON.stringify(
@@ -336,8 +336,8 @@ test("next rejects a compatibility command whose canonical digest differs from t
       metricName: "score",
       direction: "higher",
     });
-    const acceptedEvaluator = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync('accepted-ran.txt','yes'); console.log('METRIC score=1')"`;
-    const acceptedChecks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const acceptedEvaluator = `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').writeFileSync('accepted-ran.txt','yes'); console.log('METRIC score=1')"`;
+    const acceptedChecks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       `${JSON.stringify(
@@ -364,7 +364,7 @@ test("next rejects a compatibility command whose canonical digest differs from t
     ]);
     assert.equal(segment.code, 0, segment.stderr);
 
-    const override = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync('override-ran.txt','yes'); console.log('METRIC score=99')"`;
+    const override = `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').writeFileSync('override-ran.txt','yes'); console.log('METRIC score=99')"`;
     const next = await runCli(["next", "--cwd", dir, "--command", override]);
     assert.notEqual(next.code, 0);
     assert.match(next.stderr, /accepted.*digest|new-segment/i);
@@ -386,7 +386,7 @@ test("next executes an accepted separator command as argv without shell expansio
       path.join(dir, "autoresearch.config.json"),
       `${JSON.stringify(
         {
-          checksCommand: `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
+          checksCommand: `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`,
           commitPaths: ["src"],
           maxIterations: 3,
         },
@@ -426,8 +426,8 @@ test("next materializes accepted environment values without persisting secrets",
       metricName: "score",
       direction: "higher",
     });
-    const evaluator = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync('observed-env.txt', process.env.CONTRACT_VALUE || ''); console.log('METRIC score=1')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const evaluator = `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').writeFileSync('observed-env.txt', process.env.CONTRACT_VALUE || ''); console.log('METRIC score=1')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     await writeFile(path.join(dir, "contract.env"), "CONTRACT_VALUE=exact-secret\n");
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
@@ -476,8 +476,8 @@ test("next executes every accepted check exactly once", async () => {
       metricName: "score",
       direction: "higher",
     });
-    const evaluator = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')"`;
-    const firstCheck = `${quoteForShell(process.execPath)} -e "require('node:fs').appendFileSync('first-check.txt','run\\n')"`;
+    const evaluator = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=1')"`;
+    const firstCheck = `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').appendFileSync('first-check.txt','run\\n')"`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       `${JSON.stringify(
@@ -517,7 +517,7 @@ test("next executes every accepted check exactly once", async () => {
       command: {
         kind: "shell",
         shell: process.platform === "win32" ? "powershell" : "bash",
-        script: `${quoteForShell(process.execPath)} -e "require('node:fs').appendFileSync('second-check.txt','run\\n')"`,
+        script: `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').appendFileSync('second-check.txt','run\\n')"`,
       },
       relativeWorkingDirectory: firstExecution.relativeWorkingDirectory,
       environment: firstExecution.environment,
@@ -563,8 +563,8 @@ test("next does not reselect an evaluator after contract acceptance", async () =
       metricName: "score",
       direction: "higher",
     });
-    const evaluator = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync('accepted-ran.txt','yes'); console.log('METRIC score=1')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const evaluator = `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').writeFileSync('accepted-ran.txt','yes'); console.log('METRIC score=1')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     const configPath = path.join(dir, "autoresearch.config.json");
     await writeFile(
       configPath,
@@ -615,8 +615,8 @@ test("the first legacy next mutation appends one acceptance event without a segm
       metricName: "score",
       direction: "higher",
     });
-    const evaluator = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const evaluator = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=1')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       `${JSON.stringify(
@@ -657,8 +657,8 @@ test("the first complete legacy config mutation appends one acceptance event", a
       metricName: "score",
       direction: "higher",
     });
-    const evaluator = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const evaluator = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=1')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       `${JSON.stringify(
@@ -701,9 +701,9 @@ test("the first legacy next mutation rejects packet evaluator disagreement befor
       metricName: "score",
       direction: "higher",
     });
-    const configuredEvaluator = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync('configured-ran.txt','yes'); console.log('METRIC score=1')"`;
-    const packetEvaluator = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync('packet-ran.txt','yes'); console.log('METRIC score=99')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const configuredEvaluator = `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').writeFileSync('configured-ran.txt','yes'); console.log('METRIC score=1')"`;
+    const packetEvaluator = `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').writeFileSync('packet-ran.txt','yes'); console.log('METRIC score=99')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       `${JSON.stringify(
@@ -762,8 +762,8 @@ test("next refuses an expired accepted plugin wall-clock budget before evaluator
       metricName: "score",
       direction: "higher",
     });
-    const evaluator = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync('evaluator-ran.txt','yes'); console.log('METRIC score=1')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const evaluator = `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').writeFileSync('evaluator-ran.txt','yes'); console.log('METRIC score=1')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       `${JSON.stringify(
@@ -919,8 +919,8 @@ test("next uses the accepted evaluator runner metric limit", async () => {
       metricName: "score",
       direction: "higher",
     });
-    const evaluator = `${quoteForShell(process.execPath)} -e "console.log('METRIC first=1\\nMETRIC second=2\\nMETRIC score=3')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const evaluator = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC first=1\\nMETRIC second=2\\nMETRIC score=3')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       `${JSON.stringify(
@@ -989,8 +989,8 @@ test("explicit timeout conflicts with the accepted configured timeout", async ()
       metricName: "score",
       direction: "higher",
     });
-    const evaluator = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const evaluator = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=1')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       `${JSON.stringify(

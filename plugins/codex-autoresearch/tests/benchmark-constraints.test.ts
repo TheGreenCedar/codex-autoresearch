@@ -12,7 +12,7 @@ import {
   createCliRunner,
   withTempDir,
   createSetupFixture,
-  quoteForShell,
+  quoteForAcceptedShell,
 } from "./helpers/process.js";
 
 const pluginRoot = resolvePackageRoot(import.meta.url);
@@ -238,12 +238,12 @@ async function initConstraintLoop(dir, name) {
   await writeFile(path.join(dir, "src", "primary-metric.txt"), "2\n");
   await writeFile(path.join(dir, "src", "candidate-revision.txt"), "baseline\n");
   await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n");
-  const benchmarkCommand = `${quoteForShell(process.execPath)} -e "const fs=require('node:fs');console.log('METRIC seconds='+fs.readFileSync('src/primary-metric.txt','utf8').trim())"`;
+  const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "const fs=require('node:fs');console.log('METRIC seconds='+fs.readFileSync('src/primary-metric.txt','utf8').trim())"`;
   const init = await setupFixture(dir, {
     name: name,
     acceptedContract: true,
     benchmarkCommand,
-    checksCommand: `${quoteForShell(process.execPath)} contract/checks.mjs`,
+    checksCommand: `${quoteForAcceptedShell(process.execPath)} contract/checks.mjs`,
   });
   assert.equal(init.code, 0, init.stderr);
   const configPath = path.join(dir, "autoresearch.config.json");

@@ -4,12 +4,12 @@ import path from "node:path";
 import test from "node:test";
 import { renderExportedDashboard } from "../helpers/dashboard-export.js";
 import { cliPayload } from "../helpers/cli-session.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell, quoteForRunShell } from "../helpers/process.js";
 
 import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
-const contractChecksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
-const contractEvaluatorCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC metric=1')"`;
+const contractChecksCommand = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
+const contractEvaluatorCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC metric=1')"`;
 
 async function writeCompleteContractConfig(dir: string, overrides: Record<string, unknown> = {}) {
   await mkdir(path.join(dir, "src"), { recursive: true });
@@ -49,7 +49,7 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
       direction: "higher",
     });
     await writeCompleteContractConfig(dir, {
-      benchmarkCommand: `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')"`,
+      benchmarkCommand: `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=1')"`,
       commitPaths: ["src/missing.ts"],
       editableScope: ["src/missing.ts"],
     });
@@ -155,7 +155,7 @@ test("benchmark-lint uses config benchmark command without wrapper fallback", as
       metricName: "score",
       direction: "higher",
     });
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=7')"`;
+    const benchmarkCommand = `${quoteForRunShell(process.execPath)} -e "console.log('METRIC score=7')"`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({ benchmarkCommand }, null, 2),
@@ -397,7 +397,7 @@ test("benchmark contract changes block the next packet until a new segment", asy
 
 test("new segment rebaselines benchmark contract drift for changed benchmark surface", async () => {
   await withTempDir("segment-contract-rebaseline", async (dir) => {
-    const benchmarkCommand = `${quoteForShell(process.execPath)} benchmark.mjs`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} benchmark.mjs`;
     await setupFixture(dir, {
       name: "contract rebaseline",
       metricName: "score",

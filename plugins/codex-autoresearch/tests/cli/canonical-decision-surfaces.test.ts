@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 import { runCli, setupFixture, withTempDir } from "../helpers/cli-test-context.js";
 
 const SHARED_FIELDS = [
@@ -17,8 +17,8 @@ const SHARED_FIELDS = [
 test("state, doctor, recommend-next, finalization, report, and dashboard project one plan", async () => {
   await withTempDir("canonical-decision-surfaces", async (dir) => {
     await mkdir(`${dir}/src`, { recursive: true });
-    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     const setup = await runCli([
       "setup",
       "--cwd",
@@ -92,20 +92,20 @@ test("fresh packet surfaces select only an accepted log disposition", async () =
   const cases = [
     {
       name: "baseline",
-      benchmark: `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`,
-      checks: `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
+      benchmark: `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=3')"`,
+      checks: `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`,
       expectedStatus: "measure",
     },
     {
       name: "evaluator-crash",
-      benchmark: `${quoteForShell(process.execPath)} -e "process.exit(3)"`,
-      checks: `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
+      benchmark: `${quoteForAcceptedShell(process.execPath)} -e "process.exit(3)"`,
+      checks: `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`,
       expectedStatus: "crash",
     },
     {
       name: "accepted-check-failure",
-      benchmark: `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`,
-      checks: `${quoteForShell(process.execPath)} -e "process.exit(2)"`,
+      benchmark: `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=3')"`,
+      checks: `${quoteForAcceptedShell(process.execPath)} -e "process.exit(2)"`,
       expectedStatus: "checks_failed",
     },
   ] as const;

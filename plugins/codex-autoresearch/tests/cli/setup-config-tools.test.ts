@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell, quoteForRunShell } from "../helpers/process.js";
 
 import { pluginRoot, runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
 test("setup does not append elapsed metrics to explicit metric-emitting benchmarks", async () => {
   await withTempDir("setup-explicit-metric", async (dir) => {
-    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=42')"`;
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=42')"`;
     const result = await runCli([
       "setup",
       "--cwd",
@@ -153,7 +153,7 @@ test("ledger appends use LF on Windows-facing sessions", async () => {
 test("benchmark-inspect warns before suspicious full benchmark probes", async () => {
   await withTempDir("benchmark-inspect", async (dir) => {
     await setupFixture(dir, { name: "inspect", metricName: "score" });
-    const command = `${quoteForShell(process.execPath)} -e "console.log('case-a')"`;
+    const command = `${quoteForRunShell(process.execPath)} -e "console.log('case-a')"`;
     const result = await runCli(["benchmark-inspect", "--cwd", dir, "--command", command]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
@@ -176,7 +176,7 @@ test("benchmark-inspect warns before suspicious full benchmark probes", async ()
 
 test("checks-inspect catches malformed cargo checks and broad failures", async () => {
   await withTempDir("checks-inspect", async (dir) => {
-    const cargoShape = `${quoteForShell(process.execPath)} -e "console.error(\\"error: unexpected argument 'build_search_state' found\\\\n\\\\nUsage: cargo.exe test [OPTIONS] [TESTNAME] [-- [ARGS]...]\\"); process.exit(1)"`;
+    const cargoShape = `${quoteForRunShell(process.execPath)} -e "console.error(\\"error: unexpected argument 'build_search_state' found\\\\n\\\\nUsage: cargo.exe test [OPTIONS] [TESTNAME] [-- [ARGS]...]\\"); process.exit(1)"`;
     const shapeResult = await runCli(["checks-inspect", "--cwd", dir, "--command", cargoShape]);
     assert.equal(shapeResult.code, 0, shapeResult.stderr);
     const shapePayload = JSON.parse(shapeResult.stdout);
@@ -184,7 +184,7 @@ test("checks-inspect catches malformed cargo checks and broad failures", async (
     assert.match(shapePayload.warnings.join("\n"), /Cargo rejected/);
     assert.match(shapePayload.nextAction, /Fix command-shape/);
 
-    const broadFailure = `${quoteForShell(process.execPath)} -e "console.error(\\"test runtime::one ... FAILED\\\\ntest semantic::two ... FAILED\\"); process.exit(1)"`;
+    const broadFailure = `${quoteForRunShell(process.execPath)} -e "console.error(\\"test runtime::one ... FAILED\\\\ntest semantic::two ... FAILED\\"); process.exit(1)"`;
     const broadResult = await runCli(["checks-inspect", "--cwd", dir, "--command", broadFailure]);
     assert.equal(broadResult.code, 0, broadResult.stderr);
     const broadPayload = JSON.parse(broadResult.stdout);
@@ -195,7 +195,7 @@ test("checks-inspect catches malformed cargo checks and broad failures", async (
 
 test("promote-gate dry-runs and appends measurement gate metadata", async () => {
   await withTempDir("promote-gate", async (dir) => {
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')"`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=1')"`;
     await setupFixture(dir, {
       name: "gate",
       metricName: "score",
@@ -411,7 +411,7 @@ test("config updates and clears guardrails and budgets", async () => {
 
 test("log accepts ASI from a JSON file", async () => {
   await withTempDir("asi-file", async (dir) => {
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     await setupFixture(dir, {
       name: "asi file",
       acceptedContract: true,
@@ -455,7 +455,7 @@ test("log accepts ASI from a JSON file", async () => {
 
 test("log accepts ASI from --asi-json-file for PowerShell-safe logging", async () => {
   await withTempDir("asi-json-file", async (dir) => {
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
     await setupFixture(dir, {
       name: "asi json file",
       acceptedContract: true,
@@ -1143,7 +1143,7 @@ test("tool learning validation matches the advertised nested schema", async () =
 
 test("log rejects conflicting metrics inputs and invalid evidence status", async () => {
   await withTempDir("log-contract-edges", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     await setupFixture(dir, {
       name: "log contract",
       acceptedContract: true,
@@ -1217,7 +1217,7 @@ test("compatibility commands fail before mutation with exact migrations", async 
     await assert.rejects(access(path.join(dir, "autoresearch.jsonl")));
 
     const marker = path.join(dir, "legacy-run-executed.txt");
-    const command = `${quoteForShell(process.execPath)} -e ${quoteForShell(
+    const command = `${quoteForAcceptedShell(process.execPath)} -e ${quoteForAcceptedShell(
       `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed')`,
     )}`;
     const ran = await runCli(["run", "--cwd", dir, "--command", command]);

@@ -19,7 +19,7 @@ import {
   currentSessionMutationLockContext,
   withSessionMutationLock,
 } from "../../lib/session-mutation-lock.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 import { git, runCli, setupFixture, withTempDir } from "../helpers/cli-test-context.js";
 import {
   createEvidencePlanFixture,
@@ -74,7 +74,7 @@ test("command decision protocol captures precondition, mutation, and result unde
 
 test("doctor observations remain output-only while the protocol preserves canonical authority", async () => {
   await withTempDir("command-protocol-doctor-observations", async (dir) => {
-    const missingMetricCommand = `${quoteForShell(process.execPath)} -e "console.log('no metric')"`;
+    const missingMetricCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('no metric')"`;
     const setup = await setupFixture(dir, {
       name: "doctor observation authority",
       acceptedContract: true,
@@ -292,9 +292,9 @@ test("setup without an owning config writes only beneath the requested cwd", asy
       "--metric-name",
       "seconds",
       "--benchmark-command",
-      `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
+      `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
       "--checks-command",
-      `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
+      `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`,
       "--scope",
       "src",
       "--commit-paths",
@@ -630,9 +630,9 @@ test("state and a locked mutation precondition compile one decision for the same
       "--metric-name",
       "seconds",
       "--benchmark-command",
-      `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
+      `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
       "--checks-command",
-      `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
+      `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`,
       "--scope",
       "src",
       "--commit-paths",
@@ -760,9 +760,9 @@ test("same-status scaffold facts change the decision without entering the raw ge
       "--metric-name",
       "seconds",
       "--benchmark-command",
-      `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
+      `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
       "--checks-command",
-      `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
+      `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`,
       "--scope",
       "src",
       "--commit-paths",
@@ -929,8 +929,8 @@ test("failed mutations retain authority when the resulting decision capture also
 test("real mutating CLI routes setup and doctor benchmark checks through the protocol", async () => {
   await withTempDir("command-protocol-cli", async (dir) => {
     await mkdir(path.join(dir, "src"));
-    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     const setup = await runCli([
       "setup",
       "--cwd",

@@ -3,7 +3,7 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { redactCommandDisplay } from "../../lib/evidence-redaction.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 
 import {
   runCli,
@@ -14,7 +14,7 @@ import {
 
 async function setupFixture(dir: string, options: Parameters<typeof setupSessionFixture>[1] = {}) {
   const result = await setupSessionFixture(dir, {
-    benchmarkCommand: `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`,
+    benchmarkCommand: `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=3')"`,
     acceptedContract: true,
     packetBudget: 100,
     ...options,
@@ -108,7 +108,7 @@ test("config persists operator settings and extends iteration limits", async () 
 
 test("next writes a reusable last-run packet and log can consume it", async () => {
   await withTempDir("last-run", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3'); console.log('METRIC cache_hits=8')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=3'); console.log('METRIC cache_hits=8')"`;
     await setupFixture(dir, { name: "last run", benchmarkCommand: command });
 
     const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
@@ -188,7 +188,7 @@ test("next refuses to overwrite an unlogged fresh last-run packet", async () => 
       ].join("\n"),
       "utf8",
     );
-    const firstCommand = `${quoteForShell(process.execPath)} ${quoteForShell(sideEffectScript)}`;
+    const firstCommand = `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(sideEffectScript)}`;
     await setupFixture(dir, { name: "fresh last run", benchmarkCommand: firstCommand });
     const first = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
     assert.equal(first.code, 0, first.stderr);
@@ -228,7 +228,7 @@ test("next parses metrics from the full benchmark output before display truncati
       ].join("\n"),
       "utf8",
     );
-    const command = `${quoteForShell(process.execPath)} ${quoteForShell(script)}`;
+    const command = `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(script)}`;
     await setupFixture(dir, { name: "full output", benchmarkCommand: command });
 
     const next = await runCli(["next", "--cwd", dir, "--checks-policy", "manual"]);
@@ -242,7 +242,7 @@ test("next parses metrics from the full benchmark output before display truncati
 
 test("successful last-run packets require explicit status and suggest discard for regressions", async () => {
   await withTempDir("last-run-suggest-discard", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=4')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=4')"`;
     await setupFixture(dir, {
       name: "suggest discard",
       direction: "lower",
@@ -537,7 +537,7 @@ test("next blocks when dirty fingerprint bytes exceed the total budget", async (
     await writeFile(path.join(dir, "tracked.txt"), "base\n");
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const initialized = await setupFixture(dir, {
       name: "oversized fingerprint",
       benchmarkCommand: command,
@@ -645,7 +645,7 @@ test("packet command tampering is stale in dashboard and next preflight", async 
     assert.equal(first.code, 0, first.stderr);
     const packet = JSON.parse(first.stdout);
     const acceptedCommand = packet.run.command;
-    packet.run.command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=999')"`;
+    packet.run.command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=999')"`;
     await writeFile(packet.lastRunPath, `${JSON.stringify(packet, null, 2)}\n`, "utf8");
 
     const dashboard = await runCli(["export", "--cwd", dir, "--json-full"]);
@@ -816,7 +816,7 @@ test("continuation stops cleanly at the configured iteration limit", async () =>
 
 test("log from last packet rejects keep after failed checks", async () => {
   await withTempDir("last-run-check-failure", async (dir) => {
-    const checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
+    const checksCommand = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(1)"`;
     await setupFixture(dir, { name: "last run checks", checksCommand });
     const next = await runCli(["next", "--cwd", dir]);
     assert.equal(next.code, 0, next.stderr);

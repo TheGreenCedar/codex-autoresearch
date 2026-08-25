@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { runGit, createSetupFixture, quoteForShell } from "./process.js";
+import { runGit, createSetupFixture, quoteForAcceptedShell } from "./process.js";
 
 export async function writeDecisionCapsule(dir, slug, overrides = {}) {
   const capsuleDir = path.join(dir, "autoresearch.research", slug);
@@ -42,9 +42,9 @@ export async function writeDecisionCapsule(dir, slug, overrides = {}) {
 
 export async function prepareCurrentTreeFinalizationBlocker(dir, runCli) {
   const setupFixture = createSetupFixture();
-  const benchmarkCommand = `${quoteForShell(process.execPath)} -e "const fs=require('node:fs');console.log('METRIC seconds='+(fs.existsSync('src/kept.txt')?0:1))"`;
+  const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "const fs=require('node:fs');console.log('METRIC seconds='+(fs.existsSync('src/kept.txt')?0:1))"`;
   const checksPath = path.join(dir, "contract", "checks.mjs");
-  const checksCommand = `${quoteForShell(process.execPath)} contract/checks.mjs`;
+  const checksCommand = `${quoteForAcceptedShell(process.execPath)} contract/checks.mjs`;
   await runGit(dir, ["init"]);
   await writeFile(path.join(dir, "base.txt"), "base\n", "utf8");
   await runGit(dir, ["add", "base.txt"]);

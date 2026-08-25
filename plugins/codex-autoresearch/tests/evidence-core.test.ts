@@ -101,7 +101,7 @@ import {
   outputBudgetFixtureEntries,
   searchLatencyFixtureEntries,
 } from "./helpers/session-forensics-fixtures.js";
-import { quoteForShell, withTempDir as withNamedTempDir } from "./helpers/process.js";
+import { quoteForRunShell, withTempDir as withNamedTempDir } from "./helpers/process.js";
 
 const withTempDir = (name, fn) => withNamedTempDir("autoresearch-e1", name, fn);
 
@@ -117,7 +117,7 @@ test("runner parses early metrics from full output while retaining only bounded 
     );
 
     const result = await runShell(
-      `${quoteForShell(process.execPath)} ${quoteForShell(script)}`,
+      `${quoteForRunShell(process.execPath)} ${quoteForRunShell(script)}`,
       dir,
       10,
     );
@@ -148,7 +148,7 @@ test("runner minimal env mode keeps explicit env without inheriting unrelated pa
         'console.log("METRIC seconds=1");',
       ].join("");
       const result = await runShell(
-        `${quoteForShell(process.execPath)} -e ${quoteForShell(script)}`,
+        `${quoteForRunShell(process.execPath)} -e ${quoteForRunShell(script)}`,
         dir,
         5,
         {
@@ -193,7 +193,7 @@ test("runner proves a stubborn child and grandchild are gone before timeout reso
   await withTempDir("stubborn-process-tree", async (dir) => {
     const fixture = path.join(process.cwd(), "tests", "fixtures", "stubborn-process-tree.mjs");
     const marker = path.join(dir, "heartbeat.txt");
-    const command = `${quoteForShell(process.execPath)} ${quoteForShell(fixture)} root ${quoteForShell(marker)}`;
+    const command = `${quoteForRunShell(process.execPath)} ${quoteForRunShell(fixture)} root ${quoteForRunShell(marker)}`;
     let result: Awaited<ReturnType<typeof runShell>> | null = null;
     let fixturePids: number[] = [];
     try {
@@ -240,7 +240,7 @@ test(
         results = await Promise.all(
           Array.from({ length: 8 }, (_, index) => {
             const marker = path.join(dir, `heartbeat-${index}.txt`);
-            const command = `${quoteForShell(process.execPath)} ${quoteForShell(fixture)} root ${quoteForShell(marker)}`;
+            const command = `${quoteForRunShell(process.execPath)} ${quoteForRunShell(fixture)} root ${quoteForRunShell(marker)}`;
             return runShell(command, dir, 1);
           }),
         );

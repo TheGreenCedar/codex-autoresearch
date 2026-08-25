@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { qualityGapId } from "../../lib/research-gaps.js";
 import { pathExists } from "../helpers/cli-session.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 
 import { runCli, withTempDir } from "../helpers/cli-test-context.js";
 
@@ -73,7 +73,7 @@ test("research-start dry-run prints the full qualitative loop start plan", async
       "--goal",
       "Improve language support in CodeStory",
       "--checks-command",
-      `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
+      `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`,
       "--dry-run",
       "--json",
     ]);
@@ -166,7 +166,7 @@ test("research-start skip-init skips default baseline logging cleanly", async ()
 
 test("research-start preserves an existing executable outcome metric as primary", async () => {
   await withTempDir("research-start-existing-metric", async (dir) => {
-    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC lighthouse_warnings=2')"`;
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC lighthouse_warnings=2')"`;
     const setup = await runCli([
       "setup",
       "--cwd",
@@ -220,7 +220,7 @@ test("research-start default baseline logging keeps benchmark command authority 
       "--goal",
       "Improve language support in CodeStory",
       "--checks-command",
-      `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
+      `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`,
       "--files-in-scope",
       "autoresearch.research",
       "--commit-paths",

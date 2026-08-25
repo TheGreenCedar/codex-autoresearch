@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 import { cli, finalizer, git, run, testWithTempRoot, writeFile } from "./helpers.js";
 
 testWithTempRoot(
@@ -742,8 +742,8 @@ async function prepareAcceptedContract(
     options.evaluatorSource || "console.log('METRIC score=1');\n",
   );
   await writeFile(path.join(repo, checksPath), "process.exit(0);\n");
-  const benchmark = `${quoteForShell(process.execPath)} ${evaluatorPath}`;
-  const checks = `${quoteForShell(process.execPath)} ${checksPath}`;
+  const benchmark = `${quoteForAcceptedShell(process.execPath)} ${evaluatorPath}`;
+  const checks = `${quoteForAcceptedShell(process.execPath)} ${checksPath}`;
   const scope = options.scope?.length ? options.scope : ["src"];
   await run(
     process.execPath,

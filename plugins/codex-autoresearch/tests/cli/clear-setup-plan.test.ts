@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 
 import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
@@ -96,8 +96,8 @@ test("clear removes active progress snapshots in fallback and Git-private modes"
 
 test("setup-plan preserves explicit command, state inputs, and baseline measure guidance", async () => {
   await withTempDir("setup-plan-inputs", async (dir) => {
-    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     const result = await runCli([
       "setup-plan",
       "--cwd",
@@ -294,7 +294,7 @@ test("setup-plan warns when files in scope and commit paths diverge", async () =
       "--metric-name",
       "seconds",
       "--benchmark-command",
-      `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
+      `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
       "--files-in-scope",
       "src",
       "--commit-paths",

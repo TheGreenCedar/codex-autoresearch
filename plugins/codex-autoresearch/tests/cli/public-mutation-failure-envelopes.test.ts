@@ -3,7 +3,7 @@ import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 import { runCli, withTempDir } from "../helpers/cli-test-context.js";
 import {
   createEvidencePlanFixture,
@@ -15,8 +15,8 @@ import {
 test("autoresearch CLI serializes the failed mutation protocol envelope", async () => {
   await withTempDir("autoresearch-public-mutation-failure", async (dir) => {
     await mkdir(path.join(dir, "src"));
-    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     const result = await runCli([
       "setup",
       "--cwd",

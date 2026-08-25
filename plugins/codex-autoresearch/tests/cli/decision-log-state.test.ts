@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { renderExportedDashboard } from "../helpers/dashboard-export.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 
 import {
   runCli,
@@ -48,7 +48,7 @@ async function appendLegacyLedgerRows(dir: string, rows: Record<string, unknown>
 
 test("next returns only mechanically eligible decision options instead of a fake status", async () => {
   await withTempDir("decision-hint", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1.25')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1.25')"`;
     const setup = await setupSessionFixture(dir, {
       acceptedContract: true,
       benchmarkCommand: command,
@@ -69,7 +69,7 @@ test("next returns only mechanically eligible decision options instead of a fake
 
 test("structured log learning reaches the canonical compiler and invalid claims fail closed", async () => {
   await withTempDir("structured-learning-log", async (dir) => {
-    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=5')"`;
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=5')"`;
     const setup = await setupSessionFixture(dir, {
       acceptedContract: true,
       benchmarkCommand: benchmark,
@@ -188,7 +188,7 @@ test("typed failure layer preconditions reach the real ledger and pause repeated
       'if (/\\"run\\":/.test(ledger)) process.exit(7)',
       "console.log('METRIC seconds=5')",
     ].join(";");
-    const benchmark = `${quoteForShell(process.execPath)} -e ${quoteForShell(script)}`;
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e ${quoteForAcceptedShell(script)}`;
     const setup = await setupSessionFixture(dir, {
       acceptedContract: true,
       benchmarkCommand: benchmark,
@@ -300,7 +300,7 @@ test("failed accepted logs without typed failure evidence conservatively vote as
       'if (/\\"run\\":/.test(ledger)) process.exit(7)',
       "console.log('METRIC seconds=5')",
     ].join(";");
-    const benchmark = `${quoteForShell(process.execPath)} -e ${quoteForShell(script)}`;
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e ${quoteForAcceptedShell(script)}`;
     const setup = await setupSessionFixture(dir, {
       acceptedContract: true,
       benchmarkCommand: benchmark,
@@ -372,7 +372,7 @@ test("repository and process failure preconditions must match captured packet au
     for (const variant of variants) {
       const dir = path.join(root, variant.layer);
       await mkdir(dir, { recursive: true });
-      const benchmark = `${quoteForShell(process.execPath)} -e "process.exit(7)"`;
+      const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(7)"`;
       const setup = await setupSessionFixture(dir, {
         acceptedContract: true,
         benchmarkCommand: benchmark,
@@ -703,8 +703,8 @@ test("new config segment preserves previous durable goal when omitted", async ()
 
 test("discarded metrics do not become best or suppress on-improvement checks", async () => {
   await withTempDir("discarded-best", async (dir) => {
-    const failingChecks = `${quoteForShell(process.execPath)} -e "process.exit(1)"`;
-    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=7')"`;
+    const failingChecks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(1)"`;
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=7')"`;
     const setup = await setupSessionFixture(dir, {
       benchmarkCommand: benchmark,
       checksCommand: failingChecks,

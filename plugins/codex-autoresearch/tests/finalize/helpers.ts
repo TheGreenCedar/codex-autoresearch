@@ -5,7 +5,7 @@ import test from "node:test";
 import { resolvePackageRoot } from "../../lib/runtime-paths.js";
 import {
   configureTestGitRepo,
-  quoteForShell,
+  quoteForAcceptedShell,
   runProcess,
   testGitArgs,
   withTempDir as withNamedTempDir,
@@ -125,10 +125,10 @@ export async function writeCompleteFinalizationEvidenceFixture(
     `const metric = diff.status === 0 ? ${candidateMetric} : ${baselineMetric};`,
     `console.log(${JSON.stringify(`METRIC ${metricName}=`)} + metric);`,
   ].join(" ");
-  const benchmarkCommand = `${quoteForShell(process.execPath)} -e ${quoteForShell(
+  const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e ${quoteForAcceptedShell(
     benchmarkProgram,
   )}`;
-  const checksCommand = `${quoteForShell(process.execPath)} -e ${quoteForShell("process.exit(0)")}`;
+  const checksCommand = `${quoteForAcceptedShell(process.execPath)} -e ${quoteForAcceptedShell("process.exit(0)")}`;
   const rawRecords = existing.filter(
     (record) => record?.type !== "config" && record?.type !== "experiment-contract-accepted",
   );

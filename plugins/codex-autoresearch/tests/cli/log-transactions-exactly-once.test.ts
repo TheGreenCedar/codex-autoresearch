@@ -13,7 +13,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { logExperiment } from "../../lib/commands/log.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 import { git, runCli, setupFixture, withTempDir } from "../helpers/cli-test-context.js";
 
 type FaultPoint =
@@ -90,8 +90,8 @@ async function setupTransactionFixture(
     ].join("\n"),
   );
   await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n");
-  const benchmarkCommand = `${quoteForShell(process.execPath)} contract/evaluator.mjs`;
-  const checksCommand = `${quoteForShell(process.execPath)} contract/checks.mjs`;
+  const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} contract/evaluator.mjs`;
+  const checksCommand = `${quoteForAcceptedShell(process.execPath)} contract/checks.mjs`;
   const setup = await setupFixture(dir, {
     name: "exactly once logging",
     goal: "Keep only accepted candidate evidence.",
@@ -258,8 +258,8 @@ async function installGitShim(
     shimPath,
     [
       "#!/bin/sh",
-      `REAL_GIT=${quoteForShell(realGit)}`,
-      `MARKER=${quoteForShell(marker)}`,
+      `REAL_GIT=${quoteForAcceptedShell(realGit)}`,
+      `MARKER=${quoteForAcceptedShell(marker)}`,
       ...body,
       'exec "$REAL_GIT" "$@"',
       "",

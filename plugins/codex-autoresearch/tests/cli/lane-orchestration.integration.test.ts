@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 
 import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
@@ -733,7 +733,7 @@ test("read-only lane-runner refuses non-Git commands before execution", async ()
       "--lane-id",
       "read-only-scout",
       "--command",
-      `${quoteForShell(process.execPath)} -e "console.log('scout')"`,
+      `${quoteForAcceptedShell(process.execPath)} -e "console.log('scout')"`,
       "--yes",
     ]);
     assert.notEqual(blocked.code, 0);

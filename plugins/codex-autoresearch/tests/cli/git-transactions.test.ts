@@ -15,7 +15,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 
 async function prepareAcceptedKeep(
   dir: string,
@@ -39,8 +39,8 @@ async function prepareAcceptedKeep(
     "console.log('METRIC seconds=1');\n",
   );
   await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n");
-  const benchmarkCommand = `${quoteForShell(process.execPath)} contract/evaluator.mjs`;
-  const checksCommand = `${quoteForShell(process.execPath)} contract/checks.mjs`;
+  const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} contract/evaluator.mjs`;
+  const checksCommand = `${quoteForAcceptedShell(process.execPath)} contract/checks.mjs`;
   const setup = await setupFixture(dir, {
     name: "accepted Git transaction fixture",
     goal: "Keep only contract-qualified repository changes.",

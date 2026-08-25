@@ -31,10 +31,10 @@ export const createSetupFixture = () => {
       await mkdir(path.join(cwd, scope), { recursive: true });
       const benchmarkCommand = options.acceptedContract
         ? (options.benchmarkCommand ??
-          `${quoteForShell(process.execPath)} -e "console.log('METRIC ${metricName}=1')"`)
+          `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC ${metricName}=1')"`)
         : options.benchmarkCommand;
       const checksCommand =
-        options.checksCommand ?? `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+        options.checksCommand ?? `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
       let stdout = "";
       let stderr = "";
       const setupCode = await module.runAutoresearchCli(
@@ -101,7 +101,7 @@ export const createSetupFixture = () => {
   };
 };
 
-export const quoteForShell = (value) => {
+export const quoteForAcceptedShell = (value) => {
   const text = String(value);
   if (process.platform !== "win32") return JSON.stringify(text);
   const nativeArgument = text.replace(/(\\*)"/g, (_match, slashes) => {
@@ -112,6 +112,10 @@ export const quoteForShell = (value) => {
   // needs the call operator when that executable is represented as a string.
   return text === process.execPath ? `& ${quoted}` : quoted;
 };
+
+// runShell() delegates to Node's native shell selection. On Windows that is
+// ComSpec (normally cmd.exe), not the PowerShell used by accepted contracts.
+export const quoteForRunShell = (value) => JSON.stringify(String(value));
 
 export const processResult = (code, stdout, stderr) => ({ code, stdout, stderr });
 

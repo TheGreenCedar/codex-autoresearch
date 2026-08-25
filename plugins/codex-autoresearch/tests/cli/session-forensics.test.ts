@@ -5,7 +5,7 @@ import test from "node:test";
 import { commandForDecisionCapsule } from "../../lib/commands/session-forensics.js";
 import { writeDecisionCapsule } from "../helpers/git-fixtures.js";
 import { pathExists } from "../helpers/cli-session.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell, quoteForRunShell } from "../helpers/process.js";
 
 import { pluginRoot, runCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
 
@@ -648,7 +648,7 @@ test("session-forensics keeps secondary overfit blockers visible in compact outp
 
 test("state, recommend-next, and doctor keep decision capsules display-only", async () => {
   await withTempDir("active-decision-capsule-state", async (dir) => {
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     await setupFixture(dir, {
       name: "capsule state",
       acceptedContract: true,
@@ -730,7 +730,7 @@ test("recommend-next compact bounds noisy session evidence", async () => {
 
 test("next ignores hard capsule projections and follows the accepted contract", async () => {
   await withTempDir("next-hard-decision-capsule", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     await setupFixture(dir, {
       name: "hard capsule",
       acceptedContract: true,
@@ -756,7 +756,7 @@ test("next refuses fixed-control rerun commands without override", async () => {
   await withTempDir("fixed-control-next", async (dir) => {
     const secret = "sk-fixed-control-next-secret-123";
     const sentinel = path.join(dir, "next-sentinel.txt");
-    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForAcceptedShell(sentinel)} --mode no-codestory --token=${secret}`;
     await setupFixture(dir, {
       name: "fixed control",
       metricName: "score",
@@ -802,7 +802,7 @@ test("doctor check-benchmark refuses fixed-control rerun commands without execut
   await withTempDir("fixed-control-doctor", async (dir) => {
     const secret = "sk-fixed-control-doctor-secret-123";
     const sentinel = path.join(dir, "doctor-sentinel.txt");
-    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    const command = `${quoteForRunShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForRunShell(sentinel)} --mode no-codestory --token=${secret}`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({
@@ -849,7 +849,7 @@ test("benchmark-lint refuses fixed-control explicit commands without override", 
   await withTempDir("fixed-control-benchmark-lint", async (dir) => {
     const secret = "sk-fixed-control-lint-secret-123";
     const sentinel = path.join(dir, "lint-sentinel.txt");
-    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    const command = `${quoteForRunShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForRunShell(sentinel)} --mode no-codestory --token=${secret}`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({
@@ -894,7 +894,7 @@ test("benchmark-inspect refuses fixed-control explicit commands without override
   await withTempDir("fixed-control-benchmark-inspect", async (dir) => {
     const secret = "sk-fixed-control-inspect-secret-123";
     const sentinel = path.join(dir, "inspect-sentinel.txt");
-    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    const command = `${quoteForRunShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForRunShell(sentinel)} --mode no-codestory --token=${secret}`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({
@@ -943,7 +943,7 @@ test("state exposes fixed-control config", async () => {
       { length: 16 },
       (_, index) => `--mode no-codestory-${index} --token=${secret}`,
     );
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')" --mode no-codestory --token=${secret}`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=1')" --mode no-codestory --token=${secret}`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({
@@ -987,7 +987,7 @@ test("state exposes fixed-control config", async () => {
 
 test("bounded-next capsules cannot authorize or block accepted packet work", async () => {
   await withTempDir("next-bounded-decision-capsule", async (dir) => {
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     await setupFixture(dir, {
       name: "bounded capsule",
       acceptedContract: true,
