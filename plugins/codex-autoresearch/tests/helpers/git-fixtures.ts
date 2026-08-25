@@ -42,7 +42,7 @@ export async function writeDecisionCapsule(dir, slug, overrides = {}) {
 
 export async function prepareCurrentTreeFinalizationBlocker(dir, runCli) {
   const setupFixture = createSetupFixture();
-  const benchmarkCommand = `${JSON.stringify(process.execPath)} -e "const fs=require('node:fs');console.log('METRIC seconds='+(fs.existsSync('src/kept.txt')?0:1))"`;
+  const benchmarkCommand = `${quoteForShell(process.execPath)} -e "const fs=require('node:fs');console.log('METRIC seconds='+(fs.existsSync('src/kept.txt')?0:1))"`;
   const checksPath = path.join(dir, "contract", "checks.mjs");
   const checksCommand = `${quoteForShell(process.execPath)} contract/checks.mjs`;
   await runGit(dir, ["init"]);

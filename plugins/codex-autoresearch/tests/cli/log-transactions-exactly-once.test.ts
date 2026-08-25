@@ -307,56 +307,60 @@ test("manual measurement remains loggable in an unborn Git repository", async ()
   });
 });
 
-test("keep retries converge after faults before and after Git, ledger, and packet cleanup", async (t) => {
-  const points: FaultPoint[] = [
-    "before:commit-applied-or-verified",
-    "after:commit-applied-or-verified",
-    "before:ledger-event-present",
-    "after:ledger-event-present",
-    "before:packet-cleanup-complete",
-    "after:packet-cleanup-complete",
-  ];
-  for (const point of points) {
-    await t.test(point, async () => {
-      await withTempDir(`keep-${point.replaceAll(":", "-")}`, async (dir) => {
-        await setupTransactionFixture(dir);
-        await assert.rejects(
-          invokeLog(keepArgs(dir), { faultInjection: (seen) => failAt(seen, point) }),
-          new RegExp(point),
-        );
-        const receipt = JSON.parse(await readFile(await receiptPath(dir), "utf8"));
-        assert.equal(receipt.type, "autoresearch.log.transaction");
-        assert.equal(receipt.schemaVersion, 2);
-        for (const field of [
-          "transaction",
-          "input",
-          "packet",
-          "contract",
-          "evidence",
-          "preGit",
-          "status",
-          "completedStages",
-          "commitExpectation",
-          "ledgerEvent",
-          "cleanup",
-          "failures",
-        ]) {
-          assert.equal(Object.hasOwn(receipt, field), true, field);
-        }
+test(
+  "keep retries converge after faults before and after Git, ledger, and packet cleanup",
+  { timeout: 300_000 },
+  async (t) => {
+    const points: FaultPoint[] = [
+      "before:commit-applied-or-verified",
+      "after:commit-applied-or-verified",
+      "before:ledger-event-present",
+      "after:ledger-event-present",
+      "before:packet-cleanup-complete",
+      "after:packet-cleanup-complete",
+    ];
+    for (const point of points) {
+      await t.test(point, async () => {
+        await withTempDir(`keep-${point.replaceAll(":", "-")}`, async (dir) => {
+          await setupTransactionFixture(dir);
+          await assert.rejects(
+            invokeLog(keepArgs(dir), { faultInjection: (seen) => failAt(seen, point) }),
+            new RegExp(point),
+          );
+          const receipt = JSON.parse(await readFile(await receiptPath(dir), "utf8"));
+          assert.equal(receipt.type, "autoresearch.log.transaction");
+          assert.equal(receipt.schemaVersion, 2);
+          for (const field of [
+            "transaction",
+            "input",
+            "packet",
+            "contract",
+            "evidence",
+            "preGit",
+            "status",
+            "completedStages",
+            "commitExpectation",
+            "ledgerEvent",
+            "cleanup",
+            "failures",
+          ]) {
+            assert.equal(Object.hasOwn(receipt, field), true, field);
+          }
 
-        const retried = await invokeLog(keepArgs(dir));
-        assert.equal(retried.ok, true);
-        assert.equal(Number(await git(dir, ["rev-list", "--count", "HEAD"])), 2);
-        const rows = await ledgerRows(dir);
-        const logged = rows.filter((row) => row.description === "Keep accepted candidate");
-        assert.equal(logged.length, 1);
-        assert.match(String(logged[0].logTransaction?.id || ""), /^[a-f0-9]{64}$/);
-        assert.match(String(logged[0].logTransaction?.eventDigest || ""), /^[a-f0-9]{64}$/);
-        await assert.rejects(access(await receiptPath(dir)), /ENOENT/);
+          const retried = await invokeLog(keepArgs(dir));
+          assert.equal(retried.ok, true);
+          assert.equal(Number(await git(dir, ["rev-list", "--count", "HEAD"])), 2);
+          const rows = await ledgerRows(dir);
+          const logged = rows.filter((row) => row.description === "Keep accepted candidate");
+          assert.equal(logged.length, 1);
+          assert.match(String(logged[0].logTransaction?.id || ""), /^[a-f0-9]{64}$/);
+          assert.match(String(logged[0].logTransaction?.eventDigest || ""), /^[a-f0-9]{64}$/);
+          await assert.rejects(access(await receiptPath(dir)), /ENOENT/);
+        });
       });
-    });
-  }
-});
+    }
+  },
+);
 
 test("keep retry recovers a recorded commit before its stage checkpoint", async () => {
   await withTempDir("recorded-commit-before-checkpoint", async (dir) => {
@@ -879,38 +883,42 @@ test("tracked cleanup removes staged additions after restoring their index entry
   }
 });
 
-test("non-keep retries converge after faults around ledger and independent cleanup stages", async (t) => {
-  const points: FaultPoint[] = [
-    "before:ledger-event-present",
-    "after:ledger-event-present",
-    "before:tracked-cleanup-complete",
-    "after:tracked-cleanup-complete",
-    "before:untracked-cleanup-complete",
-    "after:untracked-cleanup-complete",
-    "before:packet-cleanup-complete",
-    "after:packet-cleanup-complete",
-  ];
-  for (const point of points) {
-    await t.test(point, async () => {
-      await withTempDir(`discard-${point.replaceAll(":", "-")}`, async (dir) => {
-        await setupTransactionFixture(dir, { untrackedCandidate: true });
-        await assert.rejects(
-          invokeLog(discardArgs(dir), { faultInjection: (seen) => failAt(seen, point) }),
-          new RegExp(point),
-        );
-        const pending = JSON.parse(await readFile(await receiptPath(dir), "utf8"));
-        assert.equal(pending.status, "failed");
-        const retried = await invokeLog(discardArgs(dir));
-        assert.equal(retried.ok, true);
-        assert.equal(await readFile(path.join(dir, "src", "score.txt"), "utf8"), "1\n");
-        await assert.rejects(access(path.join(dir, "src", "scratch.txt")), /ENOENT/);
-        const rows = await ledgerRows(dir);
-        assert.equal(rows.filter((row) => row.description === "Discard candidate").length, 1);
-        await assert.rejects(access(await receiptPath(dir)), /ENOENT/);
+test(
+  "non-keep retries converge after faults around ledger and independent cleanup stages",
+  { timeout: 400_000 },
+  async (t) => {
+    const points: FaultPoint[] = [
+      "before:ledger-event-present",
+      "after:ledger-event-present",
+      "before:tracked-cleanup-complete",
+      "after:tracked-cleanup-complete",
+      "before:untracked-cleanup-complete",
+      "after:untracked-cleanup-complete",
+      "before:packet-cleanup-complete",
+      "after:packet-cleanup-complete",
+    ];
+    for (const point of points) {
+      await t.test(point, async () => {
+        await withTempDir(`discard-${point.replaceAll(":", "-")}`, async (dir) => {
+          await setupTransactionFixture(dir, { untrackedCandidate: true });
+          await assert.rejects(
+            invokeLog(discardArgs(dir), { faultInjection: (seen) => failAt(seen, point) }),
+            new RegExp(point),
+          );
+          const pending = JSON.parse(await readFile(await receiptPath(dir), "utf8"));
+          assert.equal(pending.status, "failed");
+          const retried = await invokeLog(discardArgs(dir));
+          assert.equal(retried.ok, true);
+          assert.equal(await readFile(path.join(dir, "src", "score.txt"), "utf8"), "1\n");
+          await assert.rejects(access(path.join(dir, "src", "scratch.txt")), /ENOENT/);
+          const rows = await ledgerRows(dir);
+          assert.equal(rows.filter((row) => row.description === "Discard candidate").length, 1);
+          await assert.rejects(access(await receiptPath(dir)), /ENOENT/);
+        });
       });
-    });
-  }
-});
+    }
+  },
+);
 
 test("pending retries reject changed inputs and preserve the original transaction", async () => {
   await withTempDir("changed-input-retry", async (dir) => {

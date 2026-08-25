@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { PLUGIN_VERSION } from "../../lib/plugin-version.js";
+import { quoteForShell } from "../helpers/process.js";
 import { runCli, runCliWithAnswers, withTempDir } from "./helpers.js";
 
 test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", async () => {
@@ -59,7 +60,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
       "--name",
       "Memory loop",
       "--checks-command",
-      `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+      `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
       "--scope",
       "src",
       "--commit-paths",

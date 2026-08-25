@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { quoteForShell } from "../helpers/process.js";
 import {
   assertNoSensitiveEvidence,
   git,
@@ -11,8 +12,8 @@ import {
   withTempDir,
 } from "./helpers.js";
 
-const secondsOneBenchmark = `${JSON.stringify(process.execPath)} -e "console.log('METRIC seconds=1')"`;
-const valueFileBenchmark = `${JSON.stringify(process.execPath)} -e "const fs=require('node:fs'); const value=fs.readFileSync('src/value.txt','utf8').trim(); console.log('METRIC seconds='+(value==='kept'?1:2))"`;
+const secondsOneBenchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+const valueFileBenchmark = `${quoteForShell(process.execPath)} -e "const fs=require('node:fs'); const value=fs.readFileSync('src/value.txt','utf8').trim(); console.log('METRIC seconds='+(value==='kept'?1:2))"`;
 
 function requiredEvidenceCodes(plan) {
   return plan.requiredEvidence.diagnosticCodes;
@@ -305,7 +306,7 @@ test("live server has no dashboard action routes because CLI owns mutations", as
 
 test("live server log actions stay disabled and leave last-run packets untouched", async () => {
   await withTempDir("live-log-action", async (dir) => {
-    const benchmarkCommand = `${JSON.stringify(process.execPath)} -e "console.log('METRIC seconds=2')"`;
+    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
     await setupFixture(dir, {
       name: "live log",
       acceptedContract: true,

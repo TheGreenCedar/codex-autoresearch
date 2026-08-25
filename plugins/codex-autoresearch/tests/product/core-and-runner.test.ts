@@ -8,6 +8,7 @@ import {
   shellQuote as sessionShellQuote,
 } from "../../lib/session-core.js";
 import { parseMetricLines, runProcess, runShell, tailText } from "../../lib/runner.js";
+import { quoteForShell } from "../helpers/process.js";
 import { pluginRoot, runCli, withTempDir } from "./helpers.js";
 
 test("session core handles finite metrics, segments, limits, and quality gaps", async () => {
@@ -74,14 +75,14 @@ test("runner parses metrics, truncates tails, and reports timeouts", async () =>
   assert.equal(tail.split(/\r?\n/).length, 5);
   assert.match(tail, /line 39/);
 
-  const command = `${JSON.stringify(process.execPath)} -e "setTimeout(()=>{}, 2000)"`;
+  const command = `${quoteForShell(process.execPath)} -e "setTimeout(()=>{}, 2000)"`;
   const result = await runShell(command, pluginRoot, 1);
   assert.equal(result.timedOut, true);
 });
 
 test("direct CLI command execution stays intentionally ungated", async () => {
   await withTempDir("cli-direct-command-boundary", async (dir) => {
-    const command = `${JSON.stringify(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const lint = await runCli([
       "benchmark-lint",
       "--cwd",

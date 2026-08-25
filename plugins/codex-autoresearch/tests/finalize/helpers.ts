@@ -5,6 +5,7 @@ import test from "node:test";
 import { resolvePackageRoot } from "../../lib/runtime-paths.js";
 import {
   configureTestGitRepo,
+  quoteForShell,
   runProcess,
   testGitArgs,
   withTempDir as withNamedTempDir,
@@ -38,8 +39,8 @@ export async function withTempRoot(prefix, body) {
   return await withNamedTempDir(prefix.replace(/-$/, ""), "root", body);
 }
 
-export function testWithTempRoot(name, prefix, body) {
-  test(name, async () => {
+export function testWithTempRoot(name, prefix, body, options = {}) {
+  test(name, options, async () => {
     await withTempRoot(prefix, body);
   });
 }
@@ -124,12 +125,10 @@ export async function writeCompleteFinalizationEvidenceFixture(
     `const metric = diff.status === 0 ? ${candidateMetric} : ${baselineMetric};`,
     `console.log(${JSON.stringify(`METRIC ${metricName}=`)} + metric);`,
   ].join(" ");
-  const benchmarkCommand = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+  const benchmarkCommand = `${quoteForShell(process.execPath)} -e ${quoteForShell(
     benchmarkProgram,
   )}`;
-  const checksCommand = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
-    "process.exit(0)",
-  )}`;
+  const checksCommand = `${quoteForShell(process.execPath)} -e ${quoteForShell("process.exit(0)")}`;
   const rawRecords = existing.filter(
     (record) => record?.type !== "config" && record?.type !== "experiment-contract-accepted",
   );

@@ -102,7 +102,15 @@ export const createSetupFixture = () => {
 };
 
 export const quoteForShell = (value) => {
-  return JSON.stringify(String(value));
+  const text = String(value);
+  if (process.platform !== "win32") return JSON.stringify(text);
+  const nativeArgument = text.replace(/(\\*)"/g, (_match, slashes) => {
+    return `${"\\".repeat(slashes.length * 2 + 1)}"`;
+  });
+  const quoted = `'${nativeArgument.replaceAll("'", "''")}'`;
+  // Test commands use process.execPath only as the command head. PowerShell
+  // needs the call operator when that executable is represented as a string.
+  return text === process.execPath ? `& ${quoted}` : quoted;
 };
 
 export const processResult = (code, stdout, stderr) => ({ code, stdout, stderr });

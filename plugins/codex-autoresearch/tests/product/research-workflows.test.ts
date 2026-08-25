@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { quoteForShell } from "../helpers/process.js";
 import { readGoalBrief, runCli, withTempDir, setupFixture } from "./helpers.js";
 
-const passingChecks = `${JSON.stringify(process.execPath)} -e "process.exit(0)"`;
+const passingChecks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
 
-const scoreFileBenchmark = `${JSON.stringify(process.execPath)} -e "const fs=require('node:fs'); const score=fs.readFileSync('src/score.txt','utf8').trim(); console.log('METRIC score='+score)"`;
+const scoreFileBenchmark = `${quoteForShell(process.execPath)} -e "const fs=require('node:fs'); const score=fs.readFileSync('src/score.txt','utf8').trim(); console.log('METRIC score='+score)"`;
 
 async function acceptDeterministicContract(dir: string, reason: string) {
   const configPath = path.join(dir, "autoresearch.config.json");
@@ -262,7 +263,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
       "--cwd",
       dir,
       "--command",
-      `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+      `${quoteForShell(process.execPath)} -e "process.exit(0)"`,
     ]);
     assert.equal(checksInspect.code, 0, checksInspect.stderr);
     const checksInspectPayload = JSON.parse(checksInspect.stdout);
@@ -810,7 +811,7 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
       "--research-slug",
       "study",
       "--model-command",
-      `${JSON.stringify(process.execPath)} -e "console.log('not json')"`,
+      `${quoteForShell(process.execPath)} -e "console.log('not json')"`,
     ]);
     assert.notEqual(badModel.code, 0);
     assert.match(badModel.stderr, /model-command must print a JSON array/);
@@ -822,7 +823,7 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
       "--research-slug",
       "study",
       "--model-command",
-      `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 2000)"`,
+      `${quoteForShell(process.execPath)} -e "setTimeout(() => {}, 2000)"`,
       "--model-timeout-seconds",
       "1",
     ]);

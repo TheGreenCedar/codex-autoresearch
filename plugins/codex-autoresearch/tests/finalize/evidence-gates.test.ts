@@ -483,4 +483,5 @@ testWithTempRoot(
       );
     }
   },
+  { timeout: 400_000 },
 );
