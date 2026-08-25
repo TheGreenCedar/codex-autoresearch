@@ -21,7 +21,7 @@ import {
 import { runProcess } from "./helpers/process.js";
 
 test("product gate keeps a bounded native-suite deadline", () => {
-  assert.ok(PRODUCT_PHASE_TIMEOUT_SECONDS >= 1_800);
+  assert.equal(PRODUCT_PHASE_TIMEOUT_SECONDS, process.platform === "win32" ? 4_800 : 1_800);
 });
 
 test("check runner refuses Windows command scripts instead of routing through cmd", () => {
