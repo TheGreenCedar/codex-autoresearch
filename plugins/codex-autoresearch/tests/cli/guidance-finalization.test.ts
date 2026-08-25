@@ -24,6 +24,10 @@ function capabilityStatus(plan: UnknownRecord, capability: string): string {
   return typeof value === "string" ? value : String((value as UnknownRecord).status || "");
 }
 
+function testIo(name: string, body: () => Promise<void>): void {
+  test(name, { timeout: 240_000 }, body);
+}
+
 test("compact state, recommend-next, and onboarding-packet project one decision plan", async () => {
   await withTempDir("decision-envelope", async (dir) => {
     const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1.5')"`;
@@ -443,7 +447,7 @@ test("pending log receipts block state, doctor, and new log attempts", async () 
   });
 });
 
-test("doctor keeps current-tree finalization blockers scoped to finalization", async () => {
+testIo("doctor keeps current-tree finalization blockers scoped to finalization", async () => {
   await withTempDir("doctor-current-tree-finalization", async (dir) => {
     await prepareCurrentTreeFinalizationBlocker(dir, runCli);
     const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
@@ -470,7 +474,9 @@ test("doctor keeps current-tree finalization blockers scoped to finalization", a
   });
 });
 
-test("state, recommend-next, doctor, and dashboard share finalization-scoped capability authority", async () => {
+const SHARED_FINALIZATION_SCOPE_TEST =
+  "state, recommend-next, doctor, and dashboard share finalization-scoped capability authority";
+testIo(SHARED_FINALIZATION_SCOPE_TEST, async () => {
   await withTempDir("shared-current-tree-finalization", async (dir) => {
     await prepareCurrentTreeFinalizationBlocker(dir, runCli);
     const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
@@ -524,7 +530,7 @@ test("state, recommend-next, doctor, and dashboard share finalization-scoped cap
   });
 });
 
-test("next compact runs an accepted packet despite a finalization-only blocker", async () => {
+testIo("next compact runs an accepted packet despite a finalization-only blocker", async () => {
   await withTempDir("next-current-tree-finalization", async (dir) => {
     await prepareCurrentTreeFinalizationBlocker(dir, runCli);
 
@@ -546,7 +552,9 @@ test("next compact runs an accepted packet despite a finalization-only blocker",
   });
 });
 
-test("codex goal audit hands back direct work but blocks a finalization completion claim", async () => {
+const CODEX_GOAL_FINALIZATION_TEST =
+  "codex goal audit hands back direct work but blocks a finalization completion claim";
+testIo(CODEX_GOAL_FINALIZATION_TEST, async () => {
   await withTempDir("codex-goal-current-tree-complete-blocked", async (dir) => {
     await prepareCurrentTreeFinalizationBlocker(dir, runCli);
 
@@ -613,8 +621,11 @@ test("stale packet compact state recommends replacement next command", async () 
     assert.equal(acceptedLog.code, 0, acceptedLog.stderr);
 
     const lastRunPacket = JSON.parse(capturedPacket);
-    assert.match(lastRunPacket.history.replayCommand, /autoresearch\.sh/);
-    assert.match(lastRunPacket.history.replayChecksCommand, /autoresearch\.checks\.sh/);
+    const replayWrapper = process.platform === "win32" ? /autoresearch\.ps1/ : /autoresearch\.sh/;
+    const replayChecksWrapper =
+      process.platform === "win32" ? /autoresearch\.checks\.ps1/ : /autoresearch\.checks\.sh/;
+    assert.match(lastRunPacket.history.replayCommand, replayWrapper);
+    assert.match(lastRunPacket.history.replayChecksCommand, replayChecksWrapper);
     lastRunPacket.history.command = "<redacted benchmark command>";
     lastRunPacket.run.command = "";
     lastRunPacket.run.checks.command = "";

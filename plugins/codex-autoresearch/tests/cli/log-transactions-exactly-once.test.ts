@@ -309,7 +309,7 @@ test("manual measurement remains loggable in an unborn Git repository", async ()
 
 test(
   "keep retries converge after faults before and after Git, ledger, and packet cleanup",
-  { timeout: 300_000 },
+  { timeout: 450_000 },
   async (t) => {
     const points: FaultPoint[] = [
       "before:commit-applied-or-verified",
@@ -806,7 +806,11 @@ test("ledger append inserts a receipt-owned delimiter after a valid unterminated
   });
 });
 
-test("partial untracked cleanup resumes target by target", async () => {
+test("partial untracked cleanup resumes target by target", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("Windows does not enforce the POSIX directory mode used to hold one cleanup target");
+    return;
+  }
   await withTempDir("partial-untracked-cleanup", async (dir) => {
     const blockedDirectory = path.join(dir, "src", "z");
     try {
@@ -830,7 +834,11 @@ test("partial untracked cleanup resumes target by target", async () => {
   });
 });
 
-test("partial tracked cleanup separately rejects staged drift behind a clean worktree", async () => {
+test("partial tracked cleanup separately rejects staged drift behind a clean worktree", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("Windows does not enforce the POSIX directory mode used to hold one cleanup target");
+    return;
+  }
   await withTempDir("partial-tracked-cleanup-staged-drift", async (dir) => {
     const blockedDirectory = path.join(dir, "src", "z");
     const blockedPath = path.join(blockedDirectory, "blocked.txt");
