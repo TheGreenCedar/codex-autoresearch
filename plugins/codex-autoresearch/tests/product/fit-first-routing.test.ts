@@ -18,6 +18,15 @@ const completeLegacySession = {
   commitPaths: ["src/checkout"],
 };
 
+const acceptedBenchmarkCommand =
+  process.platform === "win32"
+    ? "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1"
+    : "bash ./autoresearch.sh";
+const acceptedChecksCommand =
+  process.platform === "win32"
+    ? "powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.checks.ps1"
+    : "bash ./autoresearch.checks.sh";
+
 async function promptPlan(dir: string, prompt: string) {
   const result = await runCli(["prompt-plan", "--cwd", dir, "--prompt", prompt]);
   assert.equal(result.code, 0, result.stderr);
@@ -238,11 +247,11 @@ test("prompt-plan reuses only a verified accepted session as an in-memory loop c
     assert.equal(fit.sessionRelation, "matching");
     assert.deepEqual(fit.contract, {
       goal: completeLegacySession.goal,
-      benchmarkCommand: "bash ./autoresearch.sh",
+      benchmarkCommand: acceptedBenchmarkCommand,
       metricName: completeLegacySession.metricName,
       metricUnit: completeLegacySession.metricUnit,
       direction: "lower",
-      checksCommand: "bash ./autoresearch.checks.sh",
+      checksCommand: acceptedChecksCommand,
       filesInScope: completeLegacySession.filesInScope,
       commitPaths: completeLegacySession.filesInScope,
       maxIterations: 5,
@@ -260,9 +269,9 @@ test("prompt-plan matches named sessions only when the explicit metric unit agre
       [
         'Continue the active "Checkout performance" session for 5 repeated measured iterations.',
         `Goal: ${completeLegacySession.goal}`,
-        "Benchmark: bash ./autoresearch.sh",
+        `Benchmark: ${acceptedBenchmarkCommand}`,
         `Metric: ${completeLegacySession.metricName} (${metricUnit}), lower is better`,
-        "Checks: bash ./autoresearch.checks.sh",
+        `Checks: ${acceptedChecksCommand}`,
         `Scope: ${completeLegacySession.filesInScope.join(",")}`,
       ].join("\n");
 

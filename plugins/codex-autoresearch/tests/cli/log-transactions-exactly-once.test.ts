@@ -1287,6 +1287,7 @@ test("evidence artifacts fail closed on root escape, scope overlap, external tar
     await withTempDir("artifact-linked-editable", async (dir) => {
       await mkdir(path.join(dir, "src"), { recursive: true });
       await writeFile(path.join(dir, "src", "proof.json"), "{}\n");
+      await writeFile(path.join(dir, ".gitignore"), "linked-src\n");
       try {
         await symlink(
           path.join(dir, "src"),
