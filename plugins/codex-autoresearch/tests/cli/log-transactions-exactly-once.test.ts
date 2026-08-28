@@ -1207,113 +1207,117 @@ test("broad discard cleanup preserves verified evidence artifacts", async () => 
   });
 });
 
-test("evidence artifacts fail closed on root escape, scope overlap, external targets, and linked escapes", async (t) => {
-  await t.test("editable overlap", async () => {
-    await withTempDir("artifact-editable-overlap", async (dir) => {
-      await mkdir(path.join(dir, "src"), { recursive: true });
-      await writeFile(path.join(dir, "src", "proof.json"), "{}\n");
-      await setupTransactionFixture(dir, { artifactPath: "src/proof.json" });
-      await assert.rejects(invokeLog(keepArgs(dir)), /artifact.*editable|scope overlap/i);
-    });
+test("evidence artifacts fail closed on editable overlap", async () => {
+  await withTempDir("artifact-editable-overlap", async (dir) => {
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "proof.json"), "{}\n");
+    await setupTransactionFixture(dir, { artifactPath: "src/proof.json" });
+    await assert.rejects(invokeLog(keepArgs(dir)), /artifact.*editable|scope overlap/i);
   });
-  await t.test("protected overlap", async () => {
-    await withTempDir("artifact-protected-overlap", async (dir) => {
-      await mkdir(path.join(dir, "contract"), { recursive: true });
-      await writeFile(path.join(dir, "contract", "proof.json"), "{}\n");
-      await setupTransactionFixture(dir, {
-        artifactPath: "contract/proof.json",
-        protectedArtifact: true,
-      });
-      await assert.rejects(invokeLog(keepArgs(dir)), /artifact.*protected|scope overlap/i);
+});
+
+test("evidence artifacts fail closed on protected overlap", async () => {
+  await withTempDir("artifact-protected-overlap", async (dir) => {
+    await mkdir(path.join(dir, "contract"), { recursive: true });
+    await writeFile(path.join(dir, "contract", "proof.json"), "{}\n");
+    await setupTransactionFixture(dir, {
+      artifactPath: "contract/proof.json",
+      protectedArtifact: true,
     });
+    await assert.rejects(invokeLog(keepArgs(dir)), /artifact.*protected|scope overlap/i);
   });
-  await t.test("Git private overlap", async () => {
-    await withTempDir("artifact-git-private-overlap", async (dir) => {
-      await git(dir, ["init"]);
-      await setupFixture(dir, { name: "Git-private artifact overlap" });
-      await assert.rejects(
-        invokeLog({
-          cwd: dir,
-          metric: 1,
-          status: "measure",
-          description: "Reject Git-private artifact",
-          artifacts: { proof: ".git/config" },
-        }),
-        /artifact.*protected|scope overlap|Git.private/i,
+});
+
+test("evidence artifacts fail closed on Git private overlap", async () => {
+  await withTempDir("artifact-git-private-overlap", async (dir) => {
+    await git(dir, ["init"]);
+    await setupFixture(dir, { name: "Git-private artifact overlap" });
+    await assert.rejects(
+      invokeLog({
+        cwd: dir,
+        metric: 1,
+        status: "measure",
+        description: "Reject Git-private artifact",
+        artifacts: { proof: ".git/config" },
+      }),
+      /artifact.*protected|scope overlap|Git.private/i,
+    );
+  });
+});
+
+test("evidence artifacts fail closed on external targets", async () => {
+  await withTempDir("artifact-external", async (dir) => {
+    const outside = path.join(path.dirname(dir), `${path.basename(dir)}-outside-proof.json`);
+    await writeFile(outside, "{}\n");
+    try {
+      await setupTransactionFixture(dir, { artifactPath: outside });
+      await assert.rejects(invokeLog(keepArgs(dir)), /artifact.*outside|quarantined/i);
+    } finally {
+      await rm(outside, { force: true });
+    }
+  });
+});
+
+test("evidence artifacts fail closed on symlink or junction escape", async (t) => {
+  await withTempDir("artifact-linked", async (dir) => {
+    const outside = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
+    await mkdir(outside, { recursive: true });
+    await writeFile(path.join(outside, "proof.json"), "{}\n");
+    await mkdir(dir, { recursive: true });
+    try {
+      await symlink(
+        outside,
+        path.join(dir, "linked"),
+        process.platform === "win32" ? "junction" : "dir",
       );
-    });
+    } catch (error) {
+      t.skip(`directory links unavailable: ${String(error)}`);
+      await rm(outside, { recursive: true, force: true });
+      return;
+    }
+    try {
+      await setupTransactionFixture(dir, { artifactPath: "linked/proof.json" });
+      await assert.rejects(
+        invokeLog(keepArgs(dir)),
+        /artifact.*outside|symlink|junction|quarantined/i,
+      );
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
-  await t.test("external target", async () => {
-    await withTempDir("artifact-external", async (dir) => {
-      const outside = path.join(path.dirname(dir), `${path.basename(dir)}-outside-proof.json`);
-      await writeFile(outside, "{}\n");
-      try {
-        await setupTransactionFixture(dir, { artifactPath: outside });
-        await assert.rejects(invokeLog(keepArgs(dir)), /artifact.*outside|quarantined/i);
-      } finally {
-        await rm(outside, { force: true });
-      }
-    });
+});
+
+test("evidence artifacts fail closed on an internal linked editable alias", async (t) => {
+  await withTempDir("artifact-linked-editable", async (dir) => {
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "proof.json"), "{}\n");
+    await writeFile(path.join(dir, ".gitignore"), "linked-src\n");
+    try {
+      await symlink(
+        path.join(dir, "src"),
+        path.join(dir, "linked-src"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } catch (error) {
+      t.skip(`directory links unavailable: ${String(error)}`);
+      return;
+    }
+    await setupTransactionFixture(dir, { artifactPath: "linked-src/proof.json" });
+    await assert.rejects(invokeLog(keepArgs(dir)), /artifact.*editable|scope overlap/i);
   });
-  await t.test("symlink or junction escape", async () => {
-    await withTempDir("artifact-linked", async (dir) => {
-      const outside = path.join(path.dirname(dir), `${path.basename(dir)}-outside`);
-      await mkdir(outside, { recursive: true });
-      await writeFile(path.join(outside, "proof.json"), "{}\n");
-      await mkdir(dir, { recursive: true });
-      try {
-        await symlink(
-          outside,
-          path.join(dir, "linked"),
-          process.platform === "win32" ? "junction" : "dir",
-        );
-      } catch (error) {
-        t.skip(`directory links unavailable: ${String(error)}`);
-        await rm(outside, { recursive: true, force: true });
-        return;
-      }
-      try {
-        await setupTransactionFixture(dir, { artifactPath: "linked/proof.json" });
-        await assert.rejects(
-          invokeLog(keepArgs(dir)),
-          /artifact.*outside|symlink|junction|quarantined/i,
-        );
-      } finally {
-        await rm(outside, { recursive: true, force: true });
-      }
-    });
-  });
-  await t.test("internal linked editable alias", async () => {
-    await withTempDir("artifact-linked-editable", async (dir) => {
-      await mkdir(path.join(dir, "src"), { recursive: true });
-      await writeFile(path.join(dir, "src", "proof.json"), "{}\n");
-      await writeFile(path.join(dir, ".gitignore"), "linked-src\n");
-      try {
-        await symlink(
-          path.join(dir, "src"),
-          path.join(dir, "linked-src"),
-          process.platform === "win32" ? "junction" : "dir",
-        );
-      } catch (error) {
-        t.skip(`directory links unavailable: ${String(error)}`);
-        return;
-      }
-      await setupTransactionFixture(dir, { artifactPath: "linked-src/proof.json" });
-      await assert.rejects(invokeLog(keepArgs(dir)), /artifact.*editable|scope overlap/i);
-    });
-  });
-  await t.test("artifact root escape", async () => {
-    await withTempDir("artifact-root-escape", async (dir) => {
-      await mkdir(path.join(dir, "evidence"), { recursive: true });
-      await mkdir(path.join(dir, "other"), { recursive: true });
-      await writeFile(path.join(dir, "other", "proof.json"), "{}\n");
-      await setupTransactionFixture(dir, { artifactPath: "other/proof.json" });
-      const packetPath = path.join(dir, ".git", "autoresearch", "last-run.json");
-      const packet = JSON.parse(await readFile(packetPath, "utf8"));
-      packet.run.progressSnapshot.artifactRoot = "evidence";
-      await writeFile(packetPath, `${JSON.stringify(packet, null, 2)}\n`);
-      await assert.rejects(invokeLog(keepArgs(dir)), /artifact root|outside.*artifact/i);
-    });
+});
+
+test("evidence artifacts fail closed on artifact root escape", async () => {
+  await withTempDir("artifact-root-escape", async (dir) => {
+    await mkdir(path.join(dir, "evidence"), { recursive: true });
+    await mkdir(path.join(dir, "other"), { recursive: true });
+    await writeFile(path.join(dir, "other", "proof.json"), "{}\n");
+    await setupTransactionFixture(dir, { artifactPath: "other/proof.json" });
+    const packetPath = path.join(dir, ".git", "autoresearch", "last-run.json");
+    const packet = JSON.parse(await readFile(packetPath, "utf8"));
+    packet.run.progressSnapshot.artifactRoot = "evidence";
+    await writeFile(packetPath, `${JSON.stringify(packet, null, 2)}\n`);
+    await assert.rejects(invokeLog(keepArgs(dir)), /artifact root|outside.*artifact/i);
   });
 });
 
