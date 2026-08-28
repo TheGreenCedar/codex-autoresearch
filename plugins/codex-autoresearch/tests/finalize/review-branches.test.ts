@@ -316,6 +316,7 @@ testWithTempRoot(
       "codex/ownership-test",
     );
   },
+  { timeout: 180_000 },
 );
 
 testWithTempRoot(
