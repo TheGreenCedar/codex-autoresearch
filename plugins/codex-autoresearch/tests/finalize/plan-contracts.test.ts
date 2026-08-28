@@ -351,8 +351,8 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
-  "finalizer fingerprints accepted ordering and product-claim inputs but ignores audit-only rows",
-  "autoresearch-finalize-evidence-fingerprint-",
+  "finalizer invalidates a plan when accepted ordering or product-claim inputs change",
+  "autoresearch-finalize-claim-input-fingerprint-",
   async (root) => {
     const stale = await createEvidencePlanFixture(root, "claim-inputs");
     await fsp.appendFile(
@@ -372,7 +372,13 @@ testWithTempRoot(
     assert.notEqual(staleResult.code, 0);
     assert.match(staleResult.stderr, /accepted ledger ordering/i);
     assert.match(staleResult.stderr, /product-claim coverage inputs/i);
+  },
+);
 
+testWithTempRoot(
+  "finalizer ignores audit-only rows when validating an accepted evidence fingerprint",
+  "autoresearch-finalize-audit-only-fingerprint-",
+  async (root) => {
     const audit = await createEvidencePlanFixture(root, "audit-only");
     const malformedCommit = `${audit.commit.slice(0, 12)}not-a-hash`;
     await fsp.appendFile(
@@ -413,7 +419,13 @@ testWithTempRoot(
     );
     const auditResult = await run(process.execPath, [finalizer, audit.output], audit.repo);
     assert.match(auditResult.stdout, /Review branches:/);
+  },
+);
 
+testWithTempRoot(
+  "finalizer blocks malformed accepted keep references before writing a plan",
+  "autoresearch-finalize-malformed-keep-fingerprint-",
+  async (root) => {
     const malformedKeep = await createEvidencePlanFixture(root, "malformed-keep", {
       commitRef: (commit) => `${commit.slice(0, 12)}not-a-hash`,
     });

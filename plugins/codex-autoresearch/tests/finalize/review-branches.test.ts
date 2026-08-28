@@ -605,96 +605,102 @@ testWithTempRoot(
   },
 );
 
-testWithTempRoot(
-  "Codex goal audit rejects forged or stale finalization completion evidence",
-  "autoresearch-stale-completion-audit-",
-  async (root) => {
-    const cases = [
-      {
-        name: "source",
-        mutate(completion: Record<string, any>) {
-          const sourceHead = alternateHex(String(completion.sourceHead), 40);
-          return completionWithRecomputedEventId(completion, {
-            sourceHead,
-            evidence: replaceEvidence(
-              completion.evidence,
-              "verified-final-tree:",
-              `verified-final-tree:${sourceHead}`,
-            ),
-          });
-        },
-      },
-      {
-        name: "contract",
-        mutate(completion: Record<string, any>) {
-          return completionWithRecomputedEventId(completion, {
-            contractDigest: alternateHex(String(completion.contractDigest), 64),
-          });
-        },
-      },
-      {
-        name: "epoch",
-        mutate(completion: Record<string, any>) {
-          return completionWithRecomputedEventId(completion, {
-            preconditionEpoch: `experiment-contract-accepted:${alternateHex(
-              String(completion.preconditionEpoch),
-              64,
-            )}`,
-          });
-        },
-      },
-      {
-        name: "branch-oid",
-        mutate(completion: Record<string, any>) {
-          const item = requiredEvidence(completion.evidence, "review-branch:");
-          const match = item.match(/^(review-branch:.+@)([0-9a-f]{40}(?:[0-9a-f]{24})?)$/);
-          assert.ok(match);
-          return completionWithRecomputedEventId(completion, {
-            evidence: replaceEvidence(
-              completion.evidence,
-              "review-branch:",
-              `${match[1]}${alternateHex(match[2], match[2].length)}`,
-            ),
-          });
-        },
-      },
-      {
-        name: "branch-nonexistent",
-        mutate(completion: Record<string, any>) {
-          const item = requiredEvidence(completion.evidence, "review-branch:");
-          const match = item.match(/^review-branch:(.+)@([0-9a-f]{40}(?:[0-9a-f]{24})?)$/);
-          assert.ok(match);
-          return completionWithRecomputedEventId(completion, {
-            evidence: replaceEvidence(
-              completion.evidence,
-              "review-branch:",
-              `review-branch:autoresearch-review/nonexistent/01-branch@${match[2]}`,
-            ),
-          });
-        },
-      },
-      {
-        name: "summary-hash",
-        mutate(completion: Record<string, any>) {
-          const item = requiredEvidence(completion.evidence, "review-summary-sha256:");
-          const hash = item.slice("review-summary-sha256:".length);
-          return completionWithRecomputedEventId(completion, {
-            evidence: replaceEvidence(
-              completion.evidence,
-              "review-summary-sha256:",
-              `review-summary-sha256:${alternateHex(hash, 64)}`,
-            ),
-          });
-        },
-      },
-    ];
+const hostileCompletionCases = [
+  {
+    name: "source",
+    mutate(completion: Record<string, any>) {
+      const sourceHead = alternateHex(String(completion.sourceHead), 40);
+      return completionWithRecomputedEventId(completion, {
+        sourceHead,
+        evidence: replaceEvidence(
+          completion.evidence,
+          "verified-final-tree:",
+          `verified-final-tree:${sourceHead}`,
+        ),
+      });
+    },
+  },
+  {
+    name: "contract",
+    mutate(completion: Record<string, any>) {
+      return completionWithRecomputedEventId(completion, {
+        contractDigest: alternateHex(String(completion.contractDigest), 64),
+      });
+    },
+  },
+  {
+    name: "epoch",
+    mutate(completion: Record<string, any>) {
+      return completionWithRecomputedEventId(completion, {
+        preconditionEpoch: `experiment-contract-accepted:${alternateHex(
+          String(completion.preconditionEpoch),
+          64,
+        )}`,
+      });
+    },
+  },
+  {
+    name: "branch-oid",
+    mutate(completion: Record<string, any>) {
+      const item = requiredEvidence(completion.evidence, "review-branch:");
+      const match = item.match(/^(review-branch:.+@)([0-9a-f]{40}(?:[0-9a-f]{24})?)$/);
+      assert.ok(match);
+      return completionWithRecomputedEventId(completion, {
+        evidence: replaceEvidence(
+          completion.evidence,
+          "review-branch:",
+          `${match[1]}${alternateHex(match[2], match[2].length)}`,
+        ),
+      });
+    },
+  },
+  {
+    name: "branch-nonexistent",
+    mutate(completion: Record<string, any>) {
+      const item = requiredEvidence(completion.evidence, "review-branch:");
+      const match = item.match(/^review-branch:(.+)@([0-9a-f]{40}(?:[0-9a-f]{24})?)$/);
+      assert.ok(match);
+      return completionWithRecomputedEventId(completion, {
+        evidence: replaceEvidence(
+          completion.evidence,
+          "review-branch:",
+          `review-branch:autoresearch-review/nonexistent/01-branch@${match[2]}`,
+        ),
+      });
+    },
+  },
+  {
+    name: "summary-hash",
+    mutate(completion: Record<string, any>) {
+      const item = requiredEvidence(completion.evidence, "review-summary-sha256:");
+      const hash = item.slice("review-summary-sha256:".length);
+      return completionWithRecomputedEventId(completion, {
+        evidence: replaceEvidence(
+          completion.evidence,
+          "review-summary-sha256:",
+          `review-summary-sha256:${alternateHex(hash, 64)}`,
+        ),
+      });
+    },
+  },
+];
 
-    for (const hostileCase of cases) {
+for (const hostileCase of hostileCompletionCases) {
+  testWithTempRoot(
+    `Codex goal audit rejects forged ${hostileCase.name} finalization completion evidence`,
+    `autoresearch-stale-completion-audit-${hostileCase.name}-`,
+    async (root) => {
       const fixture = await createCompletedAuditFixture(root, `hostile-${hostileCase.name}`);
       await appendCompletion(fixture.repo, hostileCase.mutate(fixture.completion));
       await assertCompletionRejected(fixture.repo, hostileCase.name);
-    }
+    },
+  );
+}
 
+testWithTempRoot(
+  "Codex goal audit rejects completion evidence when the review summary is missing",
+  "autoresearch-stale-completion-audit-summary-absence-",
+  async (root) => {
     const missingSummary = await createCompletedAuditFixture(root, "hostile-summary-absence");
     await fsp.unlink(missingSummary.summaryPath);
     await assertCompletionRejected(missingSummary.repo, "summary-absence");
