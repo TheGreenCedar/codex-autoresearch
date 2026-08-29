@@ -57,7 +57,7 @@
     "prepack": "npm run build",
     "test": "run-s build:node build:dashboard test:compiled",
     "test:compiled": "run-s test:compiled:cli test:compiled:dashboard test:compiled:finalize test:compiled:process test:compiled:core",
-    "test:compiled:cli": "node --test --test-timeout=120000 --test-concurrency=4 \"dist/tests/cli/**/*.test.mjs\" \"dist/tests/product/**/*.test.mjs\" dist/tests/operator-task-benchmark.test.mjs",
+    "test:compiled:cli": "node --test --test-timeout=120000 --test-concurrency=2 \"dist/tests/cli/**/*.test.mjs\" \"dist/tests/product/**/*.test.mjs\" dist/tests/operator-task-benchmark.test.mjs",
     "test:compiled:perf": "node -e \"const { spawnSync } = require('node:child_process'); const result = spawnSync(process.execPath, ['--test', '--test-timeout=120000', '--test-name-pattern', 'compact read commands stay within a warm local startup budget', 'dist/tests/cli/entrypoint-startup.test.mjs'], { stdio: 'inherit', env: { ...process.env, CODEX_AUTORESEARCH_RUN_PERF_TESTS: '1' }, windowsHide: true }); if (result.error) throw result.error; process.exit(result.status ?? 1);\"",
     "test:compiled:dashboard": "node --test --test-timeout=120000 --test-concurrency=8 \"dist/tests/dashboard/**/*.test.mjs\"",
     "test:compiled:finalize": "node --test --test-timeout=120000 --test-concurrency=2 \"dist/tests/finalize/**/*.test.mjs\"",

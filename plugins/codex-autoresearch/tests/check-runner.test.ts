@@ -33,6 +33,15 @@ test("finalizer test gate caps Git fixture concurrency without weakening default
   assert.match(command, /--test-concurrency=2(?:\s|$)/);
 });
 
+test("CLI test gate caps Git fixture concurrency without weakening default case deadlines", async () => {
+  const packageJson = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
+  const command = packageJson.scripts?.["test:compiled:cli"];
+
+  assert.equal(typeof command, "string");
+  assert.match(command, /--test-timeout=120000(?:\s|$)/);
+  assert.match(command, /--test-concurrency=2(?:\s|$)/);
+});
+
 test("check runner refuses Windows command scripts instead of routing through cmd", () => {
   assert.throws(
     () =>
