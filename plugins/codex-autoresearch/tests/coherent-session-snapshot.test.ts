@@ -254,6 +254,7 @@ test("derived fact stability is verified without entering the raw generation vec
 });
 
 test("routing config bytes and accepted config bytes must identify the same target cwd", async () => {
+  const sessionCwd = path.resolve("/session");
   const wrongRouting = Buffer.from('{"workingDir":"wrong"}\n');
   const stableRouting = Buffer.from('{"workingDir":"right"}\n');
   const stableSources = { ...BASE_SOURCES, config: stableRouting };
@@ -263,18 +264,18 @@ test("routing config bytes and accepted config bytes must identify the same targ
     [wrongRouting, stableRouting],
   );
 
-  const result = await loadCoherentSessionSnapshot({ requestedCwd: "/session", io });
+  const result = await loadCoherentSessionSnapshot({ requestedCwd: sessionCwd, io });
 
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.equal(result.attempts, 2);
-  assert.equal(result.snapshot.sessionCwd, "/session");
-  assert.equal(result.snapshot.workDir, "/session/right");
+  assert.equal(result.snapshot.sessionCwd, sessionCwd);
+  assert.equal(result.snapshot.workDir, path.join(sessionCwd, "right"));
   assert.deepEqual(io.resolvedWorkDirs(), [
-    "/session/wrong",
-    "/session/wrong",
-    "/session/right",
-    "/session/right",
+    path.join(sessionCwd, "wrong"),
+    path.join(sessionCwd, "wrong"),
+    path.join(sessionCwd, "right"),
+    path.join(sessionCwd, "right"),
   ]);
 });
 
@@ -454,7 +455,7 @@ test("coherent snapshot uses one private store and fails closed on independently
       /Conflicting last-run packet state exists in both Git-private and worktree storage/,
     );
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
