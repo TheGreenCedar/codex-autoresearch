@@ -6,11 +6,15 @@ You do not need this glossary to start. Use it when a command or dashboard label
 
 | Term | Meaning |
 | --- | --- |
+| **Fit decision** | The read-only route taken before repository discovery: continue directly, ask for missing or conflicting contract inputs, or run a loop. |
+| **Direct evidence capsule** | The assist-only path: state the outcome and uncertainty, gather the cheapest useful evidence, do the task, verify it, and bound the claim without creating Autoresearch state. |
+| **Experiment contract** | The accepted goal, repository and checkout identity, typed metric, evaluator, independent checks, scope, noise, keep and stop rules, and budgets. It is the sole execution authority. |
+| **DecisionPlan** | The canonical phase, action, blocker, loop and parent dispositions, contract and evaluator identities, capabilities, and required evidence compiled from one coherent snapshot. |
 | **Packet** | One benchmark run plus its evidence. `next` writes the reusable packet used by `log --from-last`. |
-| **Primary metric** | The `METRIC name=value` number that decides whether the attempt improved. |
-| **Checks** | A separate command that tests correctness. A better metric with failed checks is not a keep. |
+| **Primary metric** | The `METRIC name=value` number interpreted by explicit minimize, maximize, or threshold semantics. Its name has no semantic effect. |
+| **Checks** | Independent accepted execution specifications that protect correctness. Their code, fixtures, and expected outputs sit outside editable scope or in protected scope. |
 | **Structured experiment note (`asi`)** | The note saved with a decision: hypothesis, evidence, rollback reason, next action, and optional lane/risk metadata. |
-| **Continuation** | The answer returned after logging: continue, stop, repair, change segment, or finalize. |
+| **Continuation** | A compatibility projection from the resulting `DecisionPlan` after logging. It is not a separate policy authority. |
 | **Segment** | A comparable chapter of the session. Start a new one when the benchmark, metric, direction, or phase changes. |
 | **Quality gap** | A stable qualitative-work item. A checked box is provisional until an implemented or rejected `gap-decide` record supplies evidence and validation. `quality_gap=0` closes only that accepted round. |
 | **Finalization** | The process that turns accepted, current keeps into reviewable branches. Its exceptional current-tree recovery mode instead packages an explicitly reviewed clean branch diff. Both start with review before mutation. |
@@ -31,6 +35,14 @@ Logging `discard`, `crash`, or `checks_failed` can clean the configured or expli
 
 Evidence status is separate from the packet decision. A run can be `accepted`, `rejected`, `provisional`, or `superseded`. Quarantined evidence may appear in audit history, but it is not a value accepted by `--evidence-status`.
 
+Every run also keeps three independent facts:
+
+| Axis | Values | Why it matters |
+| --- | --- | --- |
+| Purpose | baseline, candidate, holdout, diagnostic | Only candidates can authorize keeps; baselines and candidates consume packet budget. |
+| Evaluation authority | accepted contract, manual, external | Only accepted-contract evaluation can authorize a measured keep. |
+| Candidate origin | working tree, commit OID, none | An imported commit remains provenance until the accepted evaluator and checks evaluate it. |
+
 ## Session files
 
 | Path | What it contains |
@@ -45,7 +57,7 @@ Evidence status is separate from the packet decision. A run can be `accepted`, `
 | `autoresearch.research/<slug>/quality-gap-decisions.jsonl` | Append-only acceptance decisions for stable gap IDs |
 | `.git/autoresearch/last-run.json` | Reusable packet written by `next` in a Git repo |
 | `.git/autoresearch/progress.json` | Progress snapshot for a slow packet in a Git repo |
-| `.git/autoresearch/pending-log-*.json` | Interrupted log receipts that block unsafe continuation |
+| `.git/autoresearch/pending-log-*.json` | Version-2 staged transaction receipts that make interrupted logging exactly-once and block unsafe continuation |
 
 Outside Git, the three transient records fall back to `autoresearch.last-run.json`, `autoresearch.progress.json`, and `autoresearch.pending-transaction.json` in the worktree. In a Git repository they use one preflighted `.git/autoresearch/` store; conflicting Git-private and fallback copies block instead of choosing whichever file is newest.
 
@@ -53,7 +65,7 @@ Outside Git, the three transient records fall back to `autoresearch.last-run.jso
 
 | Term | What it tells you |
 | --- | --- |
-| **Trust blocker** | A condition that makes another packet or final claim unsafe: stale packet, unproven process-tree termination, dirty Git scope, benchmark drift, corrupt ledger, or runtime mismatch. |
+| **Capability blocker** | A diagnostic that blocks only the affected capability: session mutation, packet execution, keep authorization, segment transition, finalization, or a session-dependent parent answer. |
 | **Protected benchmark path** | A benchmark or fixture path that must not change silently while results are compared. |
 | **Runtime provenance** | Whether the command ran from the source checkout or an installed plugin, and whether those builds match. |
 | **Packet diagnostics** | Evidence loss such as missing citations, failed synthesis, or a benchmark failure hidden behind an optimistic summary. |
@@ -72,17 +84,21 @@ Most sessions need only the blocker and next command printed by `state --report`
 
 | Field | Question it answers |
 | --- | --- |
-| `goalFrame`, `goalContract` | Are the durable goal, current prompt, benchmark, and final claim still aligned? |
-| `operatorHandoff`, `operatorChecklist` | What is the shortest safe continuation after a pause or handoff? |
-| `resolvedDecision.loopContract` | Is another packet allowed? |
-| `sessionDecisionCapsule` | Did imported session evidence constrain the next action? |
-| `resolvedDecision` | Do segment, drift, readiness, finalization pressure, and the safe command agree on one action? |
+| `decisionPlanProjection.decisionId`, `generationId` | Did the semantic decision change, or only the raw source generation? |
+| `decisionPlanProjection.phase`, `action`, `primaryBlockerCode` | What phase owns the session, what is the one next action, and why is anything blocked? |
+| `decisionPlanProjection.capabilities` | Which mutations, packets, keeps, segment transitions, finalization, or parent answers are allowed? |
+| `decisionPlanProjection.loopDisposition`, `parentDisposition` | Is the loop runnable, blocked, paused, or complete, and should the parent continue the loop, continue directly, ask the user, or consider completion? |
+| `decisionPlanProjection.contractDigest`, `evaluatorIdentity` | Which accepted contract and evaluator produced this decision? |
+| `decisionPlanProjection.requiredEvidence` | What proof remains before the action or claim is authorized? |
+| `goalFrame`, `goalContract` | Are the durable goal, current prompt, evaluator, and final claim still aligned? |
+| `operatorHandoff`, `operatorChecklist` | What bounded detail supports the canonical action after a pause or handoff? |
+| `resolvedDecision`, `loopContract`, `nextAction`, `continuation` | Compatibility outputs projected from `DecisionPlan`; never compiler inputs. |
 | `runtimeProvenance`, `runtimeDriftSummary` | Did this proof come from the runtime you think it did? |
 | `gateQuality`, `preflight`, `resourcePreflight` | Are benchmark, Git, runtime, process, and budget checks healthy? |
 | `sourceCleanliness` | Are source files dirty, or only session artifacts? |
 | `evidenceMaturity`, `researchIntegrity` | What strength of claim does the evidence support? |
 | `packetDiagnostics` | Was evidence lost or misclassified inside a packet? |
-| `portfolioRecommendation`, `finalizationPressure` | Should the session continue, pivot, or package kept work? |
+| `portfolioRecommendation`, `finalizationPressure` | Diagnostic or candidate input that informs the compiler; it does not choose the action. |
 | `laneLifecycle`, `laneOrchestration`, `fanoutProvenance` | What parallel lanes exist, and does the current segment own them? |
 | `finalizationRunway` | Is the work only previewed, local, pushed, in CI, merged, or cleanup-ready? |
 | `approvalLedger` | Does the current gate have an unexpired approval for the same scope? |
@@ -93,4 +109,4 @@ Most sessions need only the blocker and next command printed by `state --report`
 
 Cross-surface ownership is documented in [Control plane](control-plane.md).
 
-In 2.7, bounded state, doctor, and recommendation output emits `resolvedDecision` instead of repeating `resumeAudit`, top-level `canonicalNextAction`, and top-level `loopContract`. The terminal report projects the same authority into scalar status, blocker, action, and command fields. Readers still accept the older `decisionEnvelope` and `resumeAudit` shapes as migration inputs. Use `state --json-full` or `doctor --json-full` only when the complete machine diagnostic is necessary.
+Bounded state, doctor, recommendation, terminal, finalization, and dashboard output project the same `DecisionPlan`. The dashboard may redact the executable command, but its semantic fields must match. Legacy decision shapes remain compatibility outputs only. Use `state --json-full` or `doctor --json-full` only when the complete machine diagnostic is necessary.

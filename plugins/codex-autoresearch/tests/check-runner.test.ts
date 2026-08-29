@@ -21,7 +21,25 @@ import {
 import { runProcess } from "./helpers/process.js";
 
 test("product gate keeps a bounded native-suite deadline", () => {
-  assert.ok(PRODUCT_PHASE_TIMEOUT_SECONDS >= 1_800);
+  assert.equal(PRODUCT_PHASE_TIMEOUT_SECONDS, process.platform === "win32" ? 4_800 : 1_800);
+});
+
+test("finalizer test gate caps Git fixture concurrency without weakening default case deadlines", async () => {
+  const packageJson = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
+  const command = packageJson.scripts?.["test:compiled:finalize"];
+
+  assert.equal(typeof command, "string");
+  assert.match(command, /--test-timeout=120000(?:\s|$)/);
+  assert.match(command, /--test-concurrency=2(?:\s|$)/);
+});
+
+test("CLI test gate caps Git fixture concurrency without weakening default case deadlines", async () => {
+  const packageJson = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
+  const command = packageJson.scripts?.["test:compiled:cli"];
+
+  assert.equal(typeof command, "string");
+  assert.match(command, /--test-timeout=120000(?:\s|$)/);
+  assert.match(command, /--test-concurrency=2(?:\s|$)/);
 });
 
 test("check runner refuses Windows command scripts instead of routing through cmd", () => {

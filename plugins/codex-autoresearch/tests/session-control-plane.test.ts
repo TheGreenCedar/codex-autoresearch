@@ -11,8 +11,6 @@ import {
 } from "../lib/approval-ledger.js";
 import { classifyEvidenceMaturity } from "../lib/evidence-maturity.js";
 import { registryPathForWorkDir } from "../lib/dashboard-server-registry.js";
-import { quoteShellArg, renderShellCommand } from "../lib/command-rendering.js";
-import { buildContinuationCommands } from "../lib/commands/continuation.js";
 import { checkedAtomicWriteFile } from "../lib/checked-write.js";
 import {
   fixedControlStateSummary,
@@ -29,9 +27,14 @@ import {
   writePrivateStateFile,
 } from "../lib/git-private-state.js";
 import { planFailureRecoveryLanes } from "../lib/lane-orchestration-controller.js";
-import { buildLoopContractStatus } from "../lib/loop-governance.js";
-import { buildOperatorReadout } from "../lib/operator-readout.js";
 import { buildOperatorSnapshot } from "../lib/operator-snapshot.js";
+import {
+  compileDecisionPlan,
+  decisionDiagnostic,
+  type DecisionDiagnosticCode,
+} from "../lib/decision-compiler.js";
+import { projectCompactDecisionPlan, projectDecisionPlan } from "../lib/decision-projection.js";
+import type { CoherentSessionSnapshot } from "../lib/coherent-session-snapshot.js";
 import { buildProcessLifecycleRecord, buildResourcePreflight } from "../lib/process-governor.js";
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
 import {
@@ -44,13 +47,9 @@ import {
   DEFAULT_STATE_MAX_BYTES,
   DEFAULT_STATE_MAX_LINES,
   DEFAULT_STATE_MAX_TOKENS,
-  projectDashboardDecision,
   projectDoctorReadModel,
-  projectFinalizationDecision,
   projectionBudget,
   projectStateReadModel,
-  resolveSessionDecision,
-  resolveFinalizationDecision,
 } from "../lib/session-read-model.js";
 import { appendJsonl, jsonlPath, ledgerRecordIssue, readJsonl } from "../lib/session-records.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
@@ -109,12 +108,16 @@ test("private state preflight selects an explicit worktree fallback before setup
     await runGit(dir, ["init", "-b", "main"]);
     const injectedWrite: typeof checkedAtomicWriteFile = async (root, target, data, options) => {
       if (target.includes(`${path.sep}.git${path.sep}`)) {
-        throw Object.assign(new Error("Git-private state denied"), { code: "EPERM" });
+        throw Object.assign(new Error("Git-private state denied"), {
+          code: "EPERM",
+        });
       }
       await checkedAtomicWriteFile(root, target, data, options);
     };
 
-    const preflight = await preflightAutoresearchPrivateState(dir, { write: injectedWrite });
+    const preflight = await preflightAutoresearchPrivateState(dir, {
+      write: injectedWrite,
+    });
     assert.equal(preflight.storageMode, "worktree-fallback");
     assert.equal(preflight.targets.length, 3);
     assert.ok(preflight.targets.every((target) => target.storageMode === "worktree-fallback"));
@@ -175,7 +178,11 @@ test("session record ledger helpers use the repo-local resolver path", async () 
     const paths = resolveSessionPaths({ workDir: dir });
 
     assert.equal(jsonlPath(dir), paths.ledgerPath);
-    appendJsonl(dir, { type: "config", metricName: "score", bestDirection: "higher" });
+    appendJsonl(dir, {
+      type: "config",
+      metricName: "score",
+      bestDirection: "higher",
+    });
 
     assert.deepEqual(readJsonl(dir), [
       { type: "config", metricName: "score", bestDirection: "higher" },
@@ -779,19 +786,6 @@ test("lane orchestration splits broad failures into accountable lanes", () => {
   assert.match(blocked.blockers[0], /worktree|write scope/);
 });
 
-test("blocked lane orchestration becomes the canonical next action", () => {
-  const laneOrchestration = planFailureRecoveryLanes({
-    signals: [{ kind: "local-only finalization" }],
-  });
-
-  const loop = buildLoopContractStatus({ laneOrchestration });
-
-  assert.equal(laneOrchestration.status, "blocked");
-  assert.equal(loop.canRunNextPacket, false);
-  assert.equal(loop.strongestAction?.kind, "lane-orchestration");
-  assert.match(loop.strongestAction?.reason || "", /worktree|write scope/);
-});
-
 test("finalization runway distinguishes local-only, divergent, checked-out, and merged states", () => {
   assert.equal(
     classifyFinalizationRunwayFromFacts({
@@ -871,31 +865,13 @@ test("finalization runway distinguishes local-only, divergent, checked-out, and 
   );
 });
 
-test("loop contract and operator readout expose the same canonical blocker", () => {
-  const loop = buildLoopContractStatus({
-    goalContract: buildGoalContract({
-      autoresearchGoal: "A",
-      codexGoalObjective: "B",
-      benchmarkGoal: "A",
-    }),
-  });
-  const readout = buildOperatorReadout({
-    canonicalNextAction: loop.strongestAction,
-    loopContract: loop,
-    runtimeProvenance: { status: "source-only" },
-  });
-
-  assert.equal(loop.strongestAction?.kind, "goal-contract");
-  assert.equal(readout.nextAction, loop.strongestAction?.reason);
-  assert.equal(readout.dashboardMutationAllowed, false);
-});
-
-test("operator snapshot keeps one bounded action and exposes readout discrepancies", () => {
-  const stateAction = {
-    kind: "next-packet",
-    reason: "Run the first baseline packet.",
+test("operator snapshot consumes decision-plan projections and exposes semantic drift", () => {
+  const decisionPlan = controlPlaneDecisionPlan({
+    code: "needs-baseline",
+    message: "Run the first baseline packet.",
     command: "node scripts/autoresearch.mjs next --cwd /repo --compact",
-  };
+  });
+  const decisionPlanProjection = projectCompactDecisionPlan(decisionPlan);
   const snapshot = buildOperatorSnapshot({
     state: {
       runs: 0,
@@ -906,29 +882,29 @@ test("operator snapshot keeps one bounded action and exposes readout discrepanci
       commands: {
         state: "node scripts/autoresearch.mjs state --cwd /repo --compact",
       },
-      resolvedDecision: {
-        canonicalNextAction: stateAction,
-        loopContract: { blockers: [] },
+      decisionPlanProjection: {
+        ...decisionPlanProjection,
+        decisionId: "stale-state-decision",
       },
       runtimeProvenance: { scope: "source-checkout", status: "source-only" },
       stateStorage: { storageMode: "worktree-fallback" },
       sourceCleanliness: { status: "session-only" },
     },
-    recommendation: { resolvedDecision: { canonicalNextAction: stateAction } },
-    doctor: {
-      resolvedDecision: {
-        canonicalNextAction: { ...stateAction, reason: "Run a baseline." },
-      },
+    recommendation: {
+      decisionPlanProjection,
+      nextAction: decisionPlan.action.reason,
     },
   });
 
-  assert.equal(snapshot.stage, "needs-baseline");
-  assert.equal(snapshot.primaryCommand, stateAction.command);
+  assert.equal(snapshot.stage, decisionPlan.phase);
+  assert.equal(snapshot.strongestBlocker, decisionPlan.primaryBlockerCode);
+  assert.equal(snapshot.primaryCommand, decisionPlan.action.command);
+  assert.equal(snapshot.nextAction, decisionPlan.action.reason);
   assert.equal(snapshot.metricEvidence.runs, 0);
   assert.deepEqual(snapshot.stateStorage, { storageMode: "worktree-fallback" });
   assert.deepEqual(snapshot.dirtyClassification, { status: "session-only" });
   assert.deepEqual(snapshot.discrepancies, [
-    "canonicalNextAction.reason differs across public readouts",
+    "decisionPlan.decisionId differs across public readouts",
   ]);
 });
 
@@ -1085,363 +1061,57 @@ test("session forensics detects update_goal complete function calls", async () =
   });
 });
 
-test("resolved decision fails closed when a ready action contradicts a stronger blocker", () => {
-  const runtimeProvenance = { source: "source-checkout", version: "2.7.0" };
-  const finalizationPressure = { available: true, ready: false, nextAction: "Repair first." };
-  const resolved = resolveSessionDecision({
-    state: {
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "next-packet",
-          reason: "Run the next packet.",
-          command: "node scripts/autoresearch.mjs next --cwd .",
-        },
-        loopContract: {
-          canRunNextPacket: true,
-          blockers: ["Ledger order is invalid."],
-          strongestAction: {
-            kind: "ledger-integrity",
-            reason: "Repair ledger order before packet work.",
-          },
-        },
-        runtimeProvenance,
-        finalizationReadiness: finalizationPressure,
-      },
-    },
-    commands: { ledgerDoctor: "node scripts/autoresearch.mjs ledger-doctor --cwd . --json" },
-  });
-
-  assert.equal(resolved.status, "blocked");
-  assert.equal(resolved.strongestBlocker, "Ledger order is invalid.");
-  assert.equal(resolved.canonicalNextAction?.kind, "ledger-integrity");
-  assert.equal(resolved.nextAction, "Repair ledger order before packet work.");
-  assert.match(resolved.command, /ledger-doctor/);
-  assert.deepEqual(resolved.runtimeProvenance, runtimeProvenance);
-  assert.deepEqual(resolved.finalizationPressure, finalizationPressure);
-});
-
-test("resolved decision rejects unsafe commands and legacy aliases cannot override authority", () => {
-  const resolved = resolveSessionDecision({
-    state: {
-      resolvedDecision: {
-        version: 1,
-        status: "complete",
-        strongestBlocker: null,
-        nextAction: "Review the completed evidence.",
-        command: "node -e \"require('child_process').execSync('whoami')\"",
-        canonicalNextAction: {
-          kind: "complete",
-          reason: "Review the completed evidence.",
-          command: "<unsafe-placeholder>",
-        },
-        loopContract: { complete: true, blockers: [] },
-        runtimeProvenance: null,
-        runtimeAuthority: null,
-        finalizationPressure: null,
-      },
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "next-packet",
-          reason: "Legacy alias says run another packet.",
-          command: "node scripts/autoresearch.mjs next --cwd .",
-        },
-        loopContract: { canRunNextPacket: true, blockers: [] },
-      },
-    },
-  });
-  assert.equal(resolved.status, "complete");
-  assert.equal(resolved.canonicalNextAction?.kind, "complete");
-  assert.equal(resolved.command, "");
-});
-
-test("blocked decisions without a repair action never retain a ready packet command", () => {
-  const resolved = resolveSessionDecision({
-    state: {
-      blockers: ["The ledger is inconsistent and must be repaired before any packet can run."],
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "next-packet",
-          reason: "Run the next packet.",
-          command: "node scripts/autoresearch.mjs next --cwd .",
-        },
-        loopContract: { canRunNextPacket: false, blockers: [] },
-      },
-    },
-  });
-  assert.equal(resolved.status, "blocked");
-  assert.equal(resolved.canonicalNextAction?.kind, "blocked");
-  assert.equal(resolved.command, "");
-});
-
-test("resolved operational commands reject nested shell operators", () => {
-  for (const command of [
-    "node scripts/autoresearch.mjs next --cwd . && node payload.mjs",
-    "node scripts/autoresearch.mjs next --cwd .; node payload.mjs",
-    "node scripts/autoresearch.mjs next --cwd . | node payload.mjs",
-    "node scripts/autoresearch.mjs next --cwd .\nnode payload.mjs",
-  ]) {
-    const resolved = resolveSessionDecision({
-      state: {
-        decisionEnvelope: {
-          canonicalNextAction: { kind: "next-packet", reason: "Run a packet.", command },
-          loopContract: { canRunNextPacket: true, blockers: [] },
-        },
-      },
-    });
-    assert.equal(resolved.command, "", command);
-    assert.equal(resolved.canonicalNextAction?.command, "", command);
-  }
-});
-
-test("resolved operational commands reject interpreter evaluation modes", () => {
-  for (const command of [
-    'node -e "process.exit(1)"',
-    'node --eval="process.exit(1)"',
-    'node -p "process.version"',
-    'node --print "process.version"',
-    'node --no-warnings -pe "process.version"',
-    'node --require ./hook.mjs -e "process.exit(1)"',
-    'node "-e" "process.exit(1)"',
-    "python3 -c \"print('payload')\"",
-    "python -I -c \"print('payload')\"",
-    "python -W ignore -c \"print('payload')\"",
-    'powershell -Command "Get-Process"',
-    "pwsh -EncodedCommand ZQB4AGkAdAA=",
-    "pwsh -NoProfile -EncodedCommand ZQB4AGkAdAA=",
-    "pwsh -ExecutionPolicy Bypass -EncodedCommand ZQB4AGkAdAA=",
-    "cmd /k whoami",
-    "cmd /d /c whoami",
-    "bash -lc whoami",
-    "bash --noprofile -lc whoami",
-  ]) {
-    const resolved = resolveSessionDecision({
-      state: {
-        decisionEnvelope: {
-          canonicalNextAction: { kind: "decision-capsule", reason: "Run repair.", command },
-          loopContract: { canRunNextPacket: false, blockers: ["Run repair."] },
-        },
-      },
-    });
-    assert.equal(resolved.command, "", command);
-    assert.equal(resolved.canonicalNextAction?.command, "", command);
-  }
-});
-
-test("resolved operational commands allow evaluator text as a trusted CLI argument", () => {
-  const command =
-    "node scripts/autoresearch.mjs next --cwd . --command 'node -e \"console.log(1)\"'";
-  const resolved = resolveSessionDecision({
-    state: {
-      decisionEnvelope: {
-        canonicalNextAction: { kind: "next-packet", reason: "Run a packet.", command },
-        loopContract: { canRunNextPacket: true, blockers: [] },
-      },
-    },
-  });
-  assert.equal(resolved.command, command);
-});
-
-test("resolved operational command parsing is linear and fails closed on unterminated quotes", () => {
-  const command = `node "${"\\!".repeat(20_000)}`;
-  const resolved = resolveSessionDecision({
-    state: {
-      decisionEnvelope: {
-        canonicalNextAction: { kind: "decision-capsule", reason: "Run repair.", command },
-        loopContract: { canRunNextPacket: false, blockers: ["Run repair."] },
-      },
-    },
-  });
-  assert.equal(resolved.command, "");
-});
-
-test("resolved operational commands accept only the trusted generated PowerShell wrapper", () => {
-  const command = renderShellCommand(
-    ["C:\\Program Files\\nodejs\\node.exe", "scripts\\autoresearch.mjs", "next", "--cwd", "."],
-    "powershell",
-  );
-  const resolved = resolveSessionDecision({
-    state: {
-      decisionEnvelope: {
-        canonicalNextAction: { kind: "next-packet", reason: "Run a packet.", command },
-        loopContract: { canRunNextPacket: true, blockers: [] },
-      },
-    },
-  });
-  assert.equal(resolved.command, command);
-
-  for (const unsafeBody of [
-    "node scripts/autoresearch.mjs next --cwd .; node payload.mjs",
-    "'C:\\Program Files\\nodejs\\node.exe' -e 'process.exit(1)'",
-    "'C:\\Program Files\\nodejs\\node.exe' --print 'process.version'",
-    "pwsh.exe -EncodedCommand ZQB4AGkAdAA=",
-  ]) {
-    const unsafe = `& { $PSNativeCommandArgumentPassing = 'Legacy'; ${unsafeBody} }`;
-    assert.equal(
-      resolveSessionDecision({
-        state: {
-          decisionEnvelope: {
-            canonicalNextAction: { kind: "next-packet", reason: "Run a packet.", command: unsafe },
-            loopContract: { canRunNextPacket: true, blockers: [] },
-          },
-        },
-      }).command,
-      "",
-    );
-  }
-});
-
-test("resolved watchdog authority stays canonical over a generic preflight blocker", () => {
-  const resolved = resolveSessionDecision({
-    state: {
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "watchdog",
-          reason: "Intervene after the stale progress window.",
-        },
-        loopContract: {
-          canRunNextPacket: false,
-          blockers: ["No benchmark command is configured."],
-          strongestAction: {
-            kind: "preflight",
-            reason: "No benchmark command is configured.",
-          },
-        },
-      },
-    },
-  });
-
-  assert.equal(resolved.canonicalNextAction?.kind, "watchdog");
-  assert.match(resolved.nextAction, /Intervene/);
-  assert.equal(resolved.status, "blocked");
-});
-
-test("decision capsules replace placeholder hints with a safe canonical fallback command", () => {
-  const commands = buildContinuationCommands({
-    scriptPath: path.join(process.cwd(), "scripts", "autoresearch.mjs"),
-    shellQuote: (value) => quoteShellArg(value, "powershell"),
-    workDir: "C:\\work",
-  });
-  const resolved = resolveSessionDecision({
-    state: {
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "decision-capsule",
-          reason: "Repair the benchmark contract.",
-          command: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
-        },
-        loopContract: {
-          canRunNextPacket: false,
-          blockers: ["Repair the benchmark contract."],
-          strongestAction: {
-            kind: "decision-capsule",
-            reason: "Repair the benchmark contract.",
-            command: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
-          },
-        },
-      },
-    },
-    commands,
-  });
-
-  assert.equal(resolved.command, commands.recommendNext);
-  assert.equal(resolved.canonicalNextAction?.command, commands.recommendNext);
-
-  const reread = resolveSessionDecision({
-    state: {
-      resolvedDecision: resolved,
-      decisionEnvelope: {
-        canonicalNextAction: resolved.canonicalNextAction,
-        loopContract: {
-          ...resolved.loopContract,
-          strongestAction: {
-            kind: "decision-capsule",
-            reason: "Repair the benchmark contract.",
-            command: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
-          },
-        },
-      },
-    },
-    commands: { primary: resolved.command },
-  });
-  assert.equal(reread.command, commands.recommendNext);
-  assert.equal(reread.canonicalNextAction?.command, commands.recommendNext);
-});
-
-test("bounded projection preserves enough blocker provenance to re-resolve watchdog authority", () => {
-  const source = readModelFixture(2);
-  source.decisionEnvelope = {
-    canonicalNextAction: {
-      kind: "watchdog",
-      reason: "Intervene after the stale progress window.",
-    },
-    loopContract: {
-      canRunNextPacket: false,
-      blockers: ["No benchmark command is configured."],
-      strongestAction: {
-        kind: "preflight",
-        reason: "No benchmark command is configured.",
-      },
-    },
-  };
-
-  const compact = projectStateReadModel(source, "compact");
-  const reread = resolveSessionDecision({ state: compact });
-  assert.equal(reread.canonicalNextAction?.kind, "watchdog");
-  assert.equal(reread.nextAction, "Intervene after the stale progress window.");
-});
-
-test("finalization results resolve blocked and ready status explicitly", () => {
-  const blocked = resolveFinalizationDecision({
-    ready: false,
-    warnings: ["Working directory is not a Git repository."],
-    nextAction: "Run finalization preview from a Git-backed branch.",
-  });
-  const ready = resolveFinalizationDecision({
-    ready: true,
-    nextAction: "Review the finalization preview.",
-  });
-  assert.equal(blocked.status, "blocked");
-  assert.match(blocked.strongestBlocker || "", /Git-backed branch/);
-  assert.equal(ready.status, "ready");
-});
-
-test("state, doctor, report, dashboard, and finalization share one resolved authority", () => {
+test("state, doctor, report, dashboard, and finalization preserve one decision tuple", () => {
   const source = readModelFixture(12);
+  const decisionPlan = source.decisionPlan;
   const defaultState = projectStateReadModel(source, "default");
   const compactState = projectStateReadModel(source, "compact");
   const doctor = projectDoctorReadModel({
     ok: false,
     workDir: source.workDir,
     state: source,
-    decisionEnvelope: source.decisionEnvelope,
     issues: ["Ledger order is invalid."],
   });
-  const dashboard = projectDashboardDecision(source);
-  const finalization = projectFinalizationDecision(source);
+  const dashboard = projectDecisionPlan(decisionPlan, "dashboard");
+  const finalization = projectDecisionPlan(decisionPlan, "finalization");
   const report = buildTerminalReport(defaultState).json;
-  const authorities = [
-    defaultState.resolvedDecision,
-    compactState.resolvedDecision,
-    doctor.resolvedDecision,
-    dashboard,
+  const projections = [
+    defaultState.decisionPlanProjection,
+    compactState.decisionPlanProjection,
+    doctor.decisionPlanProjection,
   ] as Array<Record<string, unknown>>;
 
-  for (const authority of authorities) {
-    assert.equal(authority.status, "blocked");
-    assert.match(String(authority.strongestBlocker), /Ledger order is invalid/);
-    assert.equal(authority.nextAction, "Repair ledger order before packet work.");
-    assert.match(String(authority.command), /ledger-doctor/);
-    assert.deepEqual(authority.runtimeProvenance, source.runtimeProvenance);
-    assert.deepEqual(authority.finalizationPressure, source.finalizationPressure);
+  for (const projection of projections) {
+    assert.equal(projection.decisionId, decisionPlan.decisionId);
+    assert.equal(projection.generationId, decisionPlan.generationId);
+    assert.equal(projection.phase, decisionPlan.phase);
+    assert.equal(projection.primaryBlockerCode, decisionPlan.primaryBlockerCode);
+    assert.equal(projection.contractDigest, decisionPlan.contractDigest);
+    assert.equal(projection.evaluatorIdentity, decisionPlan.evaluatorIdentity);
   }
+
+  for (const projection of [dashboard, finalization]) {
+    assert.equal(projection.decisionId, decisionPlan.decisionId);
+    assert.equal(projection.generationId, decisionPlan.generationId);
+    assert.equal(projection.phase, decisionPlan.phase);
+    assert.equal(projection.actionKind, decisionPlan.action.kind);
+    assert.equal(projection.primaryBlockerCode, decisionPlan.primaryBlockerCode);
+  }
+
+  assert.equal(dashboard.command, "");
+  assert.equal(finalization.command, decisionPlan.action.command);
+  assert.equal(
+    (defaultState.resolvedDecision as Record<string, unknown>).decisionId,
+    decisionPlan.decisionId,
+  );
+  assert.equal(
+    (doctor.decisionPlanProjection as Record<string, unknown>).decisionId,
+    decisionPlan.decisionId,
+  );
   assert.equal(report.status, "blocked");
-  assert.match(report.blocker, /Ledger order is invalid/);
-  assert.equal(report.nextAction, "Repair ledger order before packet work.");
-  assert.match(report.nextCommand, /ledger-doctor/);
-  assert.equal(finalization.status, "blocked");
-  assert.match(String(finalization.strongestBlocker), /Ledger order is invalid/);
-  assert.deepEqual(finalization.runtimeProvenance, source.runtimeProvenance);
-  assert.deepEqual(finalization.finalizationPressure, source.finalizationPressure);
+  assert.equal(report.blocker, "ledger-integrity");
+  assert.equal(report.nextAction, decisionPlan.action.reason);
+  assert.equal(report.nextCommand, decisionPlan.action.command);
 });
 
 test("100-run state and doctor projections enforce reviewed byte and line budgets", () => {
@@ -1452,7 +1122,6 @@ test("100-run state and doctor projections enforce reviewed byte and line budget
     ok: false,
     workDir: source.workDir,
     state: source,
-    decisionEnvelope: source.decisionEnvelope,
     issues: Array.from({ length: 40 }, (_, index) => `Issue ${index}: ${"x".repeat(200)}`),
     warnings: Array.from({ length: 40 }, (_, index) => `Warning ${index}: ${"y".repeat(200)}`),
   });
@@ -1486,7 +1155,9 @@ test("bounded continuation keeps only operator authority within its own byte and
     requiresLogDecision: true,
     stopReason: "s".repeat(4_000),
     finalAnswerPolicy: "p".repeat(4_000),
-    plateau: { history: Array.from({ length: 100 }, (_, index) => ({ index })) },
+    plateau: {
+      history: Array.from({ length: 100 }, (_, index) => ({ index })),
+    },
     commands: Object.fromEntries(
       Array.from({ length: 100 }, (_, index) => [`command${index}`, "x".repeat(500)]),
     ),
@@ -1528,11 +1199,17 @@ test("dashboard wire context validates backend input outside the React source tr
   );
   assert.throws(() => parseDashboardContext({ state: {} }), /state\.config must be an object/);
   assert.throws(
-    () => parseDashboardContext({ state: { config: {}, current: [{ run: "one" }] } }),
+    () =>
+      parseDashboardContext({
+        state: { config: {}, current: [{ run: "one" }] },
+      }),
     /current\[0\]\.run must be a finite number/,
   );
   const parsed = parseDashboardContext({
-    state: { config: { metricName: "latency" }, current: [{ run: 1, status: "keep" }] },
+    state: {
+      config: { metricName: "latency" },
+      current: [{ run: 1, status: "keep" }],
+    },
     warnings: [],
   });
   assert.equal(parsed.state.config.metricName, "latency");
@@ -1541,22 +1218,16 @@ test("dashboard wire context validates backend input outside the React source tr
 
 function readModelFixture(runCount: number): Record<string, any> {
   const runtimeProvenance = { source: "source-checkout", version: "2.7.0" };
-  const finalizationPressure = { available: true, ready: false, nextAction: "Repair first." };
-  const decisionEnvelope = {
-    canonicalNextAction: { kind: "next-packet", reason: "Run the next packet." },
-    loopContract: {
-      canRunNextPacket: false,
-      blockers: [
-        "Ledger order is invalid because a duplicate physical run number breaks the accepted evidence sequence and must be repaired before another packet.",
-      ],
-      strongestAction: {
-        kind: "ledger-integrity",
-        reason: "Repair ledger order before packet work.",
-      },
-    },
-    runtimeProvenance,
-    finalizationReadiness: finalizationPressure,
+  const finalizationPressure = {
+    available: true,
+    ready: false,
+    nextAction: "Repair first.",
   };
+  const decisionPlan = controlPlaneDecisionPlan({
+    code: "ledger-integrity",
+    message: "Repair ledger order before packet work.",
+    command: "node scripts/autoresearch.mjs ledger-doctor --cwd C:/fixture --json",
+  });
   return {
     ok: false,
     workDir: "C:/fixture",
@@ -1577,7 +1248,7 @@ function readModelFixture(runCount: number): Record<string, any> {
       status: index % 2 ? "discard" : "keep",
       description: `Run ${index + 1}`,
     })),
-    decisionEnvelope,
+    decisionPlan,
     runtimeProvenance,
     finalizationPressure,
     blockers: [
@@ -1593,6 +1264,49 @@ function readModelFixture(runCount: number): Record<string, any> {
     },
     preflight: { status: "blocked", blockers: ["Ledger order is invalid."] },
   };
+}
+
+function controlPlaneDecisionPlan({
+  code,
+  message,
+  command = "",
+}: {
+  code?: DecisionDiagnosticCode;
+  message?: string;
+  command?: string;
+} = {}) {
+  const snapshot: CoherentSessionSnapshot = {
+    kind: "coherent-session-snapshot",
+    schemaVersion: 1,
+    generationId: "control-plane-generation",
+    sessionCwd: "C:/fixture",
+    workDir: "C:/fixture",
+    vector: {
+      ledger: { size: 0, mtimeNs: "0", tailHash: "missing" },
+      config: { storage: "session", hash: "config" },
+      packet: { storage: "git-private", hash: "missing" },
+      receipt: { storage: "git-private", hash: "missing" },
+      process: { storage: "git-private", hash: "missing" },
+      git: { head: "head", indexTree: "index", statusHash: "status" },
+    },
+    records: [],
+    config: {},
+    lastRunPacket: null,
+    pendingTransaction: null,
+    processProgress: null,
+    git: { head: "head", indexTree: "index", statusHash: "status" },
+    sourceDiagnostics: { ledgerIssues: [] },
+    semanticFacts: {
+      contractDigest: "contract-a",
+      evaluatorIdentity: "evaluator-a",
+      acceptedCheckIdentities: ["check-a@digest-a"],
+      preconditionEpoch: "epoch-a",
+    },
+  };
+  return compileDecisionPlan(
+    snapshot,
+    code ? [decisionDiagnostic(code, { message, command })] : [],
+  );
 }
 
 function exactDuplicateSubtrees(value: unknown): string[] {

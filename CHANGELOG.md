@@ -8,6 +8,21 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased
 
+## 2.8.0 - 2026-08-29
+
+### The loop now knows when not to loop
+
+Autoresearch 2.8.0 makes a hard distinction between work that needs a measured experiment and work that just needs to be done. One-shot architecture, documentation, UX, product, and research tasks stay direct, with a compact evidence trail instead of an empty Autoresearch session.
+
+When a loop is the right tool, 2.8.0 is much stricter about what counts. The benchmark, checks, metric, scope, keep rules, stop rules, and budget move together as one accepted contract. A plausible number cannot sneak through as a win.
+
+- Every readout agrees on the current blocker and next safe action. Terminal output, doctor, recommendations, finalization, and the dashboard no longer tell competing stories.
+- Existing sessions resume only when the repository, checkout, goal, benchmark, checks, metric, and scope still match. If something is missing or conflicts, Autoresearch asks for the exact input instead of guessing.
+- Two attempts that teach the loop nothing now pause the run and hand control back. No burning the remaining budget on the same dead end.
+- Interrupted logging is safe to retry. Autoresearch finishes the incomplete transaction and converges on one commit and one ledger entry, even after partial cleanup.
+
+The result is less ceremony before useful work and far fewer ways for a loop to lie about what happened.
+
 ## 2.7.2 - 2026-07-16
 
 ### Changed

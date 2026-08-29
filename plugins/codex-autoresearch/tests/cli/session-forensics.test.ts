@@ -5,9 +5,18 @@ import test from "node:test";
 import { commandForDecisionCapsule } from "../../lib/commands/session-forensics.js";
 import { writeDecisionCapsule } from "../helpers/git-fixtures.js";
 import { pathExists } from "../helpers/cli-session.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell, quoteForRunShell } from "../helpers/process.js";
 
 import { pluginRoot, runCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
+
+function projectedPlan(payload: any): any {
+  return (
+    payload.decisionPlanProjection ||
+    payload.decisionPlan ||
+    payload.resultingDecision ||
+    payload.preconditionDecision
+  );
+}
 
 test("session-forensics supports dry-run and safe apply capsule writes", async () => {
   await withTempDir("session-forensics-cli", async (dir) => {
@@ -637,62 +646,41 @@ test("session-forensics keeps secondary overfit blockers visible in compact outp
   });
 });
 
-test("state and recommend-next surface active decision capsules as loop brakes", async () => {
+test("state, recommend-next, and doctor keep decision capsules display-only", async () => {
   await withTempDir("active-decision-capsule-state", async (dir) => {
-    await setupFixture(dir, { name: "capsule state" });
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    await setupFixture(dir, {
+      name: "capsule state",
+      acceptedContract: true,
+      benchmarkCommand,
+    });
     await writeDecisionCapsule(dir, "benchmark-contract");
 
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
-    assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "decision-capsule");
-    assert.notEqual(statePayload.resolvedDecision.canonicalNextAction.toolName, "decision_capsule");
-    assert.equal(statePayload.resolvedDecision.canonicalNextAction.toolName, "recommend_next");
-    assert.equal(statePayload.resolvedDecision.loopContract.canRunNextPacket, false);
-    const stateActionCommand = statePayload.resolvedDecision.canonicalNextAction.command || "";
-    assert.match(
-      stateActionCommand,
-      /autoresearch\.mjs (?:recommend-next|state|benchmark-lint)\b/,
-      JSON.stringify({
-        resolvedDecision: statePayload.resolvedDecision,
-        commands: statePayload.commands,
-      }),
-    );
-    assert.doesNotMatch(stateActionCommand, /node scripts[\\/]autoresearch\.mjs/i);
+    const statePlan = projectedPlan(statePayload);
+    assert.equal(statePlan.action.kind, "run-baseline");
+    assert.equal(statePlan.capabilities["run-packet"], "allowed");
+    assert.equal(statePlan.loopDisposition.canRunPacket, true);
+    assert.equal(statePlan.requiredEvidence.diagnosticCodes.includes("decision-capsule"), false);
+    assert.equal(statePayload.sessionDecisionCapsule, null);
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
-    assert.equal(recommendPayload.resolvedDecision.canonicalNextAction.kind, "decision-capsule");
-    assert.notEqual(
-      recommendPayload.resolvedDecision.canonicalNextAction.toolName,
-      "decision_capsule",
-    );
-    assert.equal(recommendPayload.resolvedDecision.canonicalNextAction.toolName, "recommend_next");
-    const recommendActionCommand =
-      recommendPayload.resolvedDecision.canonicalNextAction.command || "";
-    assert.match(
-      recommendActionCommand,
-      /autoresearch\.mjs (?:recommend-next|state|benchmark-lint)\b/,
-      JSON.stringify({
-        resolvedDecision: recommendPayload.resolvedDecision,
-        commands: recommendPayload.commands,
-      }),
-    );
-    assert.doesNotMatch(recommendActionCommand, /node scripts[\\/]autoresearch\.mjs/i);
-    assert.match(recommendPayload.nextAction, /benchmark-lint|primary METRIC/i);
+    const recommendPlan = projectedPlan(recommendPayload);
+    assert.equal(recommendPlan.decisionId, statePlan.decisionId);
+    assert.equal(recommendPlan.capabilities["run-packet"], "allowed");
+    assert.equal(recommendPayload.sessionDecisionCapsule, null);
 
     const doctor = await runCli(["doctor", "--cwd", dir, "--explain", "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
-    assert.equal(doctorPayload.ok, false);
-    assert.equal(doctorPayload.resolvedDecision.loopContract.canRunNextPacket, false);
-    assert.equal(doctorPayload.resolvedDecision.canonicalNextAction.kind, "decision-capsule");
-    assert.equal(doctorPayload.state.resolvedDecision.canonicalNextAction.kind, "decision-capsule");
-    assert.equal(doctorPayload.state.sessionDecisionCapsule.kind, "session-decision-capsule");
-    assert.match(doctorPayload.issues.join("\n"), /benchmark-lint|primary METRIC/i);
-    assert.match(doctorPayload.nextAction, /benchmark-lint|primary METRIC/i);
-    assert.doesNotMatch(doctorPayload.explanation.verdict, /no blocking/i);
+    const doctorPlan = projectedPlan(doctorPayload);
+    assert.equal(doctorPlan.capabilities["run-packet"], "allowed");
+    assert.equal(doctorPlan.requiredEvidence.diagnosticCodes.includes("decision-capsule"), false);
+    assert.equal(doctorPayload.state.sessionDecisionCapsule, null);
 
     const { toolSchemas } = await import("../../lib/tool-schemas.js");
     const doctorSchema = toolSchemas.find((tool) => tool.name === "doctor_session");
@@ -703,7 +691,7 @@ test("state and recommend-next surface active decision capsules as loop brakes",
         `doctor_session schema should cover doctor --explain field ${field}`,
       );
     }
-    assert.equal(doctorSchema.outputSchema.properties.resolvedDecision.type, "object");
+    assert.equal(doctorSchema.outputSchema.properties.decisionPlan.type, "object");
     assert.equal(doctorSchema.outputSchema.properties.runtimeProvenance.type, "object");
     assert.equal(doctorSchema.outputSchema.properties.decisionEnvelope, undefined);
     assert.equal(doctorSchema.outputSchema.properties.sessionDecisionCapsule.type, "object");
@@ -740,21 +728,27 @@ test("recommend-next compact bounds noisy session evidence", async () => {
   });
 });
 
-test("next refuses hard decision capsules before running a packet", async () => {
+test("next ignores hard capsule projections and follows the accepted contract", async () => {
   await withTempDir("next-hard-decision-capsule", async (dir) => {
-    await setupFixture(dir, { name: "hard capsule" });
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    await setupFixture(dir, {
+      name: "hard capsule",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
     await writeDecisionCapsule(dir, "benchmark-contract");
 
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
-    const result = await runCli(["next", "--cwd", dir, "--command", command, "--compact"]);
+    const result = await runCli(["next", "--cwd", dir, "--compact"]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
-    assert.equal(payload.ok, false);
-    assert.equal(payload.refused, true);
-    assert.equal(payload.code, "next_blocked_by_loop_contract");
-    assert.equal(payload.blockingAction.kind, "decision-capsule");
-    assert.equal(payload.sessionDecisionCapsule.enforcement.mode, "hard-block");
-    assert.match(payload.clearingCondition, /benchmark-lint/i);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.decision.metric, 1);
+    assert.equal(payload.preconditionDecision.capabilities["run-packet"], "allowed");
+    assert.equal(payload.resultingDecision.action.kind, "log-decision");
+    assert.equal(
+      payload.resultingDecision.requiredEvidence.diagnosticCodes.includes("decision-capsule"),
+      false,
+    );
   });
 });
 
@@ -762,34 +756,34 @@ test("next refuses fixed-control rerun commands without override", async () => {
   await withTempDir("fixed-control-next", async (dir) => {
     const secret = "sk-fixed-control-next-secret-123";
     const sentinel = path.join(dir, "next-sentinel.txt");
-    await setupFixture(dir, { name: "fixed control", metricName: "score" });
-    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForAcceptedShell(sentinel)} --mode no-codestory --token=${secret}`;
+    await setupFixture(dir, {
+      name: "fixed control",
+      metricName: "score",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
+    const configPath = path.join(dir, "autoresearch.config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
     await writeFile(
-      path.join(dir, "autoresearch.config.json"),
+      configPath,
       JSON.stringify({
-        name: "fixed control",
-        goal: "preserve baseline",
-        metricName: "score",
-        metricUnit: "points",
-        bestDirection: "higher",
-        benchmarkCommand: command,
+        ...config,
         fixedControl: {
           artifact: "target/control/no-codestory.json",
           reason: "The no-CodeStory control is fixed for this round.",
-          forbiddenCommandPatterns: [`--mode no-codestory --token=${secret}`],
+          forbiddenCommandPatterns: [
+            process.platform === "win32" ? "autoresearch.ps1" : "autoresearch.sh",
+          ],
           reuseCommandHint: `OPENAI_API_KEY=${secret} node bench.mjs --reuse-control target/control/no-codestory.json`,
         },
       }),
     );
 
     const blocked = await runCli(["next", "--cwd", dir, "--compact"]);
-    assert.equal(blocked.code, 0, blocked.stderr);
-    const blockedPayload = JSON.parse(blocked.stdout);
-    assert.equal(blockedPayload.ok, false);
-    assert.equal(blockedPayload.refused, true);
-    assert.equal(blockedPayload.code, "fixed_control_rerun_blocked");
-    assert.match(blockedPayload.nextAction, /target\/control\/no-codestory\.json/);
-    assert.doesNotMatch(blocked.stdout, new RegExp(secret));
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr, /fixed control|reuse the existing artifact/i);
+    assert.doesNotMatch(blocked.stderr, new RegExp(secret));
     assert.equal(await pathExists(sentinel), false);
 
     const allowed = await runCli([
@@ -808,7 +802,7 @@ test("doctor check-benchmark refuses fixed-control rerun commands without execut
   await withTempDir("fixed-control-doctor", async (dir) => {
     const secret = "sk-fixed-control-doctor-secret-123";
     const sentinel = path.join(dir, "doctor-sentinel.txt");
-    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    const command = `${quoteForRunShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForRunShell(sentinel)} --mode no-codestory --token=${secret}`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({
@@ -855,7 +849,7 @@ test("benchmark-lint refuses fixed-control explicit commands without override", 
   await withTempDir("fixed-control-benchmark-lint", async (dir) => {
     const secret = "sk-fixed-control-lint-secret-123";
     const sentinel = path.join(dir, "lint-sentinel.txt");
-    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    const command = `${quoteForRunShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForRunShell(sentinel)} --mode no-codestory --token=${secret}`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({
@@ -900,7 +894,7 @@ test("benchmark-inspect refuses fixed-control explicit commands without override
   await withTempDir("fixed-control-benchmark-inspect", async (dir) => {
     const secret = "sk-fixed-control-inspect-secret-123";
     const sentinel = path.join(dir, "inspect-sentinel.txt");
-    const command = `${quoteForShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForShell(sentinel)} --mode no-codestory --token=${secret}`;
+    const command = `${quoteForRunShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForRunShell(sentinel)} --mode no-codestory --token=${secret}`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({
@@ -949,7 +943,7 @@ test("state exposes fixed-control config", async () => {
       { length: 16 },
       (_, index) => `--mode no-codestory-${index} --token=${secret}`,
     );
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=1')" --mode no-codestory --token=${secret}`;
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=1')" --mode no-codestory --token=${secret}`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({
@@ -991,9 +985,14 @@ test("state exposes fixed-control config", async () => {
   });
 });
 
-test("next allows explicitly bounded packet work for bounded-next capsules", async () => {
+test("bounded-next capsules cannot authorize or block accepted packet work", async () => {
   await withTempDir("next-bounded-decision-capsule", async (dir) => {
-    await setupFixture(dir, { name: "bounded capsule" });
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    await setupFixture(dir, {
+      name: "bounded capsule",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
     await writeDecisionCapsule(dir, "search-latency", {
       enforcement: {
         mode: "bounded-next",
@@ -1011,36 +1010,18 @@ test("next allows explicitly bounded packet work for bounded-next capsules", asy
       wrongNextActions: ["Do not run a broad packet."],
     });
 
-    const defaultTimeoutOnly = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--timeout-seconds",
-      "5",
-      "--compact",
-    ]);
-    assert.equal(defaultTimeoutOnly.code, 0, defaultTimeoutOnly.stderr);
-    const blockedPayload = JSON.parse(defaultTimeoutOnly.stdout);
-    assert.equal(blockedPayload.ok, false);
-    assert.equal(blockedPayload.refused, undefined);
-    assert.match(blockedPayload.doctor.issues.join("\n"), /No benchmark command/i);
-    assert.match(blockedPayload.nextAction, /benchmark/i);
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    assert.equal(projectedPlan(statePayload).capabilities["run-packet"], "allowed");
+    assert.equal(statePayload.sessionDecisionCapsule, null);
 
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
-    const result = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--timeout-seconds",
-      "5",
-      "--compact",
-    ]);
+    const result = await runCli(["next", "--cwd", dir, "--compact"]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
-    assert.equal(payload.refused, undefined);
     assert.equal(payload.decision.metric, 1);
+    assert.equal(payload.preconditionDecision.capabilities["run-packet"], "allowed");
+    assert.equal(payload.resultingDecision.action.kind, "log-decision");
   });
 });

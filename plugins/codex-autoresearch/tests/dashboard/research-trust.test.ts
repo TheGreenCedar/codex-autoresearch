@@ -8,6 +8,7 @@ import {
   emptyCommandMeta,
   waitFor,
 } from ".././helpers/dashboard.js";
+import { dashboardDecisionPlanProjection } from "./test-helpers.js";
 
 const dashboard = createDashboardHarness();
 const { runDashboard } = dashboard;
@@ -245,7 +246,7 @@ test("dashboard explains that zero quality gaps still need a fresh research roun
   assert.match(getById("quality-gap-detail").textContent, /rerun the project-study prompt/);
 });
 
-test("dashboard view model treats closed quality gaps as completion instead of another run", () => {
+test("dashboard view model keeps a closed quality-gap round subordinate to the canonical plan", () => {
   const viewModel = buildDashboardViewModel({
     state: {
       config: {
@@ -270,6 +271,16 @@ test("dashboard view model treats closed quality gaps as completion instead of a
       baseline: 0,
       best: 0,
       confidence: 1,
+      decisionPlanProjection: dashboardDecisionPlanProjection({
+        actionKind: "review-dirty-source",
+        actionReason: "Review the dirty source before authorizing a keep.",
+        blockerCode: "dirty-source",
+        capabilityStatuses: {
+          "authorize-keep": "blocked",
+        },
+        loopKind: "continue",
+        phase: "direct-work",
+      }),
     },
     commands: [
       { label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." },
@@ -296,12 +307,12 @@ test("dashboard view model treats closed quality gaps as completion instead of a
     },
   });
 
-  assert.equal(viewModel.nextBestAction.kind, "segment-transition");
-  assert.equal(viewModel.nextBestAction.title, "Review completion state");
-  assert.match(viewModel.nextBestAction.detail, /quality round is closed/);
-  assert.doesNotMatch(viewModel.nextBestAction.title, /Run the next measured hypothesis/);
-  assert.equal(viewModel.nextBestAction.primaryCommand.label, "Gaps");
-  assert.equal(viewModel.missionControl.activeStep, "gaps");
+  assert.equal(viewModel.nextBestAction.kind, "review-dirty-source");
+  assert.equal(viewModel.nextBestAction.packetBrake, false);
+  assert.match(viewModel.nextBestAction.detail, /dirty source/i);
+  assert.equal(viewModel.decisionEnvelopeSummary.blockerCode, "dirty-source");
+  assert.equal(viewModel.decisionEnvelopeSummary.canRunPacket, true);
+  assert.notEqual(viewModel.missionControl.activeStep, "gaps");
 });
 
 test("dashboard view model emits trust, evidence, research truth, and finalization schema with unknown deltas", () => {
@@ -458,7 +469,7 @@ test("dashboard view model marks perfect quality metrics suspicious without fres
   );
 });
 
-test("dashboard view model treats perfect secondary metrics as suspicious", () => {
+test("dashboard view model does not infer perfect semantics from metric names", () => {
   const viewModel = buildDashboardViewModel({
     state: {
       config: {
@@ -488,10 +499,10 @@ test("dashboard view model treats perfect secondary metrics as suspicious", () =
   });
 
   const reasons = viewModel.researchTruth.suspiciousReasons.join("\n");
-  assert.match(reasons, /mrr_at_10/);
-  assert.match(reasons, /hit_at_1/);
-  assert.match(reasons, /quality_component/);
-  assert.match(reasons, /promotion-grade/);
+  assert.doesNotMatch(reasons, /mrr_at_10/);
+  assert.doesNotMatch(reasons, /hit_at_1/);
+  assert.doesNotMatch(reasons, /quality_component/);
+  assert.doesNotMatch(reasons, /perfect/i);
 });
 
 test("dashboard view model clears suspicious-perfect reasons when breadth and promotion evidence are present", () => {
@@ -607,6 +618,17 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
       baseline: 5,
       best: 5,
       confidence: 1,
+      decisionPlanProjection: dashboardDecisionPlanProjection({
+        actionKind: "replace-packet",
+        actionReason: "Replace the stale packet before logging evidence.",
+        blockerCode: "stale-packet",
+        capabilityStatuses: {
+          "run-packet": "recovery-only",
+          "authorize-keep": "blocked",
+        },
+        loopKind: "blocked",
+        phase: "packet",
+      }),
     },
     guidedSetup: {
       stage: "stale-last-run",
@@ -641,6 +663,8 @@ test("dashboard view model feeds dirty, corrupt, and stale state into trust and 
   assert.match(viewModel.trustState.reasons.join("\n"), /stale/);
   assert.equal(viewModel.trustState.runtimeDrift.sourceVersion, PLUGIN_VERSION);
   assert.equal(viewModel.trustState.runtimeDrift.installedVersion, "0.5.1");
-  assert.equal(viewModel.nextBestAction.kind, "stale-packet");
+  assert.equal(viewModel.nextBestAction.kind, "replace-packet");
   assert.match(viewModel.nextBestAction.detail, /stale/);
+  assert.equal(viewModel.decisionEnvelopeSummary.blockerCode, "stale-packet");
+  assert.equal(viewModel.decisionEnvelopeSummary.canRunPacket, false);
 });

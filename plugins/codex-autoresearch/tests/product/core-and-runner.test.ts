@@ -7,7 +7,14 @@ import {
   parseQualityGaps,
   shellQuote as sessionShellQuote,
 } from "../../lib/session-core.js";
-import { parseMetricLines, runProcess, runShell, tailText } from "../../lib/runner.js";
+import {
+  parseMetricLines,
+  runExecutableCommand,
+  runProcess,
+  runShell,
+  tailText,
+} from "../../lib/runner.js";
+import { quoteForAcceptedShell, quoteForRunShell } from "../helpers/process.js";
 import { pluginRoot, runCli, withTempDir } from "./helpers.js";
 
 test("session core handles finite metrics, segments, limits, and quality gaps", async () => {
@@ -74,14 +81,39 @@ test("runner parses metrics, truncates tails, and reports timeouts", async () =>
   assert.equal(tail.split(/\r?\n/).length, 5);
   assert.match(tail, /line 39/);
 
-  const command = `${JSON.stringify(process.execPath)} -e "setTimeout(()=>{}, 2000)"`;
+  const command = `${quoteForRunShell(process.execPath)} -e "setTimeout(()=>{}, 2000)"`;
   const result = await runShell(command, pluginRoot, 1);
   assert.equal(result.timedOut, true);
 });
 
+test("raw and accepted shell commands use their explicit Windows execution boundary", async () => {
+  const raw = await runShell(
+    `${quoteForRunShell(process.execPath)} -e "console.log('run-shell-ok')"`,
+    pluginRoot,
+    10,
+  );
+  assert.equal(raw.exitCode, 0, raw.output);
+  assert.match(raw.output, /run-shell-ok/);
+
+  const acceptedScript = `${quoteForAcceptedShell(process.execPath)} -e ${quoteForAcceptedShell(
+    "console.log('accepted-shell-ok')",
+  )}`;
+  const accepted = await runExecutableCommand(
+    {
+      kind: "shell",
+      shell: process.platform === "win32" ? "powershell" : "bash",
+      script: acceptedScript,
+    },
+    pluginRoot,
+    10,
+  );
+  assert.equal(accepted.exitCode, 0, accepted.output);
+  assert.match(accepted.output, /accepted-shell-ok/);
+});
+
 test("direct CLI command execution stays intentionally ungated", async () => {
   await withTempDir("cli-direct-command-boundary", async (dir) => {
-    const command = `${JSON.stringify(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const command = `${quoteForRunShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const lint = await runCli([
       "benchmark-lint",
       "--cwd",

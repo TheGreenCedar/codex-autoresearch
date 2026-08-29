@@ -1,4 +1,5 @@
 import type { UnknownRecord } from "../types/json.js";
+import { parseEvidenceAxes } from "../evidence-axes.js";
 
 export interface BudgetStatus {
   configured: boolean;
@@ -29,7 +30,7 @@ export function buildBudgetStatus({
   const wallClockBudgetSeconds = positiveInteger(runtimeConfig.wallClockBudgetSeconds);
   const budgetNote = stringValue(runtimeConfig.budgetNote);
   const wallClockStartedAt = stringValue(runtimeConfig.budgetStartedAt);
-  const packetsUsed = Array.isArray(state.current) ? state.current.length : 0;
+  const packetsUsed = packetBudgetUsage(state.current);
   const packetsRemaining = packetBudget == null ? null : Math.max(0, packetBudget - packetsUsed);
   const startedMs = wallClockStartedAt ? Date.parse(wallClockStartedAt) : NaN;
   const wallClockElapsedSeconds =
@@ -68,6 +69,19 @@ export function buildBudgetStatus({
       : budgetNote || "Continue while packet and wall-clock budgets remain available.",
     warnings,
   };
+}
+
+export function packetBudgetUsage(value: unknown): number {
+  return Array.isArray(value) ? value.filter(countsTowardPacketBudget).length : 0;
+}
+
+export function countsTowardPacketBudget(value: unknown): boolean {
+  const axes = parseEvidenceAxes(value);
+  if (!axes.valid) return true;
+  return (
+    axes.evaluationAuthority === "accepted-contract" &&
+    (axes.runPurpose === "baseline" || axes.runPurpose === "candidate")
+  );
 }
 
 function positiveInteger(value: unknown): number | null {

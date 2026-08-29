@@ -5,7 +5,8 @@ export interface HelpOptions {
   command?: string | null;
 }
 
-const HAPPY_PATH = "setup -> doctor -> next -> log -> state -> finalize-preview";
+const HAPPY_PATH =
+  "prompt-plan -> direct | setup -> state -> next -> log -> state -> finalize-preview";
 
 const FULL_GUIDANCE_LINES = [
   "",

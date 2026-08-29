@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 
 import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
@@ -55,24 +55,20 @@ test("clear removes active progress snapshots in fallback and Git-private modes"
   await withTempDir("clear-progress-snapshots", async (dir) => {
     const fallbackProgress = path.join(dir, "autoresearch.progress.json");
     const fallbackLastRun = path.join(dir, "autoresearch.last-run.json");
-    const fallbackPending = path.join(dir, "autoresearch.pending-transaction.json");
     await writeFile(fallbackProgress, JSON.stringify({ exitState: "running" }), "utf8");
     await writeFile(fallbackLastRun, JSON.stringify({ run: 1 }), "utf8");
-    await writeFile(fallbackPending, JSON.stringify({ run: 1 }), "utf8");
 
     const fallbackPreview = await runCli(["clear", "--cwd", dir, "--dry-run"]);
     assert.equal(fallbackPreview.code, 0, fallbackPreview.stderr);
     const fallbackPayload = JSON.parse(fallbackPreview.stdout);
     assert.ok(fallbackPayload.wouldDelete.includes(fallbackProgress));
     assert.ok(fallbackPayload.wouldDelete.includes(fallbackLastRun));
-    assert.ok(fallbackPayload.wouldDelete.includes(fallbackPending));
     await access(fallbackProgress);
 
     const fallbackClear = await runCli(["clear", "--cwd", dir, "--yes"]);
     assert.equal(fallbackClear.code, 0, fallbackClear.stderr);
     await assert.rejects(access(fallbackProgress));
     await assert.rejects(access(fallbackLastRun));
-    await assert.rejects(access(fallbackPending));
   });
 
   await withTempDir("clear-git-progress-snapshots", async (dir) => {
@@ -80,32 +76,28 @@ test("clear removes active progress snapshots in fallback and Git-private modes"
     const gitPrivateDir = path.join(dir, ".git", "autoresearch");
     const gitProgress = path.join(gitPrivateDir, "progress.json");
     const gitLastRun = path.join(gitPrivateDir, "last-run.json");
-    const fallbackProgress = path.join(dir, "autoresearch.progress.json");
     await mkdir(gitPrivateDir, { recursive: true });
     await writeFile(gitProgress, JSON.stringify({ exitState: "running" }), "utf8");
     await writeFile(gitLastRun, JSON.stringify({ run: 1 }), "utf8");
-    await writeFile(fallbackProgress, JSON.stringify({ exitState: "running" }), "utf8");
 
     const gitPreview = await runCli(["clear", "--cwd", dir, "--dry-run"]);
     assert.equal(gitPreview.code, 0, gitPreview.stderr);
     const gitPayload = JSON.parse(gitPreview.stdout);
     assert.ok(gitPayload.wouldDelete.includes(gitProgress));
     assert.ok(gitPayload.wouldDelete.includes(gitLastRun));
-    assert.ok(gitPayload.wouldDelete.includes(fallbackProgress));
     await access(gitProgress);
 
     const gitClear = await runCli(["clear", "--cwd", dir, "--yes"]);
     assert.equal(gitClear.code, 0, gitClear.stderr);
     await assert.rejects(access(gitProgress));
     await assert.rejects(access(gitLastRun));
-    await assert.rejects(access(fallbackProgress));
   });
 });
 
 test("setup-plan preserves explicit command, state inputs, and baseline measure guidance", async () => {
   await withTempDir("setup-plan-inputs", async (dir) => {
-    const benchmark = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
-    const checks = `${quoteForShell(process.execPath)} -e "process.exit(0)"`;
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
     const result = await runCli([
       "setup-plan",
       "--cwd",
@@ -146,14 +138,21 @@ test("setup-plan preserves explicit command, state inputs, and baseline measure 
     const logStep = payload.firstRunChecklist.find((step) => step.step === "log");
     assert.match(logStep.command, /--status measure --description ['"]Baseline measurement['"]/);
 
-    await setupFixture(dir, { name: "guide setup" });
+    await setupFixture(dir, {
+      name: "guide setup",
+      benchmarkCommand: benchmark,
+      acceptedContract: true,
+    });
     const guide = await runCli(["guide", "--cwd", dir, "--benchmark-command", benchmark]);
     assert.equal(guide.code, 0, guide.stderr);
     const guidePayload = JSON.parse(guide.stdout);
-    assert.equal(guidePayload.nextStep.stage, "baseline-packet");
-    assert.equal(guidePayload.nextStep.nextAction.title, "Run baseline packet");
-    assert.equal(guidePayload.nextStep.nextAction.safety, "process_start");
-    assert.match(guidePayload.nextStep.nextAction.command, / next /);
+    assert.equal(guidePayload.nextStep.stage, "run-baseline");
+    assert.equal(guidePayload.nextStep.nextAction.title, "Run the accepted baseline");
+    const plan = guidePayload.state.decisionPlan;
+    assert.equal(plan.action.kind, "run-baseline");
+    assert.equal(plan.capabilities["run-packet"], "allowed");
+    assert.equal(plan.loopDisposition.kind, "continue");
+    assert.ok(plan.requiredEvidence.diagnosticCodes.includes("needs-baseline"));
   });
 });
 
@@ -295,7 +294,7 @@ test("setup-plan warns when files in scope and commit paths diverge", async () =
       "--metric-name",
       "seconds",
       "--benchmark-command",
-      `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
+      `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
       "--files-in-scope",
       "src",
       "--commit-paths",

@@ -2,7 +2,82 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { quoteForAcceptedShell, quoteForRunShell } from "../helpers/process.js";
 import { readGoalBrief, runCli, withTempDir, setupFixture } from "./helpers.js";
+
+const passingChecks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
+
+const scoreFileBenchmark = `${quoteForAcceptedShell(process.execPath)} -e "const fs=require('node:fs'); const score=fs.readFileSync('src/score.txt','utf8').trim(); console.log('METRIC score='+score)"`;
+
+async function acceptDeterministicContract(dir: string, reason: string) {
+  const configPath = path.join(dir, "autoresearch.config.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  await writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        ...config,
+        checksAuthoritative: true,
+        noiseModel: { kind: "deterministic" },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  const accepted = await runCli(["new-segment", "--cwd", dir, "--reason", reason, "--yes"]);
+  assert.equal(accepted.code, 0, accepted.stderr);
+}
+
+async function logScoreBaseline(
+  dir: string,
+  metric: number,
+  description = "Reference measurement",
+) {
+  await writeFile(path.join(dir, "src", "score.txt"), `${metric}\n`, "utf8");
+  const packet = await runCli(["next", "--cwd", dir]);
+  assert.equal(packet.code, 0, packet.stderr);
+  const baseline = await runCli([
+    "log",
+    "--cwd",
+    dir,
+    "--from-last",
+    "--status",
+    "measure",
+    "--description",
+    description,
+  ]);
+  assert.equal(baseline.code, 0, baseline.stderr);
+}
+
+async function logKeptScoreCandidate(
+  dir: string,
+  metric: number,
+  description: string,
+  extraArgs: string[] = [],
+) {
+  await writeFile(path.join(dir, "src", "score.txt"), `${metric}\n`, "utf8");
+  const packet = await runCli(["next", "--cwd", dir]);
+  assert.equal(packet.code, 0, packet.stderr);
+  const packetPayload = JSON.parse(packet.stdout);
+  assert.equal(
+    packetPayload.decision.allowedStatuses.includes("keep"),
+    true,
+    JSON.stringify(packetPayload.run.contractKeepEligibility, null, 2),
+  );
+  const kept = await runCli([
+    "log",
+    "--cwd",
+    dir,
+    "--from-last",
+    "--status",
+    "keep",
+    "--description",
+    description,
+    ...extraArgs,
+  ]);
+  assert.equal(kept.code, 0, kept.stderr);
+}
 
 test("delight commands provide compact state, onboarding, linting, hooks, and new segments", async () => {
   await withTempDir("delight-commands", async (dir) => {
@@ -10,19 +85,16 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
       name: "Delight loop",
       goal: "Improve score with evidence",
       metricName: "score",
+      direction: "higher",
+      completeContract: true,
+      benchmarkCommand: scoreFileBenchmark,
+      checksCommand: passingChecks,
     });
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "5",
-      "--status",
-      "keep",
-      "--description",
-      "Baseline",
+    await acceptDeterministicContract(dir, "Accept the delight fixture contract");
+    await logScoreBaseline(dir, 4);
+    await logKeptScoreCandidate(dir, 5, "Accepted score improvement", [
       "--asi",
-      JSON.stringify({ hypothesis: "baseline", evidence: "score=5" }),
+      JSON.stringify({ hypothesis: "candidate", evidence: "score=5" }),
     ]);
 
     const compact = await runCli(["state", "--cwd", dir, "--compact"]);
@@ -30,9 +102,17 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     const compactPayload = JSON.parse(compact.stdout);
     assert.equal(compactPayload.metric, "score");
     assert.equal(compactPayload.goal, "Improve score with evidence");
-    assert.equal(compactPayload.goalAdvice.advice, "continue");
-    assert.equal(compactPayload.runs, 1);
-    assert.equal(compactPayload.commands.newSegmentDryRun.includes("new-segment"), true);
+    assert.equal(compactPayload.runs, 2);
+    assert.equal(compactPayload.measured, 1);
+    assert.equal(compactPayload.kept, 1);
+    const compactPlan = compactPayload.decisionPlanProjection;
+    assert.equal(compactPlan.kind, "decision-plan-projection");
+    assert.equal(compactPlan.action.kind, "direct-work");
+    assert.equal(compactPlan.capabilities["run-packet"], "allowed");
+    assert.equal(compactPlan.capabilities.finalize, "blocked");
+    assert.equal(compactPlan.loopDisposition.kind, "continue");
+    assert.equal(compactPlan.parentDisposition.kind, "hand-back");
+    assert.ok(compactPlan.requiredEvidence.diagnosticCodes.includes("finalization-blocked"));
 
     const goalPayload = await readGoalBrief(dir, ["--codex-goal-status", "active"]);
     assert.equal(goalPayload.kind, "codex-autoresearch-goal-bridge");
@@ -53,10 +133,11 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(devOnlyPayload.completionAudit.canMarkCodexGoalComplete, false);
     assert.equal(devOnlyPayload.completionAudit.status, "blocked");
-    assert.match(
-      devOnlyPayload.completionAudit.localEvidence.blockers.join("\n"),
-      /development-only|not promotable/i,
-    );
+    const devOnlyPlan = devOnlyPayload.decisionPlanProjection;
+    assert.equal(devOnlyPlan.primaryBlockerCode, "finalization-claim-blocked");
+    assert.equal(devOnlyPlan.capabilities["parent-final-answer"], "blocked");
+    assert.equal(devOnlyPlan.parentDisposition.kind, "block-final-answer");
+    assert.ok(devOnlyPlan.requiredEvidence.diagnosticCodes.includes("finalization-claim-blocked"));
 
     const noEvidenceDir = path.join(dir, "no-evidence");
     await mkdir(noEvidenceDir, { recursive: true });
@@ -64,6 +145,10 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
       name: "No evidence loop",
       goal: "Do not complete without evidence",
       metricName: "score",
+      direction: "higher",
+      acceptedContract: true,
+      benchmarkCommand: scoreFileBenchmark,
+      checksCommand: passingChecks,
     });
     const prematurePayload = await readGoalBrief(noEvidenceDir, [
       "--codex-goal-status",
@@ -95,22 +180,37 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
       goal: "Complete only against an imported Codex Goal",
       metricName: "score",
       direction: "higher",
+      completeContract: true,
+      benchmarkCommand: scoreFileBenchmark,
+      checksCommand: passingChecks,
     });
+    const promotionConfigPath = path.join(promotionDir, "autoresearch.config.json");
+    const promotionConfig = JSON.parse(await readFile(promotionConfigPath, "utf8"));
     await writeFile(
-      path.join(promotionDir, "autoresearch.config.json"),
-      `${JSON.stringify({ holdoutCommand: "echo holdout" }, null, 2)}\n`,
+      promotionConfigPath,
+      `${JSON.stringify(
+        {
+          ...promotionConfig,
+          checksAuthoritative: true,
+          holdoutCommand: "echo holdout",
+          noiseModel: { kind: "deterministic" },
+        },
+        null,
+        2,
+      )}\n`,
       "utf8",
     );
-    await runCli([
-      "log",
+    const acceptedPromotion = await runCli([
+      "new-segment",
       "--cwd",
       promotionDir,
-      "--metric",
-      "0.8",
-      "--status",
-      "keep",
-      "--description",
-      "Promotion-grade result",
+      "--reason",
+      "Accept the promotion fixture contract",
+      "--yes",
+    ]);
+    assert.equal(acceptedPromotion.code, 0, acceptedPromotion.stderr);
+    await logScoreBaseline(promotionDir, 0.5);
+    await logKeptScoreCandidate(promotionDir, 0.8, "Promotion-grade result", [
       "--metrics",
       JSON.stringify({ promotionGrade: true }),
     ]);
@@ -129,10 +229,14 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
       "--completion-evidence",
       "Promotion-grade result satisfies the objective",
     ]);
-    assert.equal(importedPayload.completionAudit.status, "complete");
-    assert.equal(importedPayload.completionAudit.canMarkCodexGoalComplete, true);
-    assert.equal(importedPayload.canMarkCodexGoalComplete, true);
-    assert.equal(importedPayload.completionBlocker, null);
+    assert.equal(importedPayload.completionAudit.status, "blocked");
+    assert.equal(importedPayload.completionAudit.canMarkCodexGoalComplete, false);
+    assert.equal(importedPayload.canMarkCodexGoalComplete, false);
+    const importedPlan = importedPayload.decisionPlanProjection;
+    assert.equal(importedPlan.primaryBlockerCode, "finalization-claim-blocked");
+    assert.equal(importedPlan.capabilities["parent-final-answer"], "blocked");
+    assert.equal(importedPlan.parentDisposition.kind, "block-final-answer");
+    assert.ok(importedPlan.requiredEvidence.diagnosticCodes.includes("finalization-claim-blocked"));
 
     const lint = await runCli([
       "benchmark-lint",
@@ -159,7 +263,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
       "--cwd",
       dir,
       "--command",
-      `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
+      `${quoteForRunShell(process.execPath)} -e "process.exit(0)"`,
     ]);
     assert.equal(checksInspect.code, 0, checksInspect.stderr);
     const checksInspectPayload = JSON.parse(checksInspect.stdout);
@@ -171,13 +275,18 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
     assert.equal(recommendPayload.ok, true);
-    assert.ok(recommendPayload.nextAction);
+    const recommendPlan = recommendPayload.decisionPlanProjection;
+    assert.equal(recommendPlan.decisionId, compactPlan.decisionId);
+    assert.equal(recommendPlan.action.kind, compactPlan.action.kind);
+    assert.equal(recommendPlan.capabilities["run-packet"], "allowed");
+    assert.ok(recommendPlan.requiredEvidence.diagnosticCodes.includes("finalization-blocked"));
 
     const onboarding = await runCli(["onboarding-packet", "--cwd", dir, "--compact"]);
     assert.equal(onboarding.code, 0, onboarding.stderr);
     const onboardingPayload = JSON.parse(onboarding.stdout);
     assert.equal(onboardingPayload.kind, "codex-autoresearch-onboarding-packet");
     assert.ok(onboardingPayload.templates.firstResponse);
+    assert.equal(onboardingPayload.decisionPlanProjection.decisionId, compactPlan.decisionId);
 
     const promptPlan = await runCli([
       "prompt-plan",
@@ -195,11 +304,9 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     assert.equal(promptPlan.code, 0, promptPlan.stderr);
     const promptPayload = JSON.parse(promptPlan.stdout);
     assert.equal(promptPayload.kind, "codex-autoresearch-prompt-plan");
-    assert.equal(promptPayload.intent.metric.name, "seconds");
-    assert.match(promptPayload.intent.safeInterpretation, /preserving test coverage/);
-    assert.match(promptPayload.intent.nextAction, /Run setup, doctor, then one packet/);
-    assert.doesNotMatch(promptPayload.intent.nextAction, /live dashboard, then one packet/i);
-    assert.match(promptPayload.setup.nextCommand, /--files-in-scope/);
+    assert.equal(promptPayload.fit.disposition, "continue-direct");
+    assert.equal("intent" in promptPayload, false);
+    assert.equal("setup" in promptPayload, false);
 
     const compositePromptPlan = await runCli([
       "prompt-plan",
@@ -210,8 +317,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(compositePromptPlan.code, 0, compositePromptPlan.stderr);
     const compositePayload = JSON.parse(compositePromptPlan.stdout);
-    assert.equal(compositePayload.intent.metric.name, "score");
-    assert.equal(compositePayload.intent.metric.direction, "higher");
+    assert.equal(compositePayload.fit.disposition, "continue-direct");
 
     await writeFile(
       path.join(dir, "Cargo.toml"),
@@ -235,10 +341,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(cargoPromptPlan.code, 0, cargoPromptPlan.stderr);
     const cargoPayload = JSON.parse(cargoPromptPlan.stdout);
-    assert.equal(cargoPayload.intent.inferredFrom.discoveredBenchmark.path, "Cargo.toml#bench");
-    assert.equal(cargoPayload.intent.setupDefaults.benchmarkCommand, "");
-    assert.ok(cargoPayload.intent.missing.includes("benchmark_command"));
-    assert.match(cargoPayload.intent.setupDefaults.constraints.join("\n"), /wrapper/);
+    assert.equal(cargoPayload.fit.disposition, "continue-direct");
     await rm(path.join(dir, "Cargo.toml"), { force: true });
 
     await mkdir(path.join(dir, "scripts"), { recursive: true });
@@ -255,11 +358,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(domainPromptPlan.code, 0, domainPromptPlan.stderr);
     const domainPayload = JSON.parse(domainPromptPlan.stdout);
-    assert.equal(domainPayload.intent.metric.name, "semantic_score");
-    assert.match(
-      domainPayload.intent.setupDefaults.benchmarkCommand,
-      /scripts\/semantic-domain-benchmark\.mjs/,
-    );
+    assert.equal(domainPayload.fit.disposition, "continue-direct");
 
     await writeFile(
       path.join(dir, "scripts", "autoresearch-indexer-embedder-pipeline.mjs"),
@@ -274,13 +373,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(pipelinePromptPlan.code, 0, pipelinePromptPlan.stderr);
     const pipelinePayload = JSON.parse(pipelinePromptPlan.stdout);
-    assert.equal(pipelinePayload.intent.metric.name, "pipeline_score");
-    assert.equal(pipelinePayload.intent.metric.direction, "higher");
-    assert.match(
-      pipelinePayload.intent.setupDefaults.benchmarkCommand,
-      /scripts\/autoresearch-indexer-embedder-pipeline\.mjs/,
-    );
-    assert.match(pipelinePayload.intent.setupDefaults.constraints.join("\n"), /primary score/);
+    assert.equal(pipelinePayload.fit.disposition, "continue-direct");
 
     await writeFile(
       path.join(dir, "scripts", "cross-repo-promotion-benchmark.mjs"),
@@ -295,11 +388,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(frictionPromptPlan.code, 0, frictionPromptPlan.stderr);
     const frictionPayload = JSON.parse(frictionPromptPlan.stdout);
-    assert.equal(frictionPayload.intent.loopKind, "quality-gap");
-    assert.equal(frictionPayload.intent.metric.name, "quality_gap");
-    assert.equal(frictionPayload.intent.inferredFrom.discoveredBenchmark, null);
-    assert.equal(frictionPayload.intent.setupDefaults.benchmarkCommand, "");
-    assert.equal(frictionPayload.intent.setupDefaults.recipe, "quality-gap");
+    assert.equal(frictionPayload.fit.disposition, "continue-direct");
 
     for (const qualitativePrompt of [
       "Deepen security evidence hygiene around redaction, token handling, and stack trace leaks.",
@@ -315,10 +404,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
       ]);
       assert.equal(qualitativePlan.code, 0, qualitativePlan.stderr);
       const qualitativePayload = JSON.parse(qualitativePlan.stdout);
-      assert.equal(qualitativePayload.intent.loopKind, "quality-gap");
-      assert.equal(qualitativePayload.intent.metric.name, "quality_gap");
-      assert.equal(qualitativePayload.intent.inferredFrom.discoveredBenchmark, null);
-      assert.equal(qualitativePayload.intent.setupDefaults.recipe, "quality-gap");
+      assert.equal(qualitativePayload.fit.disposition, "continue-direct");
     }
 
     const explicitMeasuredPlan = await runCli([
@@ -335,9 +421,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(explicitMeasuredPlan.code, 0, explicitMeasuredPlan.stderr);
     const explicitMeasuredPayload = JSON.parse(explicitMeasuredPlan.stdout);
-    assert.equal(explicitMeasuredPayload.intent.loopKind, "measured-optimization");
-    assert.equal(explicitMeasuredPayload.intent.metric.name, "seconds");
-    assert.match(explicitMeasuredPayload.intent.setupDefaults.benchmarkCommand, /METRIC seconds=2/);
+    assert.equal(explicitMeasuredPayload.fit.disposition, "continue-direct");
 
     const broadPromptPlan = await runCli([
       "prompt-plan",
@@ -348,8 +432,7 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     ]);
     assert.equal(broadPromptPlan.code, 0, broadPromptPlan.stderr);
     const broadPayload = JSON.parse(broadPromptPlan.stdout);
-    assert.equal(broadPayload.intent.loopKind, "quality-gap");
-    assert.equal(broadPayload.intent.setupDefaults.maxIterations, 100);
+    assert.equal(broadPayload.fit.disposition, "continue-direct");
 
     const hooks = await runCli(["doctor", "hooks", "--cwd", dir]);
     assert.equal(hooks.code, 0, hooks.stderr);
@@ -385,25 +468,25 @@ test("delight commands provide compact state, onboarding, linting, hooks, and ne
     const afterPayload = JSON.parse(after.stdout);
     assert.equal(afterPayload.segment, 1);
     assert.equal(afterPayload.runs, 0);
+    const afterPlan = afterPayload.decisionPlanProjection;
+    assert.equal(afterPlan.action.kind, "direct-work");
+    assert.equal(afterPlan.capabilities["run-packet"], "allowed");
+    assert.equal(afterPlan.loopDisposition.kind, "continue");
+    assert.equal(afterPlan.parentDisposition.kind, "hand-back");
+    assert.ok(afterPlan.requiredEvidence.diagnosticCodes.includes("finalization-blocked"));
   });
 });
 
 test("CLI exposes onboarding, prompt planning, benchmark probes, recommend-next, and segment tools", async () => {
   await withTempDir("cli-delight-tools", async (dir) => {
-    await setupFixture(dir, { name: "cli delight", metricName: "score" });
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "3",
-      "--status",
-      "keep",
-      "--description",
-      "Baseline",
-      "--asi",
-      JSON.stringify({ hypothesis: "baseline", evidence: "score=3" }),
-    ]);
+    await setupFixture(dir, {
+      name: "cli delight",
+      metricName: "score",
+      acceptedContract: true,
+      benchmarkCommand: scoreFileBenchmark,
+      checksCommand: passingChecks,
+    });
+    await logScoreBaseline(dir, 3, "Baseline");
 
     const onboarding = await runCli(["onboarding-packet", "--cwd", dir, "--compact"]);
     assert.equal(onboarding.code, 0, onboarding.stderr);
@@ -417,9 +500,8 @@ test("CLI exposes onboarding, prompt planning, benchmark probes, recommend-next,
       "Use $Codex Autoresearch to figure out why p99 latency is so much higher than p90. I suspect: DNS lookup, event loop throttling, memory spike, CPU spike. Use @experiments.md.",
     ]);
     assert.equal(promptPlan.code, 0, promptPlan.stderr);
-    assert.match(promptPlan.stdout, /p99_p90_ratio/);
-    assert.match(promptPlan.stdout, /DNS lookup/);
-    assert.match(promptPlan.stdout, /experiments\.md/);
+    assert.match(promptPlan.stdout, /"disposition": "continue-direct"/);
+    assert.doesNotMatch(promptPlan.stdout, /p99_p90_ratio/);
 
     const lint = await runCli([
       "benchmark-lint",
@@ -443,7 +525,15 @@ test("CLI exposes onboarding, prompt planning, benchmark probes, recommend-next,
 
     const next = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(next.code, 0, next.stderr);
-    assert.match(next.stdout, /"whySafe"/);
+    const nextPayload = JSON.parse(next.stdout);
+    const nextPlan = nextPayload.decisionPlanProjection;
+    assert.equal(nextPlan.kind, "decision-plan-projection");
+    assert.equal(nextPlan.action.kind, "direct-work");
+    assert.equal(nextPlan.capabilities["run-packet"], "allowed");
+    assert.equal(nextPlan.capabilities.finalize, "blocked");
+    assert.equal(nextPlan.loopDisposition.kind, "continue");
+    assert.equal(nextPlan.parentDisposition.kind, "hand-back");
+    assert.ok(nextPlan.requiredEvidence.diagnosticCodes.includes("finalization-blocked"));
 
     const dryRun = await runCli(["new-segment", "--cwd", dir, "--dry-run"]);
     assert.equal(dryRun.code, 0, dryRun.stderr);
@@ -721,7 +811,7 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
       "--research-slug",
       "study",
       "--model-command",
-      `${JSON.stringify(process.execPath)} -e "console.log('not json')"`,
+      `${quoteForRunShell(process.execPath)} -e "console.log('not json')"`,
     ]);
     assert.notEqual(badModel.code, 0);
     assert.match(badModel.stderr, /model-command must print a JSON array/);
@@ -733,7 +823,7 @@ test("gap-candidates extracts, dedupes, applies, and rejects malformed model out
       "--research-slug",
       "study",
       "--model-command",
-      `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 2000)"`,
+      `${quoteForRunShell(process.execPath)} -e "setTimeout(() => {}, 2000)"`,
       "--model-timeout-seconds",
       "1",
     ]);

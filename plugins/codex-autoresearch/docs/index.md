@@ -1,6 +1,6 @@
 # Codex Autoresearch docs
 
-If you are new to the plugin, start with [Start](start.md), then follow [From baseline to finalization preview](walkthrough.md). Together they cover the first baseline, one measured change, and the point where useful work becomes ready for review.
+If you are new to the plugin, start with [Start](start.md). It first decides whether the request should stay direct, needs contract input, or fits a repeated measured loop. For an accepted loop, [From baseline to finalization preview](walkthrough.md) covers the first baseline, one measured change, and the point where useful work becomes ready for review.
 
 The manual command examples assume a source checkout opened at `plugins/codex-autoresearch`. Marketplace users can stay inside Codex and ask `@Codex Autoresearch` to perform the same steps.
 

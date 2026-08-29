@@ -2,6 +2,15 @@
 
 Find the broken layer before repeating the command. A retry with the same preconditions usually produces the same mess, only older.
 
+## Fit and session routing
+
+| Symptom | Failing layer | What to do |
+| --- | --- | --- |
+| Architecture, docs, UX, product, research, or one-shot repair starts inventing benchmarks | Fit routing | Run `prompt-plan` once and follow `continue-direct`. Use the direct evidence capsule; create no session state. |
+| Explicit loop request starts with missing evaluator, checks, metric semantics, or scope | Contract completeness | Follow `needs-user` and ask only for the exact missing fields. Do not scan for plausible defaults. |
+| A vaguely similar prompt resumes or replaces an active session | Session relation | Treat unknown compatibility as unrelated. Matching requires repository, checkout, goal, metric, evaluator, checks, and scope agreement; replacement requires explicit intent. |
+| A paused loop keeps proposing more packets or fanout | Learning or failure stop | Continue the bounded parent task directly. Two eligible no-learning candidates or same-layer failures block another equivalent packet until relevant preconditions change. |
+
 ## Install and runtime
 
 | Symptom | Failing layer | What to do |
@@ -25,6 +34,8 @@ Find the broken layer before repeating the command. A retry with the same precon
 | State reports `termination_failed` | Process-tree cleanup could not be proven | Treat the reported PID as possibly alive. Verify that PID and its descendants are absent before removing only `.git/autoresearch/progress.json` (Git) or `autoresearch.progress.json` (non-Git); do not start another packet first. |
 | State reports an invalid or active process lifecycle | Typed lifecycle ledger state is malformed or has no later terminal row | Preserve the ledger. Repair the malformed `process_lifecycle` row or append a valid `terminated` row for the same packet/process identity only after verifying the process is absent. Historical descriptive prose needs no repair. |
 | Checks failed | Correctness boundary | Run `checks-inspect --cwd <project> --command "<checks>"`, then fix or reject the packet. Logging `checks_failed` may clean configured or explicit experiment paths. |
+| State reports evaluator or protected-input drift | Accepted execution identity | Do not run a packet or keep. Restore the accepted inputs or perform an explicit segment transition with a complete replacement contract. |
+| A token estimate looks exhausted or remaining | Untrusted budget telemetry | Treat the model token or call limit as advisory or unsupported unless trusted host telemetry is present. Packet, evaluator invocation, and plugin wall-clock limits remain enforced. |
 
 ## Git and logging
 
@@ -35,8 +46,10 @@ Find the broken layer before repeating the command. A retry with the same precon
 | Successful work was committed outside Autoresearch | Keep receipt lacks commit evidence | Verify the hash, then log the keep with `--commit <hash>`. |
 | Keep refuses to commit | Missing Git scope | Configure `commitPaths`, pass `--commit-paths`, or deliberately use `--allow-add-all`. |
 | Failure cleanup refuses to run | Missing cleanup scope | Pass explicit `--revert-paths`; do not broaden cleanup in a dirty tree. |
+| `log` reports a pending transaction | Interrupted exactly-once transaction | Rerun the exact same `log` arguments. Do not delete the receipt, append the ledger manually, or change the decision inputs. |
+| Retried `log` rejects an input mismatch | Different transaction request | Restore the original status, description, candidate, and evidence arguments, or complete/reconcile the pending transaction before starting another. |
 | `next_blocked_by_truncated_fingerprints` | Dirty paths cannot be fingerprinted safely | Clean, commit, stash, or narrow the dirty set, then rerun `next`. |
-| `next_blocked_by_loop_contract` | A decision capsule or control-plane blocker owns the next action | Run the printed blocking command, acknowledge it, or start a fresh segment. |
+| `next_blocked_by_loop_contract` | The canonical decision blocks `run-packet` | Follow the printed action. Start a new segment only with an explicit complete replacement contract. |
 
 ## Dashboard
 
@@ -46,6 +59,7 @@ Find the broken layer before repeating the command. A retry with the same precon
 | Live refresh returns HTTP 409 | Session changed during refresh | Retry after the write completes or wait for the next refresh. |
 | Dashboard has no chart | No logged packets | Complete one `next` and `log` cycle. |
 | Dashboard looks like it should run actions | Wrong mental model | It is read-only. Use the CLI for setup, packets, logging, export, and finalization. |
+| Dashboard and terminal disagree | Projection, snapshot, or runtime drift | Preserve both outputs; stop mutation; compare decision ID, generation ID, phase, action kind, blocker code, parent disposition, contract digest, evaluator identity, and runtime provenance. |
 
 ## Research and finalization
 
@@ -58,7 +72,7 @@ Find the broken layer before repeating the command. A retry with the same precon
 | `quality_gap=0` appears to finish everything | Checklist scope is being overread | Read `researchIntegrity`, open proof gaps, and promotion status; start another discovery round when the question is still open. |
 | Packet state reports conflicting private stores | Both `.git/autoresearch/` and worktree fallback files exist | Inspect both copies and preserve the authoritative one; do not delete or merge them blindly. Rerun setup or the blocked mutation after the conflict is resolved. |
 | An older Codex task contains a bounded decision | Session evidence has not been imported | Run `session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --dry-run`. |
-| Loop keeps running without learning | Repeated idea family or stale phase | Stop packets; inspect the saved experiment notes, run `research-fanout --dry-run`, rescope, or start a new segment. |
+| Loop keeps running without learning | Stop-policy violation | Stop packets after two eligible no-learning candidates. Continue directly, rescope with the user, or explicitly accept a replacement contract; do not automatically fan out or transition. |
 | Watchdog fires | No meaningful progress in the quiet window | Inspect active work, finalize useful keeps, or rescope. |
 | `lane-runner` rejects a scout command | Pre-execution command policy | Scout commands must match the strict Git read-only argv allowlist. There is no non-Git override; use an implementation lane with a separate worktree or declared write scope, and remember that neither provides process/filesystem containment. |
 | Primary metric must change | Session semantics changed | Use `new-segment`; do not edit the ledger by hand. |
@@ -79,13 +93,10 @@ node scripts/autoresearch.mjs ledger-doctor --repair --yes --cwd <project>
 
 Confirm the returned `backupPath` before continuing.
 
-## Fast diagnostic packet
+## Fast canonical read
 
 ```bash
-node scripts/autoresearch.mjs state --cwd <project> --compact
-node scripts/autoresearch.mjs recommend-next --cwd <project> --compact --operator-checklist
-node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
-node scripts/autoresearch.mjs onboarding-packet --cwd <project> --compact
+node scripts/autoresearch.mjs state --cwd <project> --report
 ```
 
-Before any command that can commit, revert, or change branches, also run `git status --short`.
+Follow the canonical action. Run doctor, recommendation, or a complete onboarding packet only when that action or a maintainer diagnostic requires more detail; those surfaces do not get a separate vote. Before any command that can commit, revert, or change branches, also run `git status --short`.

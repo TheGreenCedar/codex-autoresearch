@@ -1,11 +1,15 @@
-import { actionToolNameForKind, resolveActionCommand } from "../action-metadata.js";
+import { actionToolNameForKind } from "../action-metadata.js";
+import {
+  projectCompactDecisionPlan,
+  projectResolvedDecision,
+  type ProjectedResolvedDecision,
+} from "../decision-projection.js";
+import type { DecisionPlan } from "../decision-compiler.js";
 import { unknownRecordOrNull as recordOrNull } from "../types/json.js";
 import {
   assertProjectionBudget,
   projectionBudget,
-  resolveSessionDecision,
   type ProjectionBudget,
-  type ResolvedDecision,
 } from "../session-read-model.js";
 
 type JsonObject = Record<string, unknown>;
@@ -22,12 +26,10 @@ export interface RecommendNextResponseInput {
   commands?: JsonObject;
   nextStep?: unknown;
   compactState?: unknown;
-  resumeAudit?: unknown;
-  decisionEnvelope?: unknown;
-  resolvedDecision?: unknown;
+  decisionPlan: DecisionPlan;
+  decisionPlanProjection?: unknown;
   operatorChecklist?: unknown;
   runtimeProvenance?: unknown;
-  loopContract?: unknown;
   approvalLedger?: unknown;
   resourcePreflight?: unknown;
   evidenceMaturity?: unknown;
@@ -47,19 +49,6 @@ export interface CompactRecommendNextResponseInput {
   compactState: unknown;
 }
 
-interface RecommendNextAuthorityInput {
-  viewModel?: JsonObject | null;
-  compact?: JsonObject | null;
-}
-
-export interface RecommendNextRuntimeAuthority {
-  resolvedDecision: ResolvedDecision;
-  decisionEnvelope: JsonObject | null;
-  canonicalNextAction: unknown;
-  runtimeProvenance: unknown;
-  loopContract: unknown;
-}
-
 export interface RecommendNextResponse {
   ok: boolean;
   workDir: string;
@@ -72,7 +61,8 @@ export interface RecommendNextResponse {
   commands: JsonObject;
   nextStep: unknown;
   compactState?: unknown;
-  resolvedDecision: ResolvedDecision;
+  decisionPlanProjection?: unknown;
+  resolvedDecision?: ProjectedResolvedDecision;
   operatorChecklist?: unknown;
   runtimeProvenance?: unknown;
   loopContract?: unknown;
@@ -106,7 +96,6 @@ const OPTIONAL_RECOMMEND_NEXT_FIELDS = [
   "compactState",
   "operatorChecklist",
   "runtimeProvenance",
-  "loopContract",
   "approvalLedger",
   "resourcePreflight",
   "evidenceMaturity",
@@ -124,38 +113,36 @@ const OPTIONAL_RECOMMEND_NEXT_FIELDS = [
 export function buildRecommendNextResponse(
   input: RecommendNextResponseInput,
 ): RecommendNextResponse {
+  const decisionPlan = input.decisionPlan;
+  const resolvedDecision = projectResolvedDecision(decisionPlan);
+  const action = {
+    ...resolvedDecision.canonicalNextAction,
+    toolName: actionToolNameForKind(decisionPlan.action.kind),
+  };
   const response: RecommendNextResponse = {
     ok: input.ok ?? true,
     workDir: input.workDir,
-    action: input.action ?? null,
-    nextAction: input.nextAction || "",
+    action,
+    nextAction: decisionPlan.action.reason,
     whySafe: input.whySafe || DEFAULT_WHY_SAFE,
     avoids: input.avoids || DEFAULT_AVOIDS,
     proof: input.proof || DEFAULT_PROOF,
-    blockers: Array.isArray(input.blockers) ? input.blockers : [],
-    commands: input.commands || {},
+    blockers: Array.isArray(resolvedDecision.loopContract.blockers)
+      ? resolvedDecision.loopContract.blockers
+      : [],
+    commands: {
+      ...input.commands,
+      primary: decisionPlan.action.command,
+    },
     nextStep: input.nextStep ?? null,
-    resolvedDecision: resolveSessionDecision({
-      state: {
-        resolvedDecision: input.resolvedDecision,
-        decisionEnvelope: input.decisionEnvelope,
-        resumeAudit: input.resumeAudit,
-        blockers: input.blockers,
-        nextAction: input.nextAction,
-        runtimeProvenance: input.runtimeProvenance,
-        loopContract: input.loopContract,
-      },
-      decisionEnvelope: input.decisionEnvelope ?? input.resumeAudit,
-      commands: input.commands,
-      runtimeProvenance: input.runtimeProvenance,
-      finalization: input.finalizationRunway,
-    }),
+    decisionPlanProjection: projectCompactDecisionPlan(decisionPlan),
+    resolvedDecision,
+    loopContract: resolvedDecision.loopContract,
   };
 
   for (const field of OPTIONAL_RECOMMEND_NEXT_FIELDS) {
     copyIfProvided(response, field, input[field]);
   }
-
   return response;
 }
 
@@ -164,91 +151,43 @@ export function buildCompactRecommendNextResponse({
   compactState,
 }: CompactRecommendNextResponseInput): RecommendNextResponse {
   const compact = recordOrNull(compactState) || {};
-  const resolvedDecision = resolveSessionDecision({
-    state: compact,
-    decisionEnvelope: compact.decisionEnvelope || compact.resumeAudit,
-    commands: compact.commands,
-    runtimeProvenance: compact.runtimeProvenance,
-  });
-  const canonicalNextAction = recordOrNull(resolvedDecision.canonicalNextAction);
-  if (canonicalNextAction && !canonicalNextAction.toolName) {
-    canonicalNextAction.toolName = actionToolNameForKind(canonicalNextAction.kind);
+  const decisionPlanProjection = recordOrNull(compact.decisionPlanProjection);
+  if (decisionPlanProjection?.kind !== "decision-plan-projection") {
+    throw new TypeError("compact recommend-next requires a canonical decision plan projection.");
   }
-  const commands = recordOrNull(compact.commands) || {};
+  const canonicalNextAction = recordOrNull(decisionPlanProjection?.action);
   const explicitCommand = stringOrEmpty(canonicalNextAction?.command);
-  const primaryCommand = resolveActionCommand(canonicalNextAction?.kind, commands, {
-    explicitCommand,
-  });
-  const nextAction =
-    resolvedDecision.nextAction || stringOrEmpty(compact.nextAction) || "Continue from state.";
+  const primaryCommand = explicitCommand;
+  const nextAction = stringOrEmpty(compact.nextAction) || "Continue from state.";
   const action = canonicalNextAction
-    ? { ...canonicalNextAction, command: primaryCommand }
+    ? {
+        ...canonicalNextAction,
+        reason: nextAction,
+        toolName: actionToolNameForKind(canonicalNextAction.kind),
+        command: primaryCommand,
+      }
     : { kind: "compact-state", reason: nextAction, command: primaryCommand };
   const handoff = compactRecommendNextHandoff(compact);
-  return enforceCompactHandoffBudget(
-    buildRecommendNextResponse({
-      ok: compact.ok === false ? false : true,
-      workDir: compactHandoffText(workDir),
-      action,
-      nextAction,
-      whySafe: COMPACT_WHY_SAFE,
-      avoids: COMPACT_AVOIDS,
-      proof: COMPACT_PROOF,
-      blockers: Array.isArray(compact.blockers) ? compact.blockers : [],
-      commands: primaryCommand ? { primary: primaryCommand } : {},
-      nextStep: null,
-      compactState: handoff.compactState,
-      resolvedDecision,
-      operatorReadout: compact.operatorReadout,
-      portfolioRecommendation: compact.portfolioRecommendation,
-      sessionDecisionCapsule: handoff.sessionDecisionCapsule,
-      evidenceNotes: handoff.evidenceNotes,
-      frictionSignals: handoff.frictionSignals,
-    }),
-  );
-}
-
-export function selectRecommendNextRuntimeAuthority({
-  viewModel = null,
-  compact = null,
-}: RecommendNextAuthorityInput): RecommendNextRuntimeAuthority {
-  const viewEnvelope = recordOrNull(viewModel?.decisionEnvelope);
-  const compactEnvelope =
-    recordOrNull(compact?.decisionEnvelope) || recordOrNull(compact?.resumeAudit);
-  const viewRuntimeProvenance =
-    recordOrNull(viewEnvelope?.runtimeProvenance) ||
-    recordOrNull(recordOrNull(viewModel?.processHygiene)?.runtimeDrift);
-  const viewRuntimeBlocker = hasRuntimeProvenanceBlocker(viewEnvelope, viewRuntimeProvenance);
-  const viewLoopContract = recordOrNull(viewEnvelope?.loopContract);
-  const viewLoopBlocker = loopContractBlocksNextPacket(viewLoopContract);
-  const decisionEnvelope =
-    viewRuntimeBlocker || viewLoopBlocker ? viewEnvelope : compactEnvelope || viewEnvelope;
-  const resolvedDecision = resolveSessionDecision({
-    state: {
-      resolvedDecision:
-        viewRuntimeBlocker || viewLoopBlocker ? undefined : compact?.resolvedDecision,
-      decisionEnvelope,
-      blockers: compact?.blockers,
-      nextAction: compact?.nextAction,
-      runtimeProvenance: compact?.runtimeProvenance,
-    },
-    decisionEnvelope,
-    commands: compact?.commands,
-    runtimeProvenance: viewRuntimeProvenance || compact?.runtimeProvenance,
-  });
-
-  return {
-    resolvedDecision,
-    decisionEnvelope,
-    canonicalNextAction:
-      resolvedDecision.canonicalNextAction ||
-      decisionEnvelope?.canonicalNextAction ||
-      compact?.canonicalNextAction ||
-      compactEnvelope?.canonicalNextAction ||
-      null,
-    runtimeProvenance: viewRuntimeProvenance || recordOrNull(compact?.runtimeProvenance) || null,
-    loopContract: decisionEnvelope?.loopContract || compact?.loopContract || null,
+  const response: RecommendNextResponse = {
+    ok: compact.ok === false ? false : true,
+    workDir: compactHandoffText(workDir),
+    action,
+    nextAction,
+    whySafe: COMPACT_WHY_SAFE,
+    avoids: COMPACT_AVOIDS,
+    proof: COMPACT_PROOF,
+    blockers: [],
+    commands: primaryCommand ? { primary: primaryCommand } : {},
+    nextStep: null,
+    compactState: handoff.compactState,
+    decisionPlanProjection,
+    operatorReadout: compact.operatorReadout,
+    portfolioRecommendation: compact.portfolioRecommendation,
+    sessionDecisionCapsule: handoff.sessionDecisionCapsule,
+    evidenceNotes: handoff.evidenceNotes,
+    frictionSignals: handoff.frictionSignals,
   };
+  return enforceCompactHandoffBudget(response);
 }
 
 function copyIfProvided<T extends object>(target: T, key: string, value: unknown) {
@@ -383,28 +322,4 @@ function withinCompactHandoffBudget(value: unknown): boolean {
     actual.lines <= COMPACT_HANDOFF_MAX.lines &&
     actual.tokens <= COMPACT_HANDOFF_MAX.tokens
   );
-}
-
-function hasRuntimeProvenanceBlocker(
-  envelope: JsonObject | null,
-  runtimeProvenance: JsonObject | null,
-): boolean {
-  if (
-    runtimeProvenance?.drifted === true ||
-    runtimeProvenance?.mismatched === true ||
-    runtimeProvenance?.stale === true ||
-    runtimeProvenance?.needsInspection === true
-  ) {
-    return true;
-  }
-  const loopContract = recordOrNull(envelope?.loopContract);
-  const blockers = Array.isArray(loopContract?.blockers) ? loopContract.blockers : [];
-  return blockers.some((blocker) => recordOrNull(blocker)?.kind === "runtime-provenance");
-}
-
-function loopContractBlocksNextPacket(loopContract: JsonObject | null): boolean {
-  if (!loopContract) return false;
-  const blockers = Array.isArray(loopContract.blockers) ? loopContract.blockers : [];
-  const warnings = Array.isArray(loopContract.warnings) ? loopContract.warnings : [];
-  return loopContract.canRunNextPacket === false || blockers.length > 0 || warnings.length > 0;
 }

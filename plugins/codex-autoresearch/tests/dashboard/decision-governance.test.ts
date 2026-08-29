@@ -10,7 +10,10 @@ import {
 import { PLUGIN_VERSION } from "../../lib/plugin-version.js";
 import { resolvePackageRoot } from "../../lib/runtime-paths.js";
 import { createDashboardHarness, dashboardConfigEntry } from ".././helpers/dashboard.js";
-import { assertNoMutatingDashboardCommands } from "./test-helpers.js";
+import {
+  assertNoMutatingDashboardCommands,
+  dashboardDecisionPlanProjection,
+} from "./test-helpers.js";
 
 const dashboard = createDashboardHarness();
 const { runDashboard } = dashboard;
@@ -27,40 +30,43 @@ test.afterEach(() => {
   dashboard.closeDashboardWindows();
 });
 
-test("dashboard action rail prioritizes stale packets before normal next actions", () => {
-  const rail = buildActionRail({
-    current: [
-      {
-        run: 1,
-        metric: 5,
-        status: "keep",
-        description: "Baseline",
-        confidence: 1,
-        asi: { next_action_hint: "Try a cache branch." },
+test("dashboard action rail projects stale-packet recovery from the canonical plan", () => {
+  const decisionPlanProjection = dashboardDecisionPlanProjection({
+    actionKind: "replace-packet",
+    actionReason: "Replace the stale packet before continuing.",
+    blockerCode: "stale-packet",
+    capabilityStatuses: { "run-packet": "recovery-only" },
+    loopKind: "blocked",
+    parentKind: "hand-back",
+    phase: "packet",
+  });
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "stale packet",
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
       },
-    ],
-    bestKept: { run: 1, metric: 5, status: "keep", description: "Baseline" },
-    latestFailure: null,
-    nextAction: "Try a cache branch.",
-    setupPlan: { defaultBenchmarkCommandReady: true },
+      segment: 0,
+      current: [{ run: 1, metric: 5, status: "keep", description: "Baseline" }],
+      baseline: 5,
+      best: 5,
+      decisionPlanProjection,
+    },
     guidedSetup: {
       stage: "stale-last-run",
-      nextAction: "Replace stale packet.",
-      commands: { replaceLast: "node scripts/autoresearch.mjs next --cwd ." },
-      lastRun: {
-        freshness: {
-          fresh: false,
-          reason: "Last-run packet is stale: history changed.",
-        },
-      },
+      nextAction: "Legacy guidance must not own the action.",
     },
     commands: [{ label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." }],
-  });
+  } as any);
 
-  assert.equal(rail[0].kind, "stale-packet");
-  assert.equal(rail[0].priority, "Critical");
-  assert.match(rail[0].detail, /stale/);
-  assert.match(rail[0].explanation.avoids, /old metric/);
+  assert.equal(decisionPlanProjection.capabilities["run-packet"], "recovery-only");
+  assert.equal(decisionPlanProjection.loopDisposition.kind, "blocked");
+  assert.equal(decisionPlanProjection.parentDisposition.kind, "hand-back");
+  assert.equal(viewModel.actionRail[0].kind, "replace-packet");
+  assert.equal(viewModel.actionRail[0].detail, "Replace the stale packet before continuing.");
+  assert.equal(Object.hasOwn(viewModel.actionRail[0], "command"), false);
 });
 
 test("dashboard view model strips packet and log commands from decision states", () => {
@@ -68,6 +74,15 @@ test("dashboard view model strips packet and log commands from decision states",
     {
       name: "pending log",
       expectedKind: "log-decision",
+      projection: dashboardDecisionPlanProjection({
+        actionKind: "log-decision",
+        actionReason: "Log the pending packet before another run.",
+        blockerCode: "pending-packet",
+        capabilityStatuses: { "run-packet": "blocked" },
+        loopKind: "blocked",
+        parentKind: "hand-back",
+        phase: "packet",
+      }),
       guidedSetup: {
         stage: "needs-log-decision",
         nextAction: "Log the last packet with an allowed status before starting another run.",
@@ -94,7 +109,16 @@ test("dashboard view model strips packet and log commands from decision states",
     },
     {
       name: "stale last-run",
-      expectedKind: "stale-packet",
+      expectedKind: "replace-packet",
+      projection: dashboardDecisionPlanProjection({
+        actionKind: "replace-packet",
+        actionReason: "Replace the stale packet before another run.",
+        blockerCode: "stale-packet",
+        capabilityStatuses: { "run-packet": "recovery-only" },
+        loopKind: "blocked",
+        parentKind: "hand-back",
+        phase: "packet",
+      }),
       guidedSetup: {
         stage: "stale-last-run",
         nextAction: "Last-run packet is stale.",
@@ -139,6 +163,7 @@ test("dashboard view model strips packet and log commands from decision states",
         baseline: 5,
         best: 5,
         confidence: 1,
+        decisionPlanProjection: item.projection,
       },
       setupPlan: {
         configured: true,
@@ -164,9 +189,12 @@ test("dashboard view model strips packet and log commands from decision states",
           command: "node scripts/autoresearch.mjs finalize-preview --cwd .",
         },
       ],
-    });
+    } as any);
 
     assert.equal(viewModel.nextBestAction.kind, item.expectedKind);
+    assert.equal(viewModel.decisionPlanProjection.action.command, "");
+    assert.equal(viewModel.decisionPlanProjection.loopDisposition.kind, "blocked");
+    assert.equal(viewModel.decisionPlanProjection.parentDisposition.kind, "hand-back");
     assert.equal(viewModel.guidedSetup.commands, undefined);
     assert.equal(viewModel.missionControl.logDecision.commandsByStatus, undefined);
     assert.equal(viewModel.missionControl.logDecision.liveAction, undefined);
@@ -178,150 +206,85 @@ test("dashboard view model strips packet and log commands from decision states",
   }
 });
 
-test("dashboard action rail marks governance actions as packet brakes", () => {
-  const brakeKinds = [
-    "context-distillation",
-    "lane-cleanup",
-    "runtime-provenance",
-    "packet-diagnostic",
-    "workflow-friction",
-    "finalization",
-    "stale-packet",
-    "setup",
-    "benchmark-command",
-    "log-decision",
-    "segment-transition",
-    "watchdog",
-  ];
+test("dashboard treats a compatibility summary without canonical capability as unavailable", () => {
+  const rail = buildActionRail({
+    current: [],
+    bestKept: null,
+    latestFailure: null,
+    nextAction: "",
+    decisionEnvelopeSummary: {
+      kind: "run-packet",
+      priority: "Next",
+      title: "Legacy packet guidance",
+      detail: "This summary has no canonical run-packet capability.",
+    },
+    commands: [{ label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." }],
+  });
 
-  for (const kind of brakeKinds) {
-    const rail = buildActionRail({
-      current: [],
-      bestKept: null,
-      latestFailure: null,
-      nextAction: "",
-      decisionEnvelopeSummary: {
-        kind,
-        priority: "Critical",
-        title: kind,
-        detail: "Resolve this governance action before spending another packet.",
-      },
-      commands: [{ label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." }],
-    });
-
-    assert.equal(rail[0].packetBrake, true, kind);
-    assert.doesNotMatch(String(rail[0].command || ""), /\bnext\b/, kind);
-  }
+  assert.equal(rail[0].kind, "decision-unavailable");
+  assert.equal(rail[0].packetBrake, true);
+  assert.equal(rail[0].source, "decision-plan");
+  assert.doesNotMatch(String(rail[0].command || ""), /\bnext\b/);
 });
 
-test("dashboard decision envelope priority ladder is stable across competing signals", () => {
-  const run = { run: 1, metric: 5, status: "keep", description: "Baseline" };
-  const baseState = {
-    config: {
-      name: "priority ladder",
-      metricName: "seconds",
-      metricUnit: "s",
-      bestDirection: "lower",
+test("dashboard uses the compiler projection instead of a local priority ladder", () => {
+  const decisionPlanProjection = dashboardDecisionPlanProjection({
+    actionKind: "configure-checks",
+    actionReason: "Configure accepted checks before another packet.",
+    blockerCode: "checks-required",
+    capabilityStatuses: {
+      "run-packet": "blocked",
+      "authorize-keep": "blocked",
     },
-    segment: 0,
-    current: [run],
-    baseline: 5,
-    best: 5,
-    confidence: null,
-  };
-  const lastRun = {
-    freshness: { fresh: true, reason: "Last-run packet matches the current ledger." },
-    suggestedStatus: "measure",
-  };
-  const cases = [
-    {
-      name: "stale packet outranks setup",
-      expected: "stale-packet",
-      context: {
-        guidedSetup: {
-          stage: "needs-setup",
-          nextAction: "Complete setup.",
-          lastRun: { freshness: { fresh: false, reason: "Last-run packet is stale." } },
-        },
+    loopKind: "blocked",
+    parentKind: "hand-back",
+    phase: "setup",
+  });
+  const viewModel = buildDashboardViewModel({
+    state: {
+      config: {
+        name: "canonical decision",
+        metricName: "seconds",
+        metricUnit: "s",
+        bestDirection: "lower",
       },
+      segment: 0,
+      current: [{ run: 1, metric: 5, status: "keep", description: "Baseline" }],
+      baseline: 5,
+      best: 5,
+      decisionPlanProjection,
+      limit: { limitReached: true },
     },
-    {
-      name: "fresh log decision outranks setup repair",
-      expected: "log-decision",
-      context: {
-        guidedSetup: {
-          stage: "needs-setup",
-          nextAction: "Complete setup.",
-          lastRun,
-        },
-      },
+    guidedSetup: {
+      stage: "stale-last-run",
+      nextAction: "Legacy stale-packet guidance.",
     },
-    {
-      name: "fresh log decision outranks benchmark repair",
-      expected: "log-decision",
-      context: {
-        guidedSetup: {
-          stage: "needs-benchmark-command",
-          nextAction: "Add a benchmark command.",
-          lastRun,
-        },
-      },
+    experimentMemory: {
+      plateau: { detected: true, recommendation: "Legacy plateau guidance." },
     },
-    {
-      name: "fresh log decision outranks segment transition",
-      expected: "log-decision",
-      context: {
-        guidedSetup: {
-          stage: "needs-log-decision",
-          lastRun,
-          state: { limit: { limitReached: true, remainingIterations: 0 } },
-        },
-      },
-    },
-    {
-      name: "segment transition outranks plateau",
-      expected: "segment-transition",
-      context: {
-        guidedSetup: {
-          stage: "limit-reached",
-          nextAction: "Start a new segment.",
-        },
-        experimentMemory: {
-          plateau: { detected: true, recommendation: "Scout a distant lane." },
-        },
-      },
-    },
-    {
-      name: "finalization readiness outranks plateau packet drift",
-      expected: "finalization",
-      context: {
-        experimentMemory: {
-          plateau: { detected: true, recommendation: "Scout a distant lane." },
-        },
-        finalizePreview: { ready: true, nextAction: "Preview finalization." },
-      },
-    },
-    {
-      name: "finalization readiness wins after active blockers",
-      expected: "finalization",
-      context: {
-        finalizePreview: { ready: true, nextAction: "Preview finalization." },
-      },
-    },
-  ];
+    finalizePreview: { ready: true, nextAction: "Legacy finalization guidance." },
+    commands: [{ label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." }],
+  } as any);
 
-  for (const item of cases) {
-    const viewModel = buildDashboardViewModel({
-      state: baseState,
-      commands: [{ label: "Next run", command: "node scripts/autoresearch.mjs next --cwd ." }],
-      ...item.context,
-    });
-    assert.equal(viewModel.nextBestAction.kind, item.expected, item.name);
-    assert.equal(viewModel.decisionEnvelopeSummary.kind, item.expected, item.name);
-  }
+  assert.equal(decisionPlanProjection.capabilities["run-packet"], "blocked");
+  assert.equal(decisionPlanProjection.capabilities["authorize-keep"], "blocked");
+  assert.equal(decisionPlanProjection.loopDisposition.kind, "blocked");
+  assert.equal(decisionPlanProjection.parentDisposition.kind, "hand-back");
+  assert.equal(viewModel.nextBestAction.kind, "configure-checks");
+  assert.equal(viewModel.decisionEnvelopeSummary.kind, "configure-checks");
+  assert.equal(viewModel.nextBestAction.detail, "Configure accepted checks before another packet.");
 });
 
-test("dashboard surfaces exhausted packet budget as a rescope blocker", () => {
+test("dashboard projects exhausted packet budget as a capability-scoped pause", () => {
+  const decisionPlanProjection = dashboardDecisionPlanProjection({
+    actionKind: "pause-packets",
+    actionReason: "Packet budget exhausted; hand control back before more packets.",
+    blockerCode: "packet-budget-exhausted",
+    capabilityStatuses: { "run-packet": "blocked" },
+    loopKind: "pause",
+    parentKind: "hand-back",
+    phase: "paused",
+  });
   const viewModel = buildDashboardViewModel({
     state: {
       config: {
@@ -335,6 +298,7 @@ test("dashboard surfaces exhausted packet budget as a rescope blocker", () => {
       results: [{ run: 1, metric: 1, status: "keep", description: "Baseline" }],
       baseline: 1,
       best: 1,
+      decisionPlanProjection,
       limit: {
         limitReached: true,
         budgetStatus: {
@@ -356,16 +320,25 @@ test("dashboard surfaces exhausted packet budget as a rescope blocker", () => {
         command: "node scripts/autoresearch.mjs new-segment --cwd . --dry-run",
       },
     ],
-  });
+  } as any);
 
-  assert.equal(viewModel.decisionEnvelope.budgetStatus.exhausted, true);
-  assert.equal(viewModel.decisionEnvelope.segmentTransition.triggeredBy[0], "budget");
-  assert.equal(viewModel.decisionEnvelopeSummary.kind, "segment-transition");
-  assert.match(viewModel.nextBestAction.detail, /Budget exhausted/);
-  assert.doesNotMatch(viewModel.nextBestAction.detail, /complete/i);
+  assert.equal(decisionPlanProjection.capabilities["run-packet"], "blocked");
+  assert.equal(decisionPlanProjection.capabilities["transition-segment"], "allowed");
+  assert.equal(decisionPlanProjection.loopDisposition.kind, "pause");
+  assert.equal(decisionPlanProjection.parentDisposition.kind, "hand-back");
+  assert.equal(viewModel.decisionEnvelopeSummary.kind, "pause-packets");
+  assert.match(viewModel.nextBestAction.detail, /Packet budget exhausted/);
+  assert.equal(Object.hasOwn(viewModel.nextBestAction, "command"), false);
 });
 
-test("dashboard action rail treats finalization readiness as the next decision after active blockers", () => {
+test("finalization readiness does not override the canonical dashboard action", () => {
+  const decisionPlanProjection = dashboardDecisionPlanProjection({
+    actionKind: "run-packet",
+    actionReason: "Run the accepted holdout packet next.",
+    loopKind: "continue",
+    parentKind: "hand-back",
+    phase: "packet",
+  });
   const viewModel = buildDashboardViewModel({
     state: {
       config: {
@@ -387,6 +360,7 @@ test("dashboard action rail treats finalization readiness as the next decision a
       baseline: 0.5,
       best: 0.5,
       confidence: null,
+      decisionPlanProjection,
     },
     guidedSetup: {
       stage: "ready",
@@ -404,10 +378,15 @@ test("dashboard action rail treats finalization readiness as the next decision a
         command: "node scripts/autoresearch.mjs finalize-preview --cwd .",
       },
     ],
-  });
+  } as any);
 
-  assert.equal(viewModel.nextBestAction.kind, "finalization");
-  assert.match(viewModel.nextBestAction.detail, /Preview finalization/);
+  assert.equal(decisionPlanProjection.capabilities.finalize, "allowed");
+  assert.equal(decisionPlanProjection.capabilities["run-packet"], "allowed");
+  assert.equal(decisionPlanProjection.loopDisposition.kind, "continue");
+  assert.equal(decisionPlanProjection.parentDisposition.kind, "hand-back");
+  assert.equal(viewModel.nextBestAction.kind, "run-packet");
+  assert.equal(viewModel.nextBestAction.detail, "Run the accepted holdout packet next.");
+  assert.doesNotMatch(viewModel.nextBestAction.detail, /Preview finalization/);
 });
 
 test("dashboard trust builder separates read-only mode from decision blockers", () => {
@@ -568,6 +547,13 @@ test("dashboard keeps static exports read-only when served over HTTP", async () 
         detail: "Read-only export. Serve the dashboard for fresh state.",
       },
       viewModel: {
+        decisionPlanProjection: dashboardDecisionPlanProjection({
+          actionKind: "finalize",
+          actionReason: "Preview finalization in the CLI.",
+          loopKind: "continue",
+          parentKind: "hand-back",
+          phase: "finalization",
+        }),
         nextBestAction: {
           title: "Preview finalization",
           detail: "Review the packet.",
@@ -589,8 +575,9 @@ test("dashboard keeps static exports read-only when served over HTTP", async () 
   assert.equal(queryById("next-command-copy") === null, true);
   assert.equal(
     queryById("decision-next-command")?.textContent?.trim(),
-    "node scripts/autoresearch.mjs finalize-preview --cwd .",
+    "Redacted here. Continue in the CLI.",
   );
+  assert.doesNotMatch(queryById("decision-next-command")?.textContent || "", /finalize-preview/);
   assert.equal(dom.window.document.querySelector(".mission-command") === null, true);
   dom.window.close();
 });
@@ -659,6 +646,13 @@ test("showcase dashboard labels explicit demo provenance while keeping diagnosti
 
 test("served dashboard exposes live refresh but no command-center controls", async () => {
   const viewModel = {
+    decisionPlanProjection: dashboardDecisionPlanProjection({
+      actionKind: "finalize",
+      actionReason: "Preview finalization in the CLI.",
+      loopKind: "continue",
+      parentKind: "hand-back",
+      phase: "finalization",
+    }),
     nextBestAction: {
       kind: "finalize-preview",
       priority: "Review",
@@ -721,7 +715,11 @@ test("served dashboard exposes live refresh but no command-center controls", asy
   assert.equal(queryById("mission-control-grid") === null, true);
   assert.equal(queryById("action-grid") === null, true);
   assert.equal(queryById("mission-control") === null, true);
-  assert.match(getById("decision-next-command").textContent || "", /finalize-preview/);
+  assert.equal(
+    getById("decision-next-command").textContent?.trim(),
+    "Redacted here. Continue in the CLI.",
+  );
+  assert.doesNotMatch(getById("decision-next-command").textContent || "", /finalize-preview/);
 });
 
 test("dashboard consumes trust, truth, evidence chips, and finalization checklist fields", async () => {
@@ -843,16 +841,25 @@ test("dashboard consumes trust, truth, evidence chips, and finalization checklis
 });
 
 test("dashboard keeps one canonical decision first in operate and audit views", async () => {
-  const viewModel = {
-    decisionEnvelope: {
-      resolvedStatus: "blocked",
-      strongestBlocker: "Promotion proof is missing.",
+  const decisionPlanProjection = dashboardDecisionPlanProjection({
+    actionKind: "collect-evidence",
+    actionReason: "Confirm the kept path before promotion.",
+    blockerCode: "quality-evidence-required",
+    capabilityStatuses: {
+      "authorize-keep": "blocked",
+      finalize: "blocked",
+      "parent-final-answer": "blocked",
     },
+    loopKind: "blocked",
+    parentKind: "block-final-answer",
+    phase: "direct-work",
+  });
+  const viewModel = {
+    decisionPlanProjection,
     decisionEnvelopeSummary: {
-      kind: "gate-quality",
+      kind: "collect-evidence",
       title: "Repeat the best packet",
       detail: "Confirm the kept path before promotion.",
-      command: "node scripts/autoresearch.mjs state --cwd . --compact",
     },
     nextBestAction: {
       priority: "Next move",
@@ -892,6 +899,11 @@ test("dashboard keeps one canonical decision first in operate and audit views", 
     { type: "run", run: 2, metric: 4.2, status: "keep", description: "Improved", confidence: 2 },
   ];
   const primaryReadouts = [];
+
+  assert.equal(decisionPlanProjection.capabilities["parent-final-answer"], "blocked");
+  assert.equal(decisionPlanProjection.loopDisposition.kind, "blocked");
+  assert.equal(decisionPlanProjection.parentDisposition.kind, "block-final-answer");
+  assert.equal(decisionPlanProjection.action.command, "");
 
   for (const view of ["audit", "operate"]) {
     const { dom, getById, queryById } = await runDashboard(
@@ -935,6 +947,23 @@ test("dashboard keeps one canonical decision first in operate and audit views", 
         (id) => getById(id).textContent?.trim(),
       ),
     );
+    assert.equal(
+      getById("decision-plan-decision-id").textContent,
+      decisionPlanProjection.decisionId,
+    );
+    assert.equal(getById("decision-plan-phase").textContent, decisionPlanProjection.phase);
+    assert.equal(getById("decision-plan-action-kind").textContent, "collect-evidence");
+    assert.equal(getById("decision-plan-blocker-code").textContent, "quality-evidence-required");
+    assert.equal(getById("decision-plan-parent-disposition").textContent, "block-final-answer");
+    assert.equal(
+      getById("decision-plan-contract-digest").textContent,
+      decisionPlanProjection.contractDigest,
+    );
+    assert.equal(
+      getById("decision-plan-evaluator-identity").textContent,
+      decisionPlanProjection.evaluatorIdentity,
+    );
+    assert.doesNotMatch(decision.textContent || "", /finalize-preview|scripts\/autoresearch/i);
     if (view === "operate") {
       assert.equal(queryById("workspace-grid") === null, true);
       assert.equal(queryById("strategy-memory") === null, true);
@@ -945,9 +974,9 @@ test("dashboard keeps one canonical decision first in operate and audit views", 
   assert.deepEqual(primaryReadouts[0], primaryReadouts[1]);
   assert.deepEqual(primaryReadouts[0], [
     "Blocked",
-    "Promotion proof is missing.",
+    "quality-evidence-required",
     "Confirm the kept path before promotion.",
-    "node scripts/autoresearch.mjs state --cwd . --compact",
+    "Redacted here. Continue in the CLI.",
   ]);
 });
 

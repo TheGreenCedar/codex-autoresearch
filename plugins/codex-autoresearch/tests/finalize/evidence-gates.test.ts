@@ -9,6 +9,7 @@ import {
   git,
   run,
   testWithTempRoot,
+  writeCompleteFinalizationEvidenceFixture,
   writeFile,
 } from "./helpers.js";
 
@@ -151,7 +152,7 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
-  "finalize preview refuses hard decision capsules",
+  "finalize preview keeps hard decision capsules display-only",
   "autoresearch-finalize-capsule-",
   async (root) => {
     const repo = path.join(root, "repo");
@@ -191,45 +192,53 @@ testWithTempRoot(
         "",
       ].join("\n"),
     );
-    await writeFile(
-      path.join(repo, "autoresearch.research", "benchmark-contract", "decision-capsule.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        kind: "session-decision-capsule",
-        status: "active",
-        enforcement: {
-          mode: "hard-block",
-          canRunNextPacket: false,
-          allowBoundedNext: false,
-          blocksFinalization: true,
-          clearingCondition: "Run benchmark-lint successfully before finalization.",
-          commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
-          triggeredBy: ["sessionDecisionCapsule", "benchmarkContract"],
-        },
-        bottleneck: "Benchmark wrapper cannot prove the primary METRIC.",
-        evidence: ["benchmark-lint timed out and parsed zero primary METRIC lines."],
-        nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
-        wrongNextActions: ["Do not run next or finalize."],
-        doNotRepeat: [],
-        commandBudgetWarnings: [],
-        generatedFrom: {
-          compactions: 0,
-          first: "2026-06-01T13:00:00.000Z",
-          last: "2026-06-01T13:10:00.000Z",
-          toolCounts: {},
-          topCommandHeads: [],
-        },
-        importedAt: "2026-06-01T13:10:00.000Z",
-      }),
+    const capsulePath = path.join(
+      repo,
+      "autoresearch.research",
+      "benchmark-contract",
+      "decision-capsule.json",
     );
+    const capsule = {
+      schemaVersion: 1,
+      kind: "session-decision-capsule",
+      status: "active",
+      enforcement: {
+        mode: "hard-block",
+        canRunNextPacket: false,
+        allowBoundedNext: false,
+        blocksFinalization: true,
+        clearingCondition: "Run benchmark-lint successfully before finalization.",
+        commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd <project>",
+        triggeredBy: ["sessionDecisionCapsule", "benchmarkContract"],
+      },
+      bottleneck: "Benchmark wrapper cannot prove the primary METRIC.",
+      evidence: ["benchmark-lint timed out and parsed zero primary METRIC lines."],
+      nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
+      wrongNextActions: ["Do not run next or finalize."],
+      doNotRepeat: [],
+      commandBudgetWarnings: [],
+      generatedFrom: {
+        compactions: 0,
+        first: "2026-06-01T13:00:00.000Z",
+        last: "2026-06-01T13:10:00.000Z",
+        toolCounts: {},
+        topCommandHeads: [],
+      },
+      importedAt: "2026-06-01T13:10:00.000Z",
+    };
+    await writeFile(capsulePath, JSON.stringify(capsule));
     await git(["add", "autoresearch.jsonl"], repo);
     await git(["commit", "-m", "log autoresearch session"], repo);
 
     const payload = await finalizePreview({ cwd: repo, trunk: "main" });
-    assert.equal(payload.ready, false);
     assert.equal(payload.sessionDecisionCapsule.kind, "session-decision-capsule");
-    assert.match(payload.nextAction, /Repair benchmark-lint/);
-    assert.match(payload.warnings.join("\n"), /primary METRIC/);
+    assert.notEqual(payload.actionCode, "decision-capsule");
+    assert.doesNotMatch(payload.nextAction, /Repair benchmark-lint/);
+    assert.doesNotMatch(payload.warnings.join("\n"), /primary METRIC/);
+    assert.equal(
+      payload.decisionPlanProjection.requiredEvidence.diagnosticCodes.includes("decision-capsule"),
+      false,
+    );
   },
 );
 
@@ -305,18 +314,15 @@ testWithTempRoot(
     await git(["config", "user.email", "codex@example.invalid"], repo);
     await git(["config", "user.name", "Codex Test"], repo);
     await writeFile(path.join(repo, "src", "base.txt"), "base\n");
+    await writeFile(path.join(repo, "src", "accepted.txt"), "baseline\n");
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "base"], repo);
 
     await git(["switch", "-c", "codex/autoresearch-evidence"], repo);
-    await writeFile(path.join(repo, "src", "rejected.txt"), "rejected\n");
-    await git(["add", "-A"], repo);
-    await git(["commit", "-m", "rejected keep"], repo);
+    await git(["commit", "--allow-empty", "-m", "rejected keep"], repo);
     const rejectedHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
 
-    await writeFile(path.join(repo, "src", "superseded.txt"), "superseded\n");
-    await git(["add", "-A"], repo);
-    await git(["commit", "-m", "superseded keep"], repo);
+    await git(["commit", "--allow-empty", "-m", "superseded keep"], repo);
     const supersededHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
 
     await writeFile(path.join(repo, "src", "accepted.txt"), "accepted\n");
@@ -358,7 +364,8 @@ testWithTempRoot(
         }),
       ].join("\n") + "\n",
     );
-    await git(["add", "autoresearch.jsonl"], repo);
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: acceptedHash });
+    await git(["add", "-f", "autoresearch.jsonl"], repo);
     await git(["commit", "-m", "session log"], repo);
 
     const preview = await finalizePreview({ cwd: repo, trunk: "main" });
@@ -401,7 +408,7 @@ testWithTempRoot(
       {
         name: "rejected",
         entry: (commit) => ({
-          run: 2,
+          run: 3,
           status: "keep",
           evidenceStatus: "rejected",
           commit,
@@ -411,7 +418,7 @@ testWithTempRoot(
       {
         name: "superseded",
         entry: (commit) => ({
-          run: 2,
+          run: 3,
           status: "keep",
           evidenceStatus: "superseded",
           commit,
@@ -421,7 +428,7 @@ testWithTempRoot(
       {
         name: "invalidated",
         entry: (commit) => ({
-          run: 2,
+          run: 3,
           status: "discard",
           commit,
           description: "Invalidated after evaluator contamination",
@@ -431,7 +438,7 @@ testWithTempRoot(
       {
         name: "reverted",
         entry: (commit) => ({
-          run: 2,
+          run: 3,
           status: "discard",
           commit,
           description: "Reverted after verification",
@@ -451,10 +458,23 @@ testWithTempRoot(
 
       const result = await run(process.execPath, [finalizer, output], repo, true);
       assert.notEqual(result.code, 0, variant.name);
-      assert.match(result.stderr, /accepted-current evidence changed/i, variant.name);
-      assert.match(result.stderr, /accepted commit membership/i, variant.name);
-      assert.match(result.stderr, /evidence status/i, variant.name);
-      assert.match(result.stderr, /Regenerate the finalizer plan/i, variant.name);
+      if (variant.name === "invalidated") {
+        const refusal = JSON.parse(result.stderr);
+        assert.equal(refusal.code, "mutation-precondition-blocked", variant.name);
+        assert.equal(refusal.preconditionDecision.capabilities.finalize, "blocked", variant.name);
+        assert.ok(
+          refusal.preconditionDecision.requiredEvidence.diagnosticCodes.includes(
+            "finalization-blocked",
+          ),
+          variant.name,
+        );
+        assert.equal(refusal.mutation, undefined, variant.name);
+      } else {
+        assert.match(result.stderr, /accepted-current evidence changed/i, variant.name);
+        assert.match(result.stderr, /accepted commit membership/i, variant.name);
+        assert.match(result.stderr, /evidence status/i, variant.name);
+        assert.match(result.stderr, /Regenerate the finalizer plan/i, variant.name);
+      }
       assert.equal((await git(["rev-parse", "HEAD"], repo)).stdout.trim(), plannedHead);
       assert.equal(
         (await git(["branch", "--list", "autoresearch-review/*"], repo)).stdout.trim(),
@@ -463,4 +483,5 @@ testWithTempRoot(
       );
     }
   },
+  { timeout: 400_000 },
 );

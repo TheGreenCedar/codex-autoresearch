@@ -108,7 +108,6 @@ export function buildResearchIntegrity({
     ? precomputedBestDevelopment
     : bestKeptRun(current, state.config);
   const promotionBest = state.promotion?.bestRun || null;
-  const metrics = parsedMetrics || latest?.metrics || {};
   const primaryMetricName = metricName || state.config?.metricName || config.metricName || "metric";
   const labels = buildResearchEvidenceLabels({
     current,
@@ -118,11 +117,7 @@ export function buildResearchIntegrity({
     bestDevelopment,
     promotionBest,
   });
-  const perfectSignals = buildPerfectMetricSignals({
-    metrics,
-    primaryMetricName,
-    bestDevelopment,
-  });
+  const perfectSignals: string[] = [];
   const promotionGrade = bestDevelopment ? promotionGradeValue(bestDevelopment) : null;
   const hasIntegrityGuard = hasConfiguredIntegrityGuard(config);
   const { warnings, blockers } = buildResearchIntegrityMessages({
@@ -189,25 +184,6 @@ function buildResearchEvidenceLabels({
     evidenceLabels.add("invalidated");
   }
   return [...evidenceLabels];
-}
-
-function buildPerfectMetricSignals({
-  metrics,
-  primaryMetricName,
-  bestDevelopment,
-}: {
-  metrics: LooseObject;
-  primaryMetricName: string;
-  bestDevelopment: LooseObject | null;
-}) {
-  const perfect = suspiciousPerfectMetrics(metrics, primaryMetricName);
-  const bestPerfect = bestDevelopment
-    ? suspiciousPerfectMetrics(
-        { [primaryMetricName]: bestDevelopment.metric, ...bestDevelopment.metrics },
-        primaryMetricName,
-      )
-    : [];
-  return uniqueStrings([...perfect, ...bestPerfect]);
 }
 
 function buildResearchIntegrityMessages({
@@ -427,23 +403,6 @@ function invalidationText(run: LooseObject) {
   )
     ? text
     : "";
-}
-
-function suspiciousPerfectMetrics(metrics: LooseObject = {}, primaryMetricName = "metric") {
-  const names: string[] = [];
-  for (const [name, rawValue] of Object.entries(metrics || {})) {
-    const value = finiteMetric(rawValue);
-    if (value == null) continue;
-    const metricName = String(name || primaryMetricName);
-    if (/quality_gap|gap/i.test(metricName)) {
-      if (value === 0) names.push(`${metricName}=0`);
-      continue;
-    }
-    if (/score|quality|hit|mrr|precision|recall|accuracy/i.test(metricName) && value >= 1) {
-      names.push(`${metricName}=${value}`);
-    }
-  }
-  return names;
 }
 
 function hasConfiguredIntegrityGuard(config: LooseObject = {}) {

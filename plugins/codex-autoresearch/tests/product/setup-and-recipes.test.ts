@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { PLUGIN_VERSION } from "../../lib/plugin-version.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 import { runCli, runCliWithAnswers, withTempDir } from "./helpers.js";
 
 test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", async () => {
@@ -39,10 +40,17 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     const firstGuide = await runCli(["guide", "--cwd", dir]);
     assert.equal(firstGuide.code, 0, firstGuide.stderr);
     const firstGuidePayload = JSON.parse(firstGuide.stdout);
-    assert.equal(firstGuidePayload.stage, "needs-setup");
-    assert.match(firstGuidePayload.commands.setup, / setup /);
-    assert.match(firstGuidePayload.commands.dashboard, / serve /);
+    const firstPlan = firstGuidePayload.state.decisionPlan;
+    assert.equal(firstPlan.kind, "decision-plan");
+    assert.equal(firstPlan.action.kind, "setup");
+    assert.match(firstPlan.action.command, / setup-plan /);
+    assert.equal(firstPlan.capabilities["run-packet"], "blocked");
+    assert.equal(firstPlan.capabilities["authorize-keep"], "blocked");
+    assert.equal(firstPlan.loopDisposition.kind, "blocked");
+    assert.equal(firstPlan.parentDisposition.kind, "hand-back");
+    assert.ok(firstPlan.requiredEvidence.diagnosticCodes.includes("setup-required"));
 
+    await mkdir(path.join(dir, "src"), { recursive: true });
     const setup = await runCli([
       "setup",
       "--cwd",
@@ -51,6 +59,16 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
       "memory-usage",
       "--name",
       "Memory loop",
+      "--checks-command",
+      `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`,
+      "--scope",
+      "src",
+      "--commit-paths",
+      "src",
+      "--packet-budget",
+      "6",
+      "--max-iterations",
+      "6",
     ]);
     assert.equal(setup.code, 0, setup.stderr);
     const payload = JSON.parse(setup.stdout);
@@ -62,13 +80,29 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
       await readFile(path.join(dir, "autoresearch.md"), "utf8"),
       /## Resume This Session/,
     );
+    const accepted = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "Accept the recipe-backed contract",
+      "--yes",
+    ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
 
     const resumeGuide = await runCli(["guide", "--cwd", dir]);
     assert.equal(resumeGuide.code, 0, resumeGuide.stderr);
     const resumeGuidePayload = JSON.parse(resumeGuide.stdout);
-    assert.equal(resumeGuidePayload.stage, "needs-baseline");
     assert.equal(resumeGuidePayload.setup.recommendedRecipe.id, "memory-usage");
     assert.equal(resumeGuidePayload.doctor.ok, true);
+    const resumePlan = resumeGuidePayload.state.decisionPlan;
+    assert.equal(resumePlan.kind, "decision-plan");
+    assert.equal(resumePlan.action.kind, "run-baseline");
+    assert.equal(resumePlan.capabilities["run-packet"], "allowed");
+    assert.equal(resumePlan.capabilities.finalize, "blocked");
+    assert.equal(resumePlan.loopDisposition.kind, "continue");
+    assert.equal(resumePlan.parentDisposition.kind, "hand-back");
+    assert.ok(resumePlan.requiredEvidence.diagnosticCodes.includes("needs-baseline"));
 
     const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
@@ -76,6 +110,12 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     assert.equal(doctorPayload.ok, true);
     assert.equal(doctorPayload.drift.local.surfaces.packageJson, PLUGIN_VERSION);
     assert.equal(doctorPayload.drift.ok, true);
+    assert.equal(doctorPayload.preconditionDecision.action.kind, "run-baseline");
+    assert.equal(doctorPayload.preconditionDecision.capabilities["run-packet"], "allowed");
+    assert.equal(doctorPayload.resultingDecision.action.kind, "run-baseline");
+    assert.ok(
+      doctorPayload.resultingDecision.requiredEvidence.diagnosticCodes.includes("needs-baseline"),
+    );
   });
 });
 
@@ -130,6 +170,7 @@ test("catalog recipes can drive setup-plan and setup", async () => {
     assert.match(planPayload.nextCommand, /--catalog/);
     assert.match(planPayload.nextCommand, /--trust-catalog/);
 
+    await mkdir(path.join(dir, "src"), { recursive: true });
     const setup = await runCli([
       "setup",
       "--cwd",
@@ -139,14 +180,37 @@ test("catalog recipes can drive setup-plan and setup", async () => {
       "--catalog",
       catalog,
       "--trust-catalog",
+      "--scope",
+      "src",
+      "--commit-paths",
+      "src",
+      "--packet-budget",
+      "6",
+      "--max-iterations",
+      "6",
     ]);
     assert.equal(setup.code, 0, setup.stderr);
     const setupPayload = JSON.parse(setup.stdout);
     assert.equal(setupPayload.init.config.metricName, "demo_score");
+    const accepted = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "Accept the catalog-backed contract",
+      "--yes",
+    ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
 
     const doctor = await runCli(["doctor", "--cwd", dir, "--check-benchmark"]);
     assert.equal(doctor.code, 0, doctor.stderr);
-    assert.equal(JSON.parse(doctor.stdout).ok, true);
+    const doctorPayload = JSON.parse(doctor.stdout);
+    assert.equal(doctorPayload.ok, true);
+    assert.equal(doctorPayload.resultingDecision.action.kind, "run-baseline");
+    assert.equal(doctorPayload.resultingDecision.capabilities["run-packet"], "allowed");
+    assert.ok(
+      doctorPayload.resultingDecision.requiredEvidence.diagnosticCodes.includes("needs-baseline"),
+    );
   });
 });
 

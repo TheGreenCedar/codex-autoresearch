@@ -10,6 +10,10 @@ import { benchmarkContractSnapshot } from "./benchmark/contract-snapshot.js";
 import { pendingLogTransactionWarnings } from "./commands/log.js";
 import { gitDirtyPathDetails, gitPrivatePath, insideGitRepo } from "./git-private-state.js";
 import { fingerprintsContainReason } from "./last-run-store.js";
+import {
+  acceptedExperimentContractForEvidenceValidation,
+  deriveExperimentContract,
+} from "./experiment-contract.js";
 import { currentState, listOption, pathExists, readConfig, readJsonl } from "./session-core.js";
 import { AUTORESEARCH_DASHBOARD_FILE, AUTORESEARCH_SESSION_FILES } from "./session-paths.js";
 import type { UnknownRecord } from "./types/json.js";
@@ -25,9 +29,11 @@ const AUTORESEARCH_OWNED_DIRS = [
 export async function operatorWarningsForWorkDir(
   workDir: string,
   stateOverride: CommandRecord | null = null,
+  configOverride: CommandRecord | null = null,
+  options: { records?: readonly CommandRecord[] } = {},
 ) {
   const inGit = await insideGitRepo(workDir);
-  const config = readConfig(workDir);
+  const config = configOverride || readConfig(workDir);
   const state = stateOverride || currentState(workDir);
   const warnings: CommandRecord[] = [];
   warnings.push(...(await pendingLogTransactionWarnings(workDir, inGit)));
@@ -69,13 +75,55 @@ export async function operatorWarningsForWorkDir(
         "Update commitPaths before relying on keep commits or use explicit --commit-paths for the next log.",
     });
   }
-  const contractDrift = await benchmarkContractDrift(workDir, state);
+  const contractDrift = await acceptedOrLegacyContractDrift(
+    workDir,
+    config,
+    state,
+    options.records,
+  );
   if (contractDrift) warnings.push(contractDrift);
   const protectedBenchmarkGuard = await protectedBenchmarkGuardForWorkDir(workDir, config, state);
   const protectedBenchmarkWarning = protectedBenchmarkWarningFromGuard(protectedBenchmarkGuard);
   if (protectedBenchmarkWarning) warnings.push(protectedBenchmarkWarning);
   warnings.push(...(await benchmarkIntegrityPreflight(workDir, config, state, { inGit })));
   return warnings;
+}
+
+async function acceptedOrLegacyContractDrift(
+  workDir: string,
+  config: CommandRecord,
+  state: CommandRecord,
+  records?: readonly CommandRecord[],
+) {
+  const capturedRecords = records ? [...records] : readJsonl(workDir);
+  let accepted = null;
+  try {
+    accepted = acceptedExperimentContractForEvidenceValidation(workDir, capturedRecords);
+  } catch {
+    // Accepted-event structure is diagnosed by the canonical contract reader.
+  }
+  if (!accepted) return await benchmarkContractDrift(workDir, state, capturedRecords);
+
+  const derivation = await deriveExperimentContract({
+    workDir,
+    config,
+    entries: capturedRecords,
+  });
+  if (derivation.status !== "invalid") return null;
+  const executionConflicts = derivation.conflicts.filter((conflict) =>
+    /^(checks|environment|evaluator|protectedInputs)/.test(conflict.field),
+  );
+  if (executionConflicts.length === 0) return null;
+  return {
+    code: "benchmark_contract_changed",
+    severity: "error",
+    run: null,
+    message: executionConflicts.map((conflict) => conflict.message).join(" "),
+    action:
+      "Restore the accepted execution inputs or start a new segment after reviewing the change.",
+    previousHash: accepted.contractDigest,
+    currentHash: null,
+  };
 }
 
 export async function benchmarkIntegrityPreflight(
@@ -131,9 +179,15 @@ export async function benchmarkIntegrityPreflight(
 export function latestBenchmarkContractEntry(
   workDir: string,
   state: CommandRecord | null | undefined,
+  records?: readonly CommandRecord[],
 ): CommandRecord | null {
   const fromState = latestBenchmarkContractEntryFromState(state);
   if (fromState) return fromState;
+  if (records) {
+    return (
+      [...records].reverse().find((entry) => record(entry.benchmarkContract).surfaceHash) || null
+    );
+  }
   try {
     const fromCurrentState = latestBenchmarkContractEntryFromState(currentState(workDir));
     if (fromCurrentState) return fromCurrentState;
@@ -147,8 +201,12 @@ export function latestBenchmarkContractEntry(
   );
 }
 
-async function benchmarkContractDrift(workDir: string, state: CommandRecord) {
-  const latest = latestBenchmarkContractEntry(workDir, state);
+async function benchmarkContractDrift(
+  workDir: string,
+  state: CommandRecord,
+  records?: readonly CommandRecord[],
+) {
+  const latest = latestBenchmarkContractEntry(workDir, state, records);
   if (!latest) return null;
   const latestContract = record(latest.benchmarkContract);
   const current = await benchmarkContractSnapshot(workDir, {

@@ -8,12 +8,10 @@ import {
 } from "../partial-results.js";
 import { boolOption } from "../cli/args.js";
 import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
-import { loopContinuation } from "./continuation.js";
 import {
   computeConfidence,
   currentState,
   finiteMetric,
-  readConfig,
   researchSlugFromArgs,
 } from "../session-core.js";
 import { appendJsonl } from "../session-records.js";
@@ -25,13 +23,13 @@ import type { LastRunPacket } from "../types/packet.js";
 type SessionState = ReturnType<typeof currentState>;
 
 export async function partialResultsCommand(args: UnknownRecord) {
-  const { workDir } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
+  const { workDir, config } = resolveAuthorizedWorkDir(String(args.working_dir || args.cwd || ""));
   const state = currentState(workDir);
   const artifact = args.artifact ? String(args.artifact) : "";
   const recordId = args.record ? String(args.record).trim() : "";
   const fromLast = boolOption(args.from_last ?? args.fromLast, !artifact || Boolean(recordId));
   const lastRun = fromLast || recordId ? await readLastRunPacket(workDir) : null;
-  if (lastRun) await assertFreshLastRunPacket(workDir, lastRun);
+  if (lastRun) await assertFreshLastRunPacket(workDir, lastRun, config);
   const lastRunPacket =
     lastRun ||
     partialResultPacketFromArtifact({
@@ -212,6 +210,5 @@ async function recordPartialResultCandidate({
     baseline: stateAfter.baseline,
     best: stateAfter.best,
     confidence: stateAfter.confidence,
-    continuation: loopContinuation(workDir, stateAfter, readConfig(workDir), "logged"),
   };
 }

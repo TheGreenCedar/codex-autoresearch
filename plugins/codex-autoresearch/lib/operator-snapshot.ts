@@ -33,26 +33,24 @@ export function buildOperatorSnapshot({
   const stateRecord = record(state);
   const recommendationRecord = record(recommendation);
   const doctorRecord = record(doctor);
-  const actions = [stateRecord, recommendationRecord, doctorRecord]
-    .map(publicCanonicalAction)
-    .filter((action) => Object.keys(action).length > 0);
-  const canonical = actions[0] || {};
+  const decisions = [doctorRecord, recommendationRecord, stateRecord]
+    .map(publicDecisionPlan)
+    .filter((decision) => Object.keys(decision).length > 0);
+  const canonical = decisions[0] || {};
+  const action = record(canonical.action);
   const runs = finiteInteger(stateRecord.runs);
-  const kind = text(canonical.kind) || (runs === 0 ? "next-packet" : "inspect-state");
-  const blockers = array(record(record(stateRecord.resolvedDecision).loopContract).blockers)
-    .map(actionReason)
-    .filter(Boolean);
+  const blocker = text(canonical.primaryBlockerCode) || null;
   const commands = record(stateRecord.commands);
   const primaryCommand =
-    text(canonical.command) ||
-    text(record(recommendationRecord.commands).primary) ||
-    text(commands.next) ||
-    text(commands.state);
+    text(action.command) || text(record(recommendationRecord.commands).primary) || "";
   return {
-    stage: stageFor(kind, runs),
-    strongestBlocker: blockers[0] || null,
+    stage: text(canonical.phase) || "recovery",
+    strongestBlocker: blocker,
     primaryCommand,
-    nextAction: text(canonical.reason) || text(stateRecord.nextAction) || "Inspect state.",
+    nextAction:
+      text(action.reason) ||
+      matchingProjectedText(canonical, recommendationRecord, "nextAction") ||
+      "Decision unavailable.",
     metricEvidence: {
       metric: text(stateRecord.metric) || text(record(stateRecord.config).metricName) || "metric",
       direction:
@@ -73,44 +71,42 @@ export function buildOperatorSnapshot({
       doctorRecord.privateState ||
       null,
     dirtyClassification: stateRecord.sourceCleanliness || null,
-    discrepancies: actionDiscrepancies(actions),
+    discrepancies: decisionDiscrepancies(decisions),
     diagnosticCommand: text(commands.state) || text(commands.doctor) || primaryCommand,
   };
 }
 
-function publicCanonicalAction(value: UnknownRecord): UnknownRecord {
-  const resolved = record(value.resolvedDecision);
-  return record(resolved.canonicalNextAction || value.canonicalNextAction);
+function publicDecisionPlan(value: UnknownRecord): UnknownRecord {
+  const plan = record(value.decisionPlan);
+  if (plan.kind === "decision-plan") return plan;
+  const projection = record(value.decisionPlanProjection);
+  return projection.kind === "decision-plan-projection" ||
+    projection.kind === "dashboard-decision-plan-projection"
+    ? projection
+    : {};
 }
 
-function actionDiscrepancies(actions: UnknownRecord[]): string[] {
-  if (actions.length < 2) return [];
-  const fields = ["kind", "reason", "command"] as const;
+function decisionDiscrepancies(decisions: UnknownRecord[]): string[] {
+  if (decisions.length < 2) return [];
+  const fields = ["decisionId", "generationId", "phase", "primaryBlockerCode"] as const;
   return fields
-    .filter((field) => new Set(actions.map((action) => text(action[field]))).size > 1)
-    .map((field) => `canonicalNextAction.${field} differs across public readouts`);
+    .filter((field) => new Set(decisions.map((decision) => text(decision[field]))).size > 1)
+    .map((field) => `decisionPlan.${field} differs across public readouts`);
 }
 
-function stageFor(kind: string, runs: number): string {
-  if (runs === 0 && /next|baseline|setup/.test(kind)) return "needs-baseline";
-  if (/log/.test(kind)) return "needs-log-decision";
-  if (/finaliz/.test(kind)) return "ready-for-finalization";
-  if (/runtime|doctor|drift/.test(kind)) return "needs-runtime-repair";
-  if (/block|stale|conflict|safety/.test(kind)) return "blocked";
-  return "measured-loop";
-}
-
-function actionReason(value: unknown): string {
-  const action = record(value);
-  return text(action.reason || action.message || action.kind || value);
+function matchingProjectedText(
+  canonical: UnknownRecord,
+  projection: UnknownRecord,
+  field: string,
+): string {
+  const projectedPlan = publicDecisionPlan(projection);
+  return text(projectedPlan.decisionId) === text(canonical.decisionId)
+    ? text(projection[field])
+    : "";
 }
 
 function record(value: unknown): UnknownRecord {
   return isUnknownRecord(value) ? value : {};
-}
-
-function array(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
 }
 
 function text(value: unknown): string {

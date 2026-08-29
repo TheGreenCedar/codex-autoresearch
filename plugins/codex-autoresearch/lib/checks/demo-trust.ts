@@ -1,6 +1,5 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { acceptedCurrentTreeFinalizationIssue } from "../finalization-acceptance.js";
 import { indent, node, ROOT, runCommand, type CommandSpec } from "./check-common.js";
 
 const dashboardDemoExportOutput = "tmp/autoresearch-dashboard.check.html";
@@ -41,13 +40,9 @@ export async function runDemoTrustCheck() {
     return false;
   }
   if (doctorPayload.ok !== true || (doctorPayload.issues || []).length) {
-    if (acceptedCurrentTreeFinalizationIssue(doctorPayload)) {
-      console.log("ok demo:doctor (current-tree finalization blocker exposed)");
-    } else {
-      console.log("fail demo:doctor");
-      console.log(indent(JSON.stringify({ ok: doctorPayload.ok, issues: doctorPayload.issues })));
-      return false;
-    }
+    console.log("fail demo:doctor");
+    console.log(indent(JSON.stringify({ ok: doctorPayload.ok, issues: doctorPayload.issues })));
+    return false;
   } else {
     console.log("ok demo:doctor");
   }

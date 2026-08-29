@@ -12,7 +12,10 @@ import {
 test("default help leads with the short happy path", () => {
   const help = renderCliHelp();
 
-  assert.match(help, /setup -> doctor -> next -> log -> state -> finalize-preview/);
+  assert.match(
+    help,
+    /prompt-plan -> direct \| setup -> state -> next -> log -> state -> finalize-preview/,
+  );
   assert.match(help, /Read-only planning:/);
   assert.match(help, /setup-plan --cwd <project>/);
   assert.match(help, /prompt-plan --cwd <project>/);

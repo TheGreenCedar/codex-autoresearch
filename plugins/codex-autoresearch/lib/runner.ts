@@ -1,6 +1,8 @@
 import { execFile, spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
+import type { ExecutableCommand } from "./experiment-contract.js";
+
 const DENIED_METRIC_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const METRIC_NAME_PATTERN = /^[^=\s]+$/;
 const OUTPUT_MAX_LINES = 20;
@@ -69,7 +71,9 @@ export interface MetricParseResult {
 export interface ProcessRunOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  envMode?: "inherit" | "minimal";
   maxOutputBytes?: number;
+  onProgress?: (event: { observedAt: string; output: string }) => void;
   terminateProcessTree?: ProcessTreeTerminator;
   terminationTimeoutMs?: number;
   timeoutSeconds?: number;
@@ -101,11 +105,15 @@ export interface ShellRunResult {
   outputTruncated: boolean;
   parsedMetrics: Record<string, number>;
   retainedMetricOutput: string;
+  spawnError: string | null;
+  spawnState: ProcessSpawnState;
   startedAt: string;
   termination: ProcessTreeTermination | null;
   terminationFailed: boolean;
   timedOut: boolean;
 }
+
+export type ProcessSpawnState = "unknown" | "spawned" | "failed-before-spawn";
 
 export function validateMetricName(name: unknown): string {
   const value = String(name || "");
@@ -144,6 +152,8 @@ export interface ProcessRunResult {
   lastOutputAt: string | null;
   outputTruncated: boolean;
   parsedMetrics: Record<string, number>;
+  spawnError: string | null;
+  spawnState: ProcessSpawnState;
   startedAt: string;
   stderr: string;
   stderrTruncated: boolean;
@@ -290,6 +300,8 @@ export async function runShell(
     let lastOutputAt: string | null = null;
     let timedOut = false;
     let termination: ProcessTreeTermination | null = null;
+    let spawnState: ProcessSpawnState = "unknown";
+    let spawnError: string | null = null;
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | null = null;
     const metricCollector = createMetricCollector();
@@ -371,6 +383,8 @@ export async function runShell(
           fullOutputTruncated,
           parsedMetrics: metricCollector.finish(),
           termination,
+          spawnState,
+          spawnError,
         }),
       );
     };
@@ -394,8 +408,15 @@ export async function runShell(
     child.stderr.on("data", (chunk) => {
       appendOutput(chunk.toString("utf8"));
     });
+    child.once("spawn", () => {
+      spawnState = "spawned";
+    });
     child.on("error", (error) => {
       const errorText = String(error.stack || error.message || error);
+      if (spawnState !== "spawned") {
+        spawnState = "failed-before-spawn";
+        spawnError = errorText;
+      }
       if (timedOut) {
         appendOutput(errorText);
         return;
@@ -418,10 +439,12 @@ function shellEnvironment(options: ShellRunOptions): NodeJS.ProcessEnv {
   return options.env ? { ...base, ...options.env } : base;
 }
 
-function minimalProcessEnvironment(): NodeJS.ProcessEnv {
-  const allowed = new Set(["path", "systemroot", "temp", "tmp"]);
+export function minimalProcessEnvironment(
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const allowed = new Set(["comspec", "path", "pathext", "systemroot", "temp", "tmp"]);
   const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
+  for (const [key, value] of Object.entries(source)) {
     if (allowed.has(key.toLowerCase()) && value != null) env[key] = value;
   }
   return env;
@@ -433,8 +456,10 @@ export async function runProcess(
   {
     cwd,
     env: extraEnv,
+    envMode = "inherit",
     timeoutSeconds = 600,
     maxOutputBytes = PROCESS_OUTPUT_CAPTURE_BYTES,
+    onProgress,
     terminateProcessTree: terminate = terminateProcessTree,
     terminationTimeoutMs,
   }: ProcessRunOptions = {},
@@ -447,7 +472,12 @@ export async function runProcess(
     const child = spawn(command, argv, {
       cwd,
       detached: process.platform !== "win32",
-      env: extraEnv ? { ...process.env, ...extraEnv } : undefined,
+      env:
+        envMode === "minimal"
+          ? { ...minimalProcessEnvironment(), ...extraEnv }
+          : extraEnv
+            ? { ...process.env, ...extraEnv }
+            : undefined,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -460,12 +490,15 @@ export async function runProcess(
     let lastOutputAt: string | null = null;
     let timedOut = false;
     let termination: ProcessTreeTermination | null = null;
+    let spawnState: ProcessSpawnState = "unknown";
+    let spawnError: string | null = null;
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | null = null;
     const metricCollector = createMetricCollector();
     const appendOutput = (target: "stdout" | "stderr", text: string) => {
       if (settled) return;
       lastOutputAt = new Date().toISOString();
+      onProgress?.({ observedAt: lastOutputAt, output: text });
       metricCollector.append(text);
       let value = target === "stdout" ? stdout : stderr;
       let truncated = target === "stdout" ? stdoutTruncated : stderrTruncated;
@@ -506,6 +539,8 @@ export async function runProcess(
           lastOutputAt,
           parsedMetrics: metricCollector.finish(),
           termination,
+          spawnState,
+          spawnError,
         }),
       );
     };
@@ -525,7 +560,14 @@ export async function runProcess(
     child.stderr.on("data", (chunk) => {
       appendOutput("stderr", stderrDecoder.write(chunk));
     });
+    child.once("spawn", () => {
+      spawnState = "spawned";
+    });
     child.on("error", (error) => {
+      if (spawnState !== "spawned") {
+        spawnState = "failed-before-spawn";
+        spawnError = error.message || String(error);
+      }
       if (timedOut) {
         appendOutput("stderr", error.message || String(error));
         return;
@@ -543,6 +585,60 @@ export async function runProcess(
       finish({ exitCode: code, stdout, stderr });
     });
   });
+}
+
+export async function runExecutableCommand(
+  command: ExecutableCommand,
+  cwd: string,
+  timeoutSeconds = 600,
+  options: ShellRunOptions = {},
+): Promise<ShellRunResult> {
+  const processCommand =
+    command.kind === "argv" ? command.executable : command.shell === "bash" ? "bash" : "powershell";
+  const processArgs =
+    command.kind === "argv"
+      ? command.args
+      : command.shell === "bash"
+        ? ["-c", command.script]
+        : ["-NoProfile", "-NonInteractive", "-Command", command.script];
+  const result = await runProcess(processCommand, processArgs, {
+    cwd,
+    env: options.env,
+    envMode: options.envMode,
+    maxOutputBytes: options.maxFullOutputBytes ?? FULL_OUTPUT_CAPTURE_BYTES,
+    onProgress: options.onProgress,
+    terminateProcessTree: options.terminateProcessTree,
+    terminationTimeoutMs: options.terminationTimeoutMs,
+    timeoutSeconds,
+  });
+  const combinedOutput = result.combinedOutput;
+  return {
+    command: command.kind === "shell" ? command.script : result.commandDisplay,
+    durationSeconds: result.durationSeconds,
+    exitCode: result.exitCode,
+    finishedAt: result.finishedAt,
+    fullOutput: combinedOutput,
+    fullOutputTruncated: result.outputTruncated,
+    lastOutputAt: result.lastOutputAt,
+    metricOutput: "",
+    metricOutputTruncated: false,
+    output: tailText(
+      combinedOutput,
+      Number.MAX_SAFE_INTEGER,
+      options.maxOutputBytes ?? OUTPUT_CAPTURE_BYTES,
+    ),
+    outputTruncated:
+      result.outputTruncated ||
+      Buffer.byteLength(combinedOutput, "utf8") > (options.maxOutputBytes ?? OUTPUT_CAPTURE_BYTES),
+    parsedMetrics: result.parsedMetrics,
+    retainedMetricOutput: "",
+    spawnError: result.spawnError,
+    spawnState: result.spawnState,
+    startedAt: result.startedAt,
+    termination: result.termination,
+    terminationFailed: result.terminationFailed,
+    timedOut: result.timedOut,
+  };
 }
 
 function appendBoundedOutput(current: string, text: string, maxBytes: number) {
@@ -573,6 +669,8 @@ function shellRunResult({
   fullOutputTruncated,
   parsedMetrics,
   termination,
+  spawnState,
+  spawnError,
 }: {
   command: string;
   exitCode: number | null;
@@ -587,6 +685,8 @@ function shellRunResult({
   retainedMetricOutput: string;
   startedAt: number;
   startedAtIso?: string;
+  spawnError: string | null;
+  spawnState: ProcessSpawnState;
   termination: ProcessTreeTermination | null;
   timedOut: boolean;
 }): ShellRunResult {
@@ -606,6 +706,8 @@ function shellRunResult({
     outputTruncated,
     fullOutputTruncated,
     parsedMetrics,
+    spawnError,
+    spawnState,
     termination,
     terminationFailed: Boolean(timedOut && !termination?.proven),
   };
@@ -624,6 +726,8 @@ function processResult({
   lastOutputAt,
   parsedMetrics = Object.create(null),
   termination,
+  spawnState,
+  spawnError,
 }: {
   commandDisplay: string;
   exitCode: number | null;
@@ -631,6 +735,8 @@ function processResult({
   parsedMetrics?: Record<string, number>;
   startedAt: number;
   startedAtIso?: string;
+  spawnError: string | null;
+  spawnState: ProcessSpawnState;
   stderr: string;
   stderrTruncated: boolean;
   stdout: string;
@@ -657,6 +763,8 @@ function processResult({
     stdoutTruncated,
     stderrTruncated,
     parsedMetrics,
+    spawnError,
+    spawnState,
     termination,
     terminationFailed: Boolean(timedOut && !termination?.proven),
   };

@@ -6,7 +6,7 @@ The public README and most pages under `docs/` are for people using the plugin. 
 
 Prefer ordinary paragraphs. Use a list when the reader really has a set of choices or steps, a table when they need to compare the same fields across several items, and a diagram when the relationship is hard to hold in a sentence. Do not turn every page into all three.
 
-Internal names should arrive after the plain-English idea. "A structured note saved with each experiment" comes before its `asi` field. "The command that decides whether another run is safe" comes before `loopContract`. If the internal name does not help the reader do anything, leave it out.
+Internal names should arrive after the plain-English idea. "A structured note saved with each experiment" comes before its `asi` field. "The one decision every readout shares" comes before `DecisionPlan`. If the internal name does not help the reader do anything, leave it out.
 
 Commands should be copyable and should appear close to the explanation they belong to. Warnings should say what can happen, not merely announce that something is unsafe. Link to the canonical explanation instead of repeating the same paragraph in Start, Operate, Trust, and the skill.
 
@@ -16,8 +16,11 @@ Do not narrate what the page is about to do. Just do it.
 
 The important facts must survive any rewrite:
 
+- fit is decided before repository discovery or setup; assist-only work creates no Autoresearch state
+- an accepted experiment contract is the sole evaluator and checks execution authority
+- every read surface projects one coherently compiled `DecisionPlan`
 - benchmarks print `METRIC name=value`
-- the primary metric decides movement, while checks and constraints protect correctness
+- typed metric semantics decide movement; metric names do not
 - `measure` is not a keep and cannot become finalization evidence
 - `next` writes the reusable packet; `benchmark-inspect` is the bounded diagnostic probe
 - keep and cleanup automation stays inside configured or explicitly supplied paths unless broad scope is explicitly allowed

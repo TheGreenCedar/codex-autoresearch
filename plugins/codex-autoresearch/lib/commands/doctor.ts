@@ -1,5 +1,5 @@
+import path from "node:path";
 import { type UnknownRecord, unknownRecordOrNull as recordOrNull } from "../types/json.js";
-import { withCanonicalActionCommand } from "../action-metadata.js";
 import {
   missingBenchmarkCommandMessage,
   packetEnvModeFromArgs,
@@ -7,41 +7,95 @@ import {
 } from "../benchmark/command-input.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../command-execution-boundary.js";
 import { boolOption, numberOption } from "../cli/args.js";
-import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
+import type { DecisionPlan } from "../decision-compiler.js";
+import { projectLoopContinuation } from "../decision-projection.js";
 import { decisionGuidance } from "../decision-guidance.js";
 import { buildDriftReport, runtimeProvenance } from "../drift-doctor.js";
 import { fixedControlBlockForCommand } from "../fixed-control.js";
+import {
+  acceptedExperimentContractForEvidenceValidation,
+  contractDerivationError,
+  deriveExperimentContract,
+  executionCommandText,
+  materializeExecutionEnvironment,
+  verifyExecutionSpecForWorkDir,
+  type ExecutionSpec,
+} from "../experiment-contract.js";
 import { insideGitRepo } from "../git-private-state.js";
 import { latestBenchmarkContractEntry } from "../operator-warnings.js";
 import { benchmarkContractDiagnostics } from "../packet-diagnostics.js";
 import { PLUGIN_VERSION } from "../plugin-version.js";
 import { resolvePackageRoot } from "../runtime-paths.js";
-import { buildDecisionEnvelope, currentState, finiteMetric, listOption } from "../session-core.js";
-import { continuationCommands, loopContinuation } from "./continuation.js";
+import { finiteMetric, listOption } from "../session-core.js";
 import { inspectRuntimeDrift } from "../runtime-drift-doctor.js";
-import { metricParseSource, parseMetricLines, runShell } from "../runner.js";
+import {
+  metricParseSource,
+  parseMetricLines,
+  runExecutableCommand,
+  runShell,
+  type ShellRunResult,
+} from "../runner.js";
 import { projectDoctorReadModel } from "../session-read-model.js";
+import {
+  loadCanonicalSessionDecision,
+  type SessionDecisionFactCollection,
+} from "../session-decision.js";
 import { redactCommandDisplay, redactEvidenceObject } from "../evidence-redaction.js";
 import { revalidateRecipeCatalogProvenance } from "../recipes.js";
-import { shouldSuppressPreflightGateBlockerForCapsule } from "../loop-governance.js";
 import { buildRunProgress } from "./run.js";
 import { publicState } from "./state.js";
+import { acceptedSessionDecisionContext } from "../cli/workdir-context.js";
 
 type CommandRecord = UnknownRecord;
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 
 export async function doctorSession(args: CommandRecord): Promise<CommandRecord> {
-  const { sessionCwd, workDir, config } = resolveAuthorizedWorkDir(
-    String(args.working_dir || args.cwd || ""),
-  );
+  const requestedCwd = String(args.working_dir || args.cwd || "");
+  const acceptedDecision = acceptedSessionDecisionContext();
+  let snapshot;
+  let canonicalPlan: DecisionPlan;
+  let decisionFacts: SessionDecisionFactCollection;
+  if (acceptedDecision) {
+    snapshot = acceptedDecision.snapshot;
+    canonicalPlan = acceptedDecision.plan;
+    decisionFacts = acceptedDecision.facts;
+  } else {
+    const loaded = await loadCanonicalSessionDecision({
+      requestedCwd,
+      allowOutsideWorkdir: boolOption(
+        args.allowOutsideWorkdir ?? args.allow_outside_workdir,
+        false,
+      ),
+    });
+    if (!loaded.ok) {
+      return {
+        ok: false,
+        code: loaded.diagnostic.code,
+        diagnostic: loaded.diagnostic,
+        attempts: loaded.attempts,
+      };
+    }
+    if (!loaded.factCollection) {
+      throw new Error("Canonical session fact collection is missing from the accepted snapshot.");
+    }
+    snapshot = loaded.snapshot;
+    canonicalPlan = loaded.plan;
+    decisionFacts = loaded.factCollection;
+  }
+  const { sessionCwd, workDir, config } = snapshot;
   const jsonFull = boolOption(args.jsonFull ?? args.json_full ?? args.full, false);
-  const state: CommandRecord = await publicState({ ...args, compact: false, jsonFull: true });
+  const state: CommandRecord = await publicState({
+    ...args,
+    compact: false,
+    jsonFull: true,
+    coherentSnapshot: snapshot,
+    canonicalDecisionPlan: canonicalPlan,
+    canonicalDecisionFacts: decisionFacts,
+  });
   const stateConfig = recordOrEmpty(state.config);
   const stateMemory = recordOrEmpty(state.memory);
   const scaffoldHealth = recordOrEmpty(state.scaffoldHealth);
   const researchIntegrity = recordOrEmpty(state.researchIntegrity);
-  const resolvedDecision = recordOrEmpty(state.resolvedDecision);
-  const stateLimit = recordOrEmpty(state.limit);
   const sourceCleanliness = recordOrEmpty(state.sourceCleanliness);
   const primaryMetricName = String(
     args.metric_name || args.metricName || config.metricName || stateConfig.metricName || "metric",
@@ -104,14 +158,43 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
   let benchmarkCommandHint = "";
   let benchmarkCommandSource: Awaited<ReturnType<typeof resolveBenchmarkCommandSource>> | null =
     null;
+  let acceptedEvaluatorExecution: ExecutionSpec | null = null;
+  let benchmarkAuthorityIssue = "";
   try {
     benchmarkCommandSource = await resolveBenchmarkCommandSource(args, workDir, {
       fallbackToDefault: true,
       config,
     });
     benchmarkCommandHint = String(benchmarkCommandSource.command || "");
+    const acceptedContract = acceptedExperimentContractForEvidenceValidation(
+      workDir,
+      snapshot.records,
+    );
+    if (acceptedContract) {
+      acceptedEvaluatorExecution = acceptedContract.evaluator.execution;
+      benchmarkCommandHint = executionCommandText(acceptedEvaluatorExecution.command);
+      if (doctorHasExecutionOverride(args, benchmarkCommandSource.source)) {
+        const derivation = await deriveExperimentContract({
+          workDir,
+          args,
+          config,
+          entries: snapshot.records,
+          packet: snapshot.lastRunPacket,
+        });
+        if (
+          derivation.status !== "accepted" ||
+          derivation.contract.contractDigest !== acceptedContract.contractDigest
+        ) {
+          benchmarkAuthorityIssue =
+            derivation.status === "invalid"
+              ? contractDerivationError(derivation).message
+              : "The requested doctor evaluator does not match the accepted experiment contract. Start a new segment to change evaluator authority.";
+        }
+      }
+    }
   } catch (error: unknown) {
-    pushUniqueMessage(issues, errorMessage(error));
+    benchmarkAuthorityIssue = errorMessage(error);
+    pushUniqueMessage(issues, benchmarkAuthorityIssue);
   }
   warnings.push(...drift.warnings);
   const guidance = await decisionGuidance({
@@ -131,38 +214,9 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
     pushUniqueMessage(issues, runtimeAuthority.blocker);
   }
   for (const blocker of guidanceBlockers(guidance)) {
-    if (!hasSharperDoctorBlocker(state, blocker)) {
-      pushUniqueMessage(issues, blocker);
-    }
+    pushUniqueMessage(issues, blocker);
   }
   for (const warning of guidanceWarnings(guidance)) pushUniqueMessage(warnings, warning);
-  const sessionState =
-    state.code === "ledger_jsonl_invalid"
-      ? { current: [], allRecords: [], ...state }
-      : currentState(workDir);
-  const loopAuthority = doctorLoopContractAuthority(
-    withCanonicalActionCommand(
-      buildDecisionEnvelope({
-        state: {
-          ...sessionState,
-          gateQuality: guidance.gateQuality,
-          preflight: publicPreflight,
-          portfolioRecommendation: null,
-          runtimeDriftSummary,
-          runtimeAuthority: guidance.runtimeAuthority,
-          scaffoldHealth,
-        },
-        nextAction:
-          String(resolvedDecision.nextAction || "").trim() ||
-          String(recordOrEmpty(resolvedDecision.canonicalNextAction).reason || "").trim() ||
-          "Run the next experiment, then log keep or discard with ASI.",
-        finalization: resolvedDecision.finalizationPressure || null,
-      }),
-      continuationCommands(workDir),
-    ),
-  );
-  for (const blocker of loopAuthority.blockers) pushUniqueMessage(issues, blocker);
-
   const benchmark: CommandRecord = {
     checked: false,
     command: String(args.command || ""),
@@ -184,8 +238,13 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
         requireCommand: false,
         config,
       }));
-    benchmark.command = benchmarkCommandSource.command;
-    if (!benchmark.command) {
+    benchmark.command = acceptedEvaluatorExecution
+      ? executionCommandText(acceptedEvaluatorExecution.command)
+      : benchmarkCommandSource.command;
+    if (benchmarkAuthorityIssue) {
+      benchmark.metricError = benchmarkAuthorityIssue;
+      pushUniqueMessage(issues, benchmarkAuthorityIssue);
+    } else if (!benchmark.command) {
       benchmark.metricError =
         benchmarkCommandSource.missingReason || missingBenchmarkCommandMessage();
       issues.push(String(benchmark.metricError));
@@ -196,85 +255,76 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
         benchmark.metricError = fixedControlBlock.issue;
         issues.push(String(fixedControlBlock.issue));
       } else {
-        const latestContract = recordOrNull(
-          latestBenchmarkContractEntry(workDir, state)?.benchmarkContract,
-        );
-        const explicitPacketEnvMode = args.packet_env_mode != null || args.packetEnvMode != null;
-        const doctorPacketEnvMode = explicitPacketEnvMode
-          ? packetEnvModeFromArgs(args)
-          : latestContract && Object.hasOwn(latestContract, "packetEnvMode")
-            ? packetEnvModeFromArgs({ packetEnvMode: latestContract.packetEnvMode })
-            : "minimal";
-        benchmark.packetEnvMode = doctorPacketEnvMode;
-        const run = await runShell(
-          String(benchmark.command || ""),
-          workDir,
-          numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60),
-          {
-            envMode: doctorPacketEnvMode,
-            retainMetricNames: [primaryMetricName],
-          },
-        );
-        benchmark.exitCode = run.exitCode;
-        benchmark.timedOut = run.timedOut;
-        benchmark.termination = run.termination;
-        benchmark.terminationFailed = run.terminationFailed;
-        const parsedMetrics = parseMetricLines(metricParseSource(run));
-        benchmark.parsedMetrics = parsedMetrics;
-        benchmark.emitsPrimary = finiteMetric(parsedMetrics[primaryMetricName]) != null;
-        benchmark.progress = buildRunProgress({
-          benchmark: { ...run },
-          checks: null,
-          checksCommand: null,
-          passed: run.exitCode === 0 && !run.timedOut && benchmark.emitsPrimary === true,
-        });
-        if (run.exitCode !== 0 || run.timedOut) {
-          issues.push(
-            `Benchmark command failed during doctor check: exit ${run.exitCode ?? "none"}${run.timedOut ? " (timed out)" : ""}.`,
+        const acceptedRun = acceptedEvaluatorExecution
+          ? await runAcceptedDoctorEvaluator({
+              workDir,
+              execution: acceptedEvaluatorExecution,
+              primaryMetricName,
+            })
+          : null;
+        if (acceptedRun?.issue) {
+          benchmark.metricError = acceptedRun.issue;
+          pushUniqueMessage(issues, acceptedRun.issue);
+        } else {
+          const latestContract = recordOrNull(
+            latestBenchmarkContractEntry(workDir, state)?.benchmarkContract,
           );
-          if (run.terminationFailed) {
-            warnings.push(
-              "Process-tree termination could not be proven; verify the reported PID and descendants before another command.",
+          const explicitPacketEnvMode = args.packet_env_mode != null || args.packetEnvMode != null;
+          const doctorPacketEnvMode = acceptedEvaluatorExecution
+            ? acceptedEvaluatorExecution.environment.inheritance
+            : explicitPacketEnvMode
+              ? packetEnvModeFromArgs(args)
+              : latestContract && Object.hasOwn(latestContract, "packetEnvMode")
+                ? packetEnvModeFromArgs({ packetEnvMode: latestContract.packetEnvMode })
+                : "minimal";
+          benchmark.packetEnvMode = doctorPacketEnvMode;
+          const run =
+            acceptedRun?.run ||
+            (await runShell(
+              String(benchmark.command || ""),
+              workDir,
+              numberOption(args.timeout_seconds ?? args.timeoutSeconds, 60),
+              {
+                envMode: doctorPacketEnvMode,
+                retainMetricNames: [primaryMetricName],
+              },
+            ));
+          benchmark.exitCode = run.exitCode;
+          benchmark.timedOut = run.timedOut;
+          benchmark.termination = run.termination;
+          benchmark.terminationFailed = run.terminationFailed;
+          const parsedMetrics = parseMetricLines(metricParseSource(run));
+          benchmark.parsedMetrics = parsedMetrics;
+          benchmark.emitsPrimary = finiteMetric(parsedMetrics[primaryMetricName]) != null;
+          benchmark.progress = buildRunProgress({
+            benchmark: { ...run },
+            checks: null,
+            checksCommand: null,
+            passed: run.exitCode === 0 && !run.timedOut && benchmark.emitsPrimary === true,
+          });
+          if (run.exitCode !== 0 || run.timedOut) {
+            issues.push(
+              `Benchmark command failed during doctor check: exit ${run.exitCode ?? "none"}${run.timedOut ? " (timed out)" : ""}.`,
             );
+            if (run.terminationFailed) {
+              warnings.push(
+                "Process-tree termination could not be proven; verify the reported PID and descendants before another command.",
+              );
+            }
+          } else if (!benchmark.emitsPrimary) {
+            benchmark.metricError = `Benchmark did not emit primary metric METRIC ${primaryMetricName}=<number>.`;
+            issues.push(String(benchmark.metricError));
           }
-        } else if (!benchmark.emitsPrimary) {
-          benchmark.metricError = `Benchmark did not emit primary metric METRIC ${primaryMetricName}=<number>.`;
-          issues.push(String(benchmark.metricError));
+          const driftWarning = benchmarkDriftWarning({
+            currentMetric: parsedMetrics[primaryMetricName],
+            bestMetric: state.best,
+            direction: stateConfig.bestDirection,
+            metricName: primaryMetricName,
+          });
+          if (driftWarning) warnings.push(driftWarning);
         }
-        const driftWarning = benchmarkDriftWarning({
-          currentMetric: parsedMetrics[primaryMetricName],
-          bestMetric: state.best,
-          direction: stateConfig.bestDirection,
-          metricName: primaryMetricName,
-        });
-        if (driftWarning) warnings.push(driftWarning);
       }
     }
-  }
-
-  let nextAction = "Run the next experiment, then log keep or discard with ASI.";
-  if (runtimeAuthority?.blocking === true) {
-    nextAction =
-      String(runtimeAuthority.blocker || "").trim() ||
-      "Inspect or refresh the installed plugin runtime before claiming installed behavior.";
-  } else if (recordOrEmpty(loopAuthority.canonicalNextAction).safeAction === "ledger-doctor") {
-    nextAction = "Run ledger-doctor before another packet.";
-  } else if (loopAuthority.nextAction) {
-    nextAction = loopAuthority.nextAction;
-  } else if (issues.some((issue) => /contract changed/i.test(issue))) {
-    nextAction =
-      "Start a new segment or explicitly invalidate the old evidence before running another packet.";
-  } else if (issues.some((issue) => /primary metric|benchmark/i.test(issue))) {
-    nextAction =
-      "Fix the benchmark command so it emits the configured primary metric before continuing.";
-  } else if (issues.some((issue) => /fixed_control_rerun_blocked/i.test(issue))) {
-    nextAction = "Reuse the fixed control artifact instead of running the benchmark check.";
-  } else if (state.runs === 0) {
-    nextAction = "Run and log a baseline before trying optimizations.";
-  } else if (stateLimit.limitReached) {
-    nextAction = "Iteration limit reached; export the dashboard or start a new segment.";
-  } else if (warnings.some((warning) => /dirty/.test(warning))) {
-    nextAction = "Review the dirty Git state before logging a kept result.";
   }
 
   const commandExecutionBoundary = benchmarkCommandHint
@@ -289,10 +339,11 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
   const contractDiagnostics = benchmarkContractDiagnostics({
     state,
   });
-  const continuationState = sessionState;
   const benchmarkContractChanged = warningDetails.some(
     (detail) => detail.code === "benchmark_contract_changed",
   );
+  const decisionPlan = canonicalPlan;
+  const nextAction = decisionPlan.action.reason;
   const publicBenchmark = {
     ...benchmark,
     command: redactCommandDisplay(benchmark.command),
@@ -322,9 +373,7 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
     gateQuality: guidance.gateQuality,
     commandAuthority: publicCommandAuthority,
     preflight: publicPreflight,
-    decisionEnvelope: loopAuthority.decisionEnvelope,
-    loopContract: loopAuthority.loopContract,
-    canonicalNextAction: loopAuthority.canonicalNextAction,
+    decisionPlan,
     commandExecutionBoundary,
     runtimeProvenance: runtimeProvenance(drift),
     scaffoldHealth: state.scaffoldHealth,
@@ -334,10 +383,67 @@ export async function doctorSession(args: CommandRecord): Promise<CommandRecord>
     warnings,
     warningDetails,
     nextAction,
-    continuation: loopContinuation(workDir, continuationState, config, "doctor"),
+    continuation: projectLoopContinuation(decisionPlan),
   };
   if (boolOption(args.explain, false)) result.explanation = doctorExplanation(result);
   return projectDoctorReadModel(result, { full: jsonFull });
+}
+
+function doctorHasExecutionOverride(args: CommandRecord, commandSource: string): boolean {
+  if (["command", "command-file", "separator"].includes(commandSource)) return true;
+  return [
+    "packet_env_mode",
+    "packetEnvMode",
+    "packet_env_file",
+    "packetEnvFile",
+    "env_file",
+    "envFile",
+    "timeout_seconds",
+    "timeoutSeconds",
+  ].some((key) => Object.hasOwn(args, key));
+}
+
+async function runAcceptedDoctorEvaluator({
+  workDir,
+  execution,
+  primaryMetricName,
+}: {
+  workDir: string;
+  execution: ExecutionSpec;
+  primaryMetricName: string;
+}): Promise<{ run: ShellRunResult | null; issue: string }> {
+  const verification = await verifyExecutionSpecForWorkDir(workDir, execution);
+  if (!verification.ok) {
+    return {
+      run: null,
+      issue: `The accepted evaluator execution specification is no longer valid: ${verification.conflicts
+        .map((conflict) => conflict.message)
+        .join(
+          " ",
+        )} Start a new segment after restoring or intentionally changing evaluator authority.`,
+    };
+  }
+  try {
+    const env = await materializeExecutionEnvironment(workDir, execution.environment);
+    return {
+      run: await runExecutableCommand(
+        execution.command,
+        path.resolve(workDir, execution.relativeWorkingDirectory),
+        execution.timeoutSeconds,
+        {
+          env,
+          envMode: execution.environment.inheritance,
+          retainMetricNames: [primaryMetricName],
+        },
+      ),
+      issue: "",
+    };
+  } catch (error: unknown) {
+    return {
+      run: null,
+      issue: `The accepted evaluator could not be materialized: ${errorMessage(error)} Start a new segment only if evaluator authority must change.`,
+    };
+  }
 }
 
 async function catalogTrustCheck(config: CommandRecord, sessionCwd: string) {
@@ -405,15 +511,6 @@ function uniqueStrings(items: unknown[]): string[] {
   return [...new Set(items.map((item) => String(item || "").trim()).filter(Boolean))];
 }
 
-function actionMessage(value: unknown): string {
-  if (typeof value === "string") return value.trim();
-  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
-  const record = value as CommandRecord;
-  return String(
-    record.reason || record.message || record.nextActionHint || record.title || record.kind || "",
-  ).trim();
-}
-
 function guidanceBlockers(guidance: CommandRecord): string[] {
   const gateQuality = recordOrEmpty(guidance.gateQuality);
   const preflight = recordOrEmpty(guidance.preflight);
@@ -435,52 +532,9 @@ function guidanceWarnings(guidance: CommandRecord): string[] {
   return uniqueStrings([...listOption(gateQuality.warnings), ...listOption(preflight.warnings)]);
 }
 
-function doctorLoopContractAuthority(decisionEnvelope: CommandRecord | null | undefined) {
-  const envelope = decisionEnvelope || {};
-  const loopContract = recordOrNull(envelope.loopContract);
-  const canonicalNextAction = recordOrNull(envelope.canonicalNextAction);
-  const blockers = Array.isArray(loopContract?.blockers)
-    ? loopContract.blockers.map(actionMessage).filter(Boolean)
-    : [];
-  const strongestActionMessage = actionMessage(loopContract?.strongestAction);
-  if (blockers.length === 0 && strongestActionMessage && loopContract?.ok === false) {
-    blockers.push(strongestActionMessage);
-  }
-  return {
-    decisionEnvelope: envelope,
-    loopContract,
-    canonicalNextAction,
-    blockers: uniqueStrings(blockers),
-    nextAction:
-      blockers.length > 0
-        ? actionMessage(canonicalNextAction) || strongestActionMessage || blockers[0]
-        : "",
-  };
-}
-
 function pushUniqueMessage(target: string[], message: unknown) {
   const text = String(message || "").trim();
   if (text && !target.includes(text)) target.push(text);
-}
-
-function hasSharperDoctorBlocker(state: CommandRecord, blocker: unknown = ""): boolean {
-  if (hasScaffoldBlocker(state.scaffoldHealth)) return true;
-  if (
-    blocker &&
-    shouldSuppressPreflightGateBlockerForCapsule(
-      { sessionDecisionCapsule: state.sessionDecisionCapsule },
-      blocker,
-    )
-  ) {
-    return true;
-  }
-  return false;
-}
-
-function hasScaffoldBlocker(scaffoldHealth: unknown): boolean {
-  return arrayValue(recordOrEmpty(scaffoldHealth).checks).some(
-    (check) => recordOrEmpty(check).severity === "blocker",
-  );
 }
 
 function recordOrEmpty(value: unknown): UnknownRecord {

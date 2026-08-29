@@ -6,727 +6,170 @@ import {
   fallbackCommandForKind,
   resolveActionCommand,
 } from "../lib/action-metadata.js";
-import { buildCompactRecommendNextResponse } from "../lib/commands/recommend-next.js";
-import { acceptedCurrentTreeFinalizationIssue } from "../lib/finalization-acceptance.js";
+import type { CoherentSessionSnapshot } from "../lib/coherent-session-snapshot.js";
+import { compileDecisionPlan, decisionDiagnostic } from "../lib/decision-compiler.js";
 import { buildGoalFrame } from "../lib/goal-frame.js";
 import { buildLaneLifecycle } from "../lib/lane-lifecycle.js";
 import { buildBudgetStatus } from "../lib/benchmark/budget-contract.js";
-import { buildLoopContractStatus, canonicalNextActionForLoop } from "../lib/loop-governance.js";
 import { buildOperatorChecklist } from "../lib/operator-checklist.js";
 import { firstSafeCommand, resolveCommandByKeys } from "../lib/safe-command-resolver.js";
-import { buildDecisionEnvelope } from "../lib/session-core.js";
+import { iterationLimitInfo } from "../lib/session-core.js";
 import {
   buildSessionDecisionCapsule,
   matchDecisionRules,
 } from "../lib/session-decision-capsule.js";
 
-test("context distillation outranks next packet", () => {
-  const action = canonicalNextActionForLoop({
-    contextDistillation: {
-      required: true,
-      reason: "Compactions reached 89; refresh a context capsule before more packets.",
-      command: "node scripts/autoresearch.mjs session-forensics --cwd . --dry-run",
-    },
-  });
-
-  assert.equal(action.kind, "context-distillation");
-  assert.match(action.reason, /Compactions reached 89/);
-  assert.match(action.command, /session-forensics/);
-});
-
-test("stale lanes and runtime drift block before finalization pressure", () => {
-  const action = canonicalNextActionForLoop({
-    laneLifecycle: {
-      staleLanes: [{ id: "scout-retrieval", status: "stale" }],
-      recommendation: "Close or refresh stale lane scout-retrieval before another packet.",
-    },
-    runtimeProvenance: {
-      drifted: true,
-      reason: "Source version 2.0.1 differs from installed version 1.5.1.",
-    },
-    finalizationReadiness: { ready: true, nextAction: "Finalize reviewable kept work." },
-  });
-
-  assert.equal(action.kind, "lane-cleanup");
-  assert.match(action.reason, /scout-retrieval/);
-});
-
-test("numeric loop priorities choose strongest action independent of append order", () => {
-  const status = buildLoopContractStatus({
-    laneLifecycle: { staleLanes: [{ id: "scout" }] },
-    scaffoldHealth: { blockers: ["Wrapper recursion must be fixed."] },
-  });
-
-  assert.deepEqual(
-    status.blockers.map((blocker) => blocker.kind),
-    ["safety-blocker", "lane-cleanup"],
-  );
-  assert.equal(status.strongestAction?.kind, "safety-blocker");
-});
-
-test("budget exhaustion is a segment-transition blocker, not goal completion", () => {
-  const state = {
-    config: { bestDirection: "lower", metricName: "seconds" },
-    current: [{ run: 1, metric: 1, status: "keep" }],
-    results: [{ run: 1, metric: 1, status: "keep" }],
-    limit: {
-      budgetStatus: buildBudgetStatus({
-        state: { current: [{ run: 1, metric: 1, status: "keep" }] },
-        runtimeConfig: {
-          packetBudget: 1,
-          budgetStartedAt: "2026-04-24T00:00:00.000Z",
-          budgetNote: "one packet only",
-        },
-      }),
-    },
-  };
-  const envelope = buildDecisionEnvelope({
-    state,
-    nextAction: "Run another packet.",
-  });
-  const status = buildLoopContractStatus(envelope);
-
-  assert.equal(envelope.budgetStatus.exhausted, true);
-  assert.equal(envelope.segmentTransition.triggeredBy[0], "budget");
-  assert.match(envelope.segmentTransition.nextAction, /Budget exhausted/);
-  assert.equal(status.ok, false);
-  assert.equal(status.canRunNextPacket, false);
-  assert.equal(status.strongestAction?.kind, "segment-transition");
-  assert.doesNotMatch(status.strongestAction?.reason || "", /complete/i);
-});
-
-test("unbounded iteration budget does not trigger segment transition", () => {
-  const state = {
-    config: { bestDirection: "lower", metricName: "seconds" },
-    current: [{ run: 1, status: "measure", metric: 10 }],
-    results: [],
-    limit: {
-      maxIterations: null,
-      remainingIterations: null,
-      limitReached: false,
-      budgetStatus: buildBudgetStatus({
-        state: { current: [{ run: 1, status: "measure", metric: 10 }] },
-        runtimeConfig: {},
-      }),
-    },
-  };
-  const envelope = buildDecisionEnvelope({
-    state,
-    nextAction: "Run another packet.",
-  });
-  const status = buildLoopContractStatus(envelope);
-
-  assert.equal(envelope.segmentTransition, null);
-  assert.equal(status.ok, true);
-  assert.equal(status.canRunNextPacket, true);
-  assert.equal(status.blockers.length, 0);
-});
-
-test("partial salvage outranks fresh packet logging within packet brakes", () => {
-  const status = buildLoopContractStatus({
-    salvageCandidates: [
-      {
-        id: "artifact-1",
-        status: "scored",
-        score: 1,
-        command: "node scripts/autoresearch.mjs partial-results --cwd . --record artifact-1",
-      },
-    ],
-    latestPacketFreshness: {
-      fresh: true,
-      reason: "Record the fresh last-run packet before starting another packet.",
-      command: "node scripts/autoresearch.mjs log --cwd . --from-last --status measure",
-    },
-  });
-
-  assert.deepEqual(
-    status.blockers.map((item) => item.kind),
-    ["partial-salvage", "log-decision"],
-  );
-  assert.equal(status.strongestAction?.kind, "partial-salvage");
-});
-
-test("fresh packet logging outranks generic preflight repair", () => {
-  const status = buildLoopContractStatus({
-    latestPacketFreshness: {
-      fresh: true,
-      reason: "Record the fresh last-run packet before starting another packet.",
-      command: "node scripts/autoresearch.mjs log --cwd . --from-last --status measure",
-    },
-    preflight: {
-      status: "blocked",
-      blockers: ["Configured checks command is malformed."],
-      nextCommand: "node scripts/autoresearch.mjs doctor --cwd . --explain",
-    },
-  });
-
-  assert.deepEqual(
-    status.blockers.map((item) => item.kind),
-    ["log-decision", "preflight"],
-  );
-  assert.equal(status.strongestAction?.kind, "log-decision");
-});
-
-test("stale watchdog intervention is the shared authority over generic preflight repair", () => {
-  const envelope = buildDecisionEnvelope({
+test("budget exhaustion pauses packets without blocking a segment transition or handback", () => {
+  const budget = buildBudgetStatus({
     state: {
-      config: { bestDirection: "lower", metricName: "seconds" },
-      current: [{ run: 1, metric: 10, status: "keep" }],
-      results: [{ run: 1, metric: 10, status: "keep" }],
-      preflight: {
-        status: "blocked",
-        blockers: ["No benchmark command is configured."],
-        nextCommand: "node scripts/autoresearch.mjs setup-plan --cwd .",
-      },
-    },
-    watchdog: {
-      stale: true,
-      recommendation: "Intervene after the stale progress window.",
-    },
-  });
-
-  assert.equal(envelope.loopContract.strongestAction.kind, "preflight");
-  assert.equal(envelope.canonicalNextAction.kind, "watchdog");
-  assert.match(envelope.nextAction, /Intervene/);
-});
-
-test("probe-failed runtime provenance remains non-blocking", () => {
-  const status = buildLoopContractStatus({
-    runtimeProvenance: {
-      status: "probe-failed",
-      drifted: false,
-      reason: "Runtime drift probe failed before source/runtime comparison.",
-    },
-  });
-
-  assert.equal(status.ok, true);
-  assert.equal(status.canRunNextPacket, true);
-  assert.equal(status.blockers.length, 0);
-});
-
-test("hard decision capsules block generic packets and finalization pressure", () => {
-  const status = buildLoopContractStatus({
-    sessionDecisionCapsule: {
-      enforcement: {
-        mode: "hard-block",
-        canRunNextPacket: false,
-        commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd .",
-        triggeredBy: ["sessionDecisionCapsule", "benchmarkContract"],
-      },
-      nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
-    },
-    finalizationReadiness: { ready: true, nextAction: "Finalize reviewable kept work." },
-  });
-
-  assert.equal(status.ok, false);
-  assert.equal(status.canRunNextPacket, false);
-  assert.equal(status.blockers[0].kind, "decision-capsule");
-  assert.match(status.blockers[0].reason, /benchmark-lint/);
-
-  const action = canonicalNextActionForLoop({
-    sessionDecisionCapsule: {
-      enforcement: {
-        mode: "hard-block",
-        canRunNextPacket: false,
-        commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd .",
-      },
-      nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
-    },
-  });
-  assert.equal(action.kind, "decision-capsule");
-});
-
-test("bounded-next decision capsules warn before generic next packets", () => {
-  const status = buildLoopContractStatus({
-    sessionDecisionCapsule: {
-      enforcement: {
-        mode: "bounded-next",
-        canRunNextPacket: false,
-        allowBoundedNext: true,
-        commandHint: "node scripts/autoresearch.mjs next --cwd . --timeout-seconds 30",
-      },
-      nextExperiment: "Measure initial search latency with a bounded packet.",
-    },
-  });
-
-  assert.equal(status.ok, true);
-  assert.equal(status.canRunNextPacket, false);
-  assert.equal(status.warnings[0].kind, "decision-capsule");
-  assert.match(status.warnings[0].command, /timeout-seconds/);
-});
-
-test("bounded-next decision capsules preserve independent gate and preflight blockers", () => {
-  const status = buildLoopContractStatus({
-    sessionDecisionCapsule: {
-      enforcement: {
-        mode: "bounded-next",
-        canRunNextPacket: false,
-        allowBoundedNext: true,
-        commandHint: "node scripts/autoresearch.mjs next --cwd . --timeout-seconds 30",
-      },
-      nextExperiment: "Measure initial search latency with a bounded packet.",
-    },
-    gateQuality: {
-      posture: "missing",
-      blockers: ["No independent checks gate is configured."],
-    },
-    preflight: {
-      status: "blocked",
-      blockers: ["No benchmark command is available for future packets."],
-      nextCommand: "node scripts/autoresearch.mjs doctor --cwd . --check-benchmark --explain",
-    },
-  });
-
-  assert.equal(status.ok, false);
-  assert.equal(status.canRunNextPacket, false);
-  assert.deepEqual(
-    status.blockers.map((item) => item.kind),
-    ["gate-quality", "preflight"],
-  );
-  assert.equal(status.warnings[0].kind, "decision-capsule");
-});
-
-test("hard decision capsules only suppress blockers with the same root cause", () => {
-  const independentStatus = buildLoopContractStatus({
-    sessionDecisionCapsule: {
-      enforcement: {
-        mode: "hard-block",
-        canRunNextPacket: false,
-        commandHint: "node scripts/autoresearch.mjs promotion-gate --cwd . --dry-run",
-        triggeredBy: ["promotionGate"],
-      },
-      nextExperiment: "Repair the promotion gate before finalizing.",
-    },
-    gateQuality: {
-      posture: "blocked",
-      blockers: ["No benchmark command is available for future packets."],
-    },
-  });
-
-  assert.deepEqual(
-    independentStatus.blockers.map((item) => item.kind),
-    ["gate-quality", "decision-capsule"],
-  );
-
-  const duplicateStatus = buildLoopContractStatus({
-    sessionDecisionCapsule: {
-      enforcement: {
-        mode: "hard-block",
-        canRunNextPacket: false,
-        commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd .",
-        triggeredBy: ["benchmarkContract"],
-      },
-      nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
-    },
-    preflight: {
-      status: "blocked",
-      blockers: ["No benchmark command is available for future packets."],
-      nextCommand: "node scripts/autoresearch.mjs doctor --cwd . --check-benchmark --explain",
-    },
-  });
-
-  assert.deepEqual(
-    duplicateStatus.blockers.map((item) => item.kind),
-    ["decision-capsule"],
-  );
-});
-
-test("portfolio trust blockers do not outrank hard decision capsules", () => {
-  const status = buildLoopContractStatus({
-    portfolioRecommendation: {
-      kind: "trust-blocker",
-      reason: "Installed cache is stale.",
-      nextActionHint: "Inspect installed cache.",
-    },
-    sessionDecisionCapsule: {
-      enforcement: {
-        mode: "hard-block",
-        canRunNextPacket: false,
-        commandHint: "node scripts/autoresearch.mjs benchmark-lint --cwd .",
-        triggeredBy: ["benchmarkContract"],
-      },
-      nextExperiment: "Repair benchmark-lint until the primary METRIC is emitted.",
-    },
-  });
-
-  assert.deepEqual(
-    status.blockers.map((item) => item.kind),
-    ["decision-capsule"],
-  );
-  assert.equal(status.strongestAction?.kind, "decision-capsule");
-});
-
-test("hard decision capsules preserve independent gate-quality blocker categories", () => {
-  const status = buildLoopContractStatus({
-    sessionDecisionCapsule: {
-      enforcement: {
-        mode: "hard-block",
-        canRunNextPacket: false,
-        commandHint: "node scripts/autoresearch.mjs promote-gate --cwd . --dry-run",
-        triggeredBy: ["promotionGate"],
-      },
-      nextExperiment: "Repair the promotion gate before finalizing.",
-    },
-    gateQuality: {
-      posture: "blocked",
-      blockers: [
-        "No independent checks gate is configured.",
-        "Holdout gate has not passed.",
-        "No benchmark command is available for future packets.",
-        "Promotion gate has not passed.",
-      ],
-    },
-  });
-
-  assert.deepEqual(
-    status.blockers.map((item) => item.kind),
-    ["gate-quality", "gate-quality", "gate-quality", "decision-capsule"],
-  );
-  assert.match(status.blockers[0].reason, /independent checks gate/);
-  assert.match(status.blockers[1].reason, /Holdout gate/);
-  assert.match(status.blockers[2].reason, /benchmark command/);
-
-  for (const blocker of [
-    "No independent checks gate is configured.",
-    "Holdout gate has not passed.",
-    "No benchmark command is available for future packets.",
-  ]) {
-    const independentStatus = buildLoopContractStatus({
-      sessionDecisionCapsule: {
-        enforcement: {
-          mode: "hard-block",
-          canRunNextPacket: false,
-          commandHint: "node scripts/autoresearch.mjs promote-gate --cwd . --dry-run",
-          triggeredBy: ["promotionGate"],
-        },
-        nextExperiment: "Repair the promotion gate before finalizing.",
-      },
-      gateQuality: {
-        posture: "blocked",
-        blockers: [blocker],
-      },
-    });
-
-    assert.deepEqual(
-      independentStatus.blockers.map((item) => item.kind),
-      ["gate-quality", "decision-capsule"],
-      blocker,
-    );
-  }
-});
-
-test("hard decision capsules suppress only exact structured trigger causes", () => {
-  const status = buildLoopContractStatus({
-    sessionDecisionCapsule: {
-      enforcement: {
-        mode: "hard-block",
-        canRunNextPacket: false,
-        commandHint: "node scripts/autoresearch.mjs checks-gate --cwd . --dry-run",
-        triggeredBy: ["checksGate"],
-      },
-      nextExperiment: "Repair the independent checks gate before another packet.",
-    },
-    gateQuality: {
-      posture: "blocked",
-      blockers: [
-        "No independent checks gate is configured.",
-        "Holdout gate has not passed.",
-        "Promotion gate has not passed.",
-        "No benchmark command is available for future packets.",
-      ],
-    },
-  });
-
-  assert.deepEqual(
-    status.blockers.map((item) => item.kind),
-    ["gate-quality", "gate-quality", "gate-quality", "decision-capsule"],
-  );
-  assert.deepEqual(
-    status.blockers.map((item) => item.reason),
-    [
-      "Holdout gate has not passed.",
-      "Promotion gate has not passed.",
-      "No benchmark command is available for future packets.",
-      "Repair the independent checks gate before another packet.",
-    ],
-  );
-});
-
-test("hard decision capsules suppress only the matching structured gate cause", () => {
-  const promotionDuplicate = buildLoopContractStatus({
-    sessionDecisionCapsule: {
-      enforcement: {
-        mode: "hard-block",
-        canRunNextPacket: false,
-        commandHint: "node scripts/autoresearch.mjs promote-gate --cwd . --dry-run",
-        triggeredBy: ["promotionGate"],
-      },
-      nextExperiment: "Repair the promotion gate before finalizing.",
-    },
-    gateQuality: {
-      posture: "blocked",
-      blockers: ["Promotion gate has not passed."],
-    },
-  });
-
-  assert.deepEqual(
-    promotionDuplicate.blockers.map((item) => item.kind),
-    ["decision-capsule"],
-  );
-
-  const holdoutStatus = buildLoopContractStatus({
-    sessionDecisionCapsule: {
-      enforcement: {
-        mode: "hard-block",
-        canRunNextPacket: false,
-        commandHint: "node scripts/autoresearch.mjs holdout-gate --cwd . --dry-run",
-        triggeredBy: ["holdoutGate"],
-      },
-      nextExperiment: "Repair the holdout gate before another packet.",
-    },
-    gateQuality: {
-      posture: "blocked",
-      blockers: ["Holdout gate has not passed."],
-    },
-  });
-
-  assert.deepEqual(
-    holdoutStatus.blockers.map((item) => item.kind),
-    ["decision-capsule"],
-  );
-});
-
-test("checked runtime provenance without drift remains non-blocking", () => {
-  const status = buildLoopContractStatus({
-    runtimeProvenance: {
-      status: "checked",
-      drifted: false,
-      driftConfidence: "checked",
-    },
-  });
-
-  assert.equal(status.ok, true);
-  assert.equal(status.canRunNextPacket, true);
-  assert.equal(status.blockers.length, 0);
-});
-
-test("stale installed runtime alone stays advisory for source checkout work", () => {
-  const status = buildLoopContractStatus({
-    runtimeProvenance: {
-      status: "checked",
-      installedRuntime: "stale",
-      builtRuntime: "available",
-      reason: "Installed cache is older than the local source checkout.",
-    },
-  });
-
-  assert.equal(status.ok, true);
-  assert.equal(status.canRunNextPacket, true);
-  assert.equal(status.blockers.length, 0);
-});
-
-test("installed runtime authority blocks canonical next action", () => {
-  const status = buildLoopContractStatus({
-    runtimeAuthority: {
-      trustScope: "installed-plugin",
-      blocking: true,
-      blocker:
-        "Missing installed plugin runtime blocks this installed-runtime verification; inspect or refresh the installed runtime before claiming installed behavior.",
-    },
-    preflight: {
-      status: "blocked",
-      blockers: ["No benchmark command is available for the first packet."],
-      nextCommand: "node scripts/autoresearch.mjs doctor --cwd C:/repo --explain",
-    },
-  });
-  const action = canonicalNextActionForLoop({
-    runtimeAuthority: {
-      trustScope: "installed-plugin",
-      blocking: true,
-      blocker:
-        "Missing installed plugin runtime blocks this installed-runtime verification; inspect or refresh the installed runtime before claiming installed behavior.",
-    },
-    preflight: {
-      status: "blocked",
-      blockers: ["No benchmark command is available for the first packet."],
-      nextCommand: "node scripts/autoresearch.mjs doctor --cwd C:/repo --explain",
-    },
-  });
-
-  assert.equal(status.ok, false);
-  assert.equal(status.canRunNextPacket, false);
-  assert.equal(status.blockers[0].kind, "runtime-authority");
-  assert.match(action.reason, /installed.*runtime/i);
-  assert.doesNotMatch(action.reason, /benchmark command/i);
-});
-
-test("source or built runtime failures remain loop blockers", () => {
-  const status = buildLoopContractStatus({
-    runtimeProvenance: {
-      status: "source-build-failed",
-      builtRuntime: "missing",
-      reason: "Built source runtime is missing; run the build before trusting this checkout.",
-    },
-  });
-
-  assert.equal(status.ok, false);
-  assert.equal(status.canRunNextPacket, false);
-  assert.equal(status.blockers[0].kind, "runtime-provenance");
-  assert.match(status.blockers[0].reason, /Built source runtime is missing/);
-});
-
-test("gate quality and preflight blockers prevent next packets", () => {
-  const status = buildLoopContractStatus({
-    gateQuality: {
-      posture: "missing",
-      blockers: ["No independent checks gate is configured."],
-    },
-    preflight: {
-      status: "blocked",
-      blockers: ["Configured checks command is malformed."],
-      nextCommand: "node scripts/autoresearch.mjs doctor --cwd . --explain",
-    },
-  });
-
-  assert.equal(status.ok, false);
-  assert.equal(status.canRunNextPacket, false);
-  assert.deepEqual(
-    status.blockers.map((item) => item.kind),
-    ["gate-quality", "preflight"],
-  );
-  assert.match(status.strongestAction?.reason || "", /checks gate/);
-
-  const action = canonicalNextActionForLoop({
-    preflight: {
-      status: "blocked",
-      blockers: ["No benchmark command is available for the first packet."],
-      nextCommand: "node scripts/autoresearch.mjs benchmark-lint --cwd .",
-    },
-  });
-  assert.equal(action.kind, "preflight");
-  assert.match(action.command, /benchmark-lint/);
-});
-
-test("last-run freshness does not suppress independent gate or preflight blockers", () => {
-  const status = buildLoopContractStatus({
-    latestPacketFreshness: {
-      fresh: false,
-      reason: "Last-run packet is stale.",
-    },
-    preflight: {
-      status: "blocked",
-      blockers: ["Configured checks command is malformed."],
-      nextCommand: "node scripts/autoresearch.mjs doctor --cwd . --explain",
-    },
-  });
-
-  assert.deepEqual(
-    status.blockers.map((item) => item.kind),
-    ["preflight", "stale-packet"],
-  );
-  assert.equal(status.strongestAction?.kind, "preflight");
-});
-
-test("active progress stays distinct from stale packets, recovery, and setup", () => {
-  const status = buildLoopContractStatus({
-    experimentEconomics: {
-      warnings: [
+      current: [
         {
-          code: "stale_progress",
-          recommendation: "Inspect the active artifact before restarting.",
+          run: 1,
+          runPurpose: "candidate",
+          evaluationAuthority: "accepted-contract",
+          candidateOrigin: { kind: "working-tree" },
         },
       ],
     },
-    latestPacketFreshness: {
-      fresh: false,
-      reason: "Last-run packet is stale.",
-    },
-    salvageCandidates: [{ id: "artifact-1", status: "diagnostic" }],
-    setupState: {
-      stage: "needs-setup",
-      blockers: ["Session setup is missing."],
+    runtimeConfig: {
+      packetBudget: 1,
+      budgetStartedAt: "2026-04-24T00:00:00.000Z",
+      budgetNote: "one packet only",
     },
   });
+  const plan = compileDecisionPlan(snapshotFixture(), [
+    decisionDiagnostic("packet-budget-exhausted", {
+      message: budget.stopReason,
+    }),
+  ]);
 
-  assert.equal(status.canRunNextPacket, false);
-  assert.deepEqual(
-    status.blockers.map((item) => item.kind),
-    ["partial-salvage", "active-progress", "stale-packet", "setup"],
-  );
-  assert.equal(status.strongestAction?.kind, "partial-salvage");
-  assert.match(status.blockers[1].reason, /active artifact/i);
+  assert.equal(budget.exhausted, true);
+  assert.equal(budget.packetsRemaining, 0);
+  assert.equal(plan.primaryBlockerCode, "packet-budget-exhausted");
+  assert.equal(plan.action.kind, "pause-packets");
+  assert.equal(plan.capabilities["run-packet"], "blocked");
+  assert.equal(plan.capabilities["transition-segment"], "allowed");
+  assert.equal(plan.capabilities["parent-final-answer"], "allowed");
+  assert.equal(plan.parentDisposition.mayClaimCompletion, false);
 });
 
-test("packet-brake blocker actions get non-next fallback commands", () => {
-  const commands = {
-    doctorExplain: "node scripts/autoresearch.mjs doctor --cwd C:/repo --check-benchmark --explain",
-    doctor: "node scripts/autoresearch.mjs doctor --cwd C:/repo --explain",
-    benchmarkLint: "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo",
-    state: "node scripts/autoresearch.mjs state --cwd C:/repo --compact --report",
-    finalizePreview: "node scripts/autoresearch.mjs finalize-preview --cwd C:/repo",
-    finalizeCurrentTree:
-      "node scripts/autoresearch.mjs finalize-current-tree --cwd C:/repo --exclude-session-artifacts",
-  };
-  const actions = [
-    canonicalNextActionForLoop({
-      gateQuality: {
-        posture: "blocked",
-        blockers: ["No independent checks gate is configured."],
-      },
-    }),
-    canonicalNextActionForLoop({
-      preflight: {
-        status: "blocked",
-        blockers: ["No benchmark command is available for the first packet."],
-      },
-    }),
-    canonicalNextActionForLoop({
-      portfolioRecommendation: {
-        kind: "trust-blocker",
-        reason: "Portfolio evidence is not trustworthy enough to continue.",
-      },
-    }),
-    canonicalNextActionForLoop({
-      workflowFriction: [
+test("packet budget counts baseline and candidate packets but excludes manual, diagnostic, and holdout rows", () => {
+  const budget = buildBudgetStatus({
+    state: {
+      current: [
         {
-          kind: "metric_saturated_not_promotable",
-          severity: "blocker",
-          reason: "Current metric family is saturated without promotion evidence.",
+          run: 1,
+          runPurpose: "diagnostic",
+          evaluationAuthority: "manual",
+          candidateOrigin: { kind: "none" },
+        },
+        {
+          run: 2,
+          runPurpose: "baseline",
+          evaluationAuthority: "accepted-contract",
+          candidateOrigin: { kind: "working-tree" },
+        },
+        {
+          run: 3,
+          runPurpose: "candidate",
+          evaluationAuthority: "accepted-contract",
+          candidateOrigin: { kind: "commit", oid: "b".repeat(40) },
+        },
+        {
+          run: 4,
+          runPurpose: "diagnostic",
+          evaluationAuthority: "accepted-contract",
+          candidateOrigin: { kind: "working-tree" },
+        },
+        {
+          run: 5,
+          runPurpose: "holdout",
+          evaluationAuthority: "external",
+          candidateOrigin: { kind: "commit", oid: "c".repeat(40) },
+        },
+        {
+          run: 6,
+          runPurpose: "baseline",
+          evaluationAuthority: "manual",
+          candidateOrigin: { kind: "none" },
         },
       ],
-    }),
-    canonicalNextActionForLoop({
-      finalizationReadiness: {
-        actionCode: "current-tree-finalization",
-        warnings: ["Current branch tree is not covered by selected kept groups."],
-      },
-    }),
-  ];
+    },
+    runtimeConfig: { packetBudget: 3 },
+  });
 
-  assert.deepEqual(
-    actions.map((action) => action.kind),
-    [
-      "gate-quality",
-      "preflight",
-      "portfolio-trust-blocker",
-      "metric-saturation",
-      "current-tree-finalization",
-    ],
+  assert.equal(budget.packetsUsed, 2);
+  assert.equal(budget.packetsRemaining, 1);
+  assert.equal(budget.exhausted, false);
+});
+
+test("packet budget conservatively counts malformed and legacy evidence axes", () => {
+  const budget = buildBudgetStatus({
+    state: {
+      current: [
+        {
+          run: 1,
+          runPurpose: "candidate",
+          evaluationAuthority: "typo",
+          candidateOrigin: { kind: "working-tree" },
+        },
+        {
+          run: 2,
+          runPurpose: "typo",
+          evaluationAuthority: "accepted-contract",
+          candidateOrigin: { kind: "working-tree" },
+        },
+        { run: 3, status: "measure" },
+      ],
+    },
+    runtimeConfig: { packetBudget: 4 },
+  });
+
+  assert.equal(budget.packetsUsed, 3);
+  assert.equal(budget.packetsRemaining, 1);
+});
+
+test("iteration limits use packet-purpose rows instead of manual observations", () => {
+  const limit = iterationLimitInfo(
+    {
+      current: [
+        {
+          run: 1,
+          status: "measure",
+          runPurpose: "baseline",
+          evaluationAuthority: "manual",
+          candidateOrigin: { kind: "none" },
+        },
+        {
+          run: 2,
+          status: "measure",
+          runPurpose: "baseline",
+          evaluationAuthority: "accepted-contract",
+          candidateOrigin: { kind: "working-tree" },
+        },
+      ],
+    } as any,
+    { maxIterations: 2 },
   );
-  for (const action of actions) {
-    const command = resolveActionCommand(action.kind, commands, {
-      explicitCommand: action.command,
-    });
-    assert.notEqual(command, "", action.kind);
-    assert.doesNotMatch(command, /\bnext\b/, action.kind);
-    if (action.kind === "current-tree-finalization") {
-      assert.match(command, /\bfinalize-current-tree\b/, action.kind);
-    } else {
-      assert.doesNotMatch(command, /\bfinalize-current-tree\b/, action.kind);
-    }
-    assert.equal(typeof action.label, "string", action.kind);
-    assert.notEqual(action.label, "", action.kind);
-  }
+
+  assert.equal(limit.remainingIterations, 1);
+  assert.equal(limit.limitReached, false);
+});
+
+test("an unconfigured packet budget remains available", () => {
+  const budget = buildBudgetStatus({
+    state: { current: [{ run: 1, status: "measure", metric: 10 }] },
+    runtimeConfig: {},
+  });
+  const plan = compileDecisionPlan(snapshotFixture(), []);
+
+  assert.equal(budget.configured, false);
+  assert.equal(budget.exhausted, false);
+  assert.equal(budget.packetBudget, null);
+  assert.equal(budget.packetsRemaining, null);
+  assert.equal(plan.primaryBlockerCode, null);
+  assert.equal(plan.capabilities["run-packet"], "allowed");
+  assert.equal(plan.loopDisposition.canRunPacket, true);
 });
 
 test("readout action fallback skips process-starting fallback commands", () => {
@@ -817,138 +260,16 @@ test("dashboard-style metadata fallback skips unsafe dry-run command payloads", 
   );
 });
 
-test("current-tree finalization acceptance requires only one issue and a finalization command", () => {
-  const payload = {
-    issues: ["Finalization preview exposed a structured current-tree blocker."],
-    finalizationReadiness: {
-      actionCode: "current-tree-finalization",
-    },
-    loopContract: {
-      canRunNextPacket: false,
-      strongestAction: {
-        kind: "current-tree-finalization",
-        command:
-          "node C:/worktrees/ar-v27-next-action/scripts/autoresearch.mjs finalize-preview --cwd C:/repo",
-      },
-      blockers: [{ kind: "current-tree-finalization" }],
-    },
-  };
-
-  assert.equal(acceptedCurrentTreeFinalizationIssue(payload), payload.issues[0]);
-  assert.equal(
-    acceptedCurrentTreeFinalizationIssue({
-      issues: [
-        "Use finalize-current-tree or log prerequisite/support commits so selected groups cover the current non-session branch diff.",
-      ],
-      resolvedDecision: {
-        command:
-          "node scripts/autoresearch.mjs finalize-current-tree --cwd C:/repo --exclude-session-artifacts",
-        canonicalNextAction: {
-          kind: "current-tree-finalization",
-          command:
-            "node scripts/autoresearch.mjs finalize-current-tree --cwd C:/repo --exclude-session-artifacts",
-        },
-        finalizationPressure: {
-          actionCode: "current-tree-finalization",
-        },
-        loopContract: {
-          canRunNextPacket: false,
-          strongestAction: {
-            kind: "current-tree-finalization",
-            command: "",
-          },
-          blockers: [{ kind: "current-tree-finalization" }],
-        },
-      },
-    }),
-    "Use finalize-current-tree or log prerequisite/support commits so selected groups cover the current non-session branch diff.",
-  );
-  assert.equal(
-    acceptedCurrentTreeFinalizationIssue({
-      ...payload,
-      finalizationReadiness: {},
-      issues: ["An unrelated issue should not be accepted by structure alone."],
-    }),
-    null,
-  );
-  assert.equal(
-    acceptedCurrentTreeFinalizationIssue({
-      ...payload,
-      issues: [...payload.issues, "Configured commitPaths are stale."],
-    }),
-    null,
-  );
-  assert.equal(
-    acceptedCurrentTreeFinalizationIssue({
-      ...payload,
-      loopContract: {
-        ...payload.loopContract,
-        strongestAction: {
-          kind: "current-tree-finalization",
-          command: "node scripts/autoresearch.mjs state --cwd C:/repo",
-        },
-      },
-    }),
-    null,
-  );
-  assert.equal(
-    acceptedCurrentTreeFinalizationIssue({
-      ...payload,
-      loopContract: {
-        ...payload.loopContract,
-        strongestAction: {
-          kind: "current-tree-finalization",
-          command: "node scripts/autoresearch.mjs next --cwd C:/repo",
-        },
-      },
-    }),
-    null,
-  );
-});
-
-test("unverified finalization runway blocks the next packet even without top-level blockers", () => {
-  const status = buildLoopContractStatus({
-    finalizationRunway: {
-      status: "unverified",
-      blockers: [],
-      warnings: [],
-      nextAction:
-        "Verify branch content against the finalization plan or recreate the review branch.",
-    },
-  });
-
-  assert.equal(status.canRunNextPacket, false);
-  assert.equal(status.strongestAction?.kind, "finalization-runway");
-  assert.match(status.strongestAction?.reason || "", /verify|recreate|content|unverified/i);
-});
-
-test("loop contract summarizes blockers and warnings", () => {
-  const status = buildLoopContractStatus({
-    contextDistillation: { required: true, reason: "Session is too large." },
-    laneLifecycle: { staleLanes: [{ id: "a" }] },
-    finalizationReadiness: { ready: true },
-  });
-
-  assert.equal(status.ok, false);
-  assert.equal(status.canRunNextPacket, false);
-  assert.deepEqual(
-    status.blockers.map((item) => item.kind),
-    ["context-distillation", "lane-cleanup"],
-  );
-  assert.equal(status.warnings[0].kind, "finalization");
-});
-
 test("operator checklist returns exactly the compact handoff keys", () => {
-  const checklist = buildOperatorChecklist(
-    { kind: "packet-diagnostic", reason: "Inspect diagnostics.", command: "" },
-    {
-      workDir: "C:/repo",
-      pluginRoot: "C:/repo/plugins/codex-autoresearch",
-      loopContract: {
-        blockers: [{ kind: "packet-diagnostic", reason: "Citation carry failed." }],
-      },
-    },
-  );
+  const plan = compileDecisionPlan(snapshotFixture(), [
+    decisionDiagnostic("packet-diagnostic", {
+      message: "Citation carry failed.",
+      command: "node scripts/autoresearch.mjs partial-results --cwd C:/repo --from-last",
+    }),
+  ]);
+  const checklist = buildOperatorChecklist(plan, {
+    actionReason: "Inspect diagnostics.",
+  });
 
   assert.deepEqual(Object.keys(checklist), [
     "command",
@@ -958,138 +279,9 @@ test("operator checklist returns exactly the compact handoff keys", () => {
     "source",
   ]);
   assert.match(checklist.command, /partial-results/);
-  assert.equal(checklist.blocker, "Citation carry failed.");
-  assert.equal(checklist.evidenceRole, "diagnostic-measure");
-});
-
-test("compact recommend-next uses compact state without dashboard-only fields", () => {
-  const compactState = {
-    ok: true,
-    workDir: "C:/repo",
-    nextAction: "Compact says continue from state.",
-    commands: {
-      state: "node scripts/autoresearch.mjs state --cwd C:/repo --compact",
-      next: "node scripts/autoresearch.mjs next --cwd C:/repo --compact",
-    },
-    canonicalNextAction: {
-      kind: "decision-capsule",
-      reason: "Run the compact doctor handoff.",
-      command: "node scripts/autoresearch.mjs doctor --cwd C:/repo --check-benchmark --explain",
-    },
-    resumeAudit: {
-      canonicalNextAction: {
-        kind: "decision-capsule",
-      },
-      finalizationReadiness: {
-        available: false,
-        ready: null,
-        nextAction: "Run finalize-preview when review readiness is needed.",
-      },
-    },
-    decisionEnvelope: {
-      canonicalNextAction: {
-        kind: "decision-capsule",
-      },
-      loopContract: {
-        ok: false,
-      },
-      finalizationReadiness: {
-        available: false,
-        ready: null,
-        nextAction: "Run finalize-preview when review readiness is needed.",
-      },
-    },
-    runtimeProvenance: { status: "checked" },
-    loopContract: { ok: false },
-    laneLifecycle: { staleLanes: [] },
-    packetDiagnostics: { latest: "ok" },
-    portfolioRecommendation: { kind: "read-only-scout", confidence: "medium" },
-    sessionDecisionCapsule: { status: "active" },
-  };
-
-  const response = buildCompactRecommendNextResponse({
-    workDir: "C:/repo",
-    compactState,
-  });
-  const action = response.action as { kind?: string };
-  const resolvedDecision = response.resolvedDecision;
-
-  assert.equal(action.kind, "decision-capsule");
-  assert.equal(
-    response.commands.primary,
-    "node scripts/autoresearch.mjs state --cwd C:/repo --compact",
-  );
-  assert.doesNotMatch(String(response.commands.primary), /--check-benchmark|benchmark-lint/);
-  assert.match(response.whySafe, /compact state/);
-  assert.match(response.whySafe, /shared resolved decision/);
-  assert.notEqual(response.compactState, compactState);
-  assert.equal(Object.hasOwn(response, "decisionEnvelope"), false);
-  assert.equal(Object.hasOwn(response, "resumeAudit"), false);
-  assert.deepEqual(resolvedDecision.runtimeProvenance, compactState.runtimeProvenance);
-  assert.deepEqual(resolvedDecision.loopContract, compactState.loopContract);
-  assert.deepEqual(response.portfolioRecommendation, compactState.portfolioRecommendation);
-  assert.deepEqual(response.sessionDecisionCapsule, {
-    kind: null,
-    status: "active",
-    enforcement: null,
-    evidence: [],
-    nextExperiment: "",
-    wrongNextActions: [],
-    doNotRepeat: [],
-    commandBudgetWarnings: [],
-  });
-  assert.equal(resolvedDecision.finalizationPressure?.available, false);
-});
-
-test("compact recommend-next uses blocker metadata fallback instead of next", () => {
-  const response = buildCompactRecommendNextResponse({
-    workDir: "C:/repo",
-    compactState: {
-      ok: false,
-      commands: {
-        state: "node scripts/autoresearch.mjs state --cwd C:/repo --compact",
-        next: "node scripts/autoresearch.mjs next --cwd C:/repo --compact",
-        doctor: "node scripts/autoresearch.mjs doctor --cwd C:/repo --explain",
-      },
-      canonicalNextAction: {
-        kind: "preflight",
-        reason: "Resolve preflight blockers before another packet.",
-        command: "",
-      },
-    },
-  });
-
-  assert.equal((response.action as { kind?: string }).kind, "preflight");
-  assert.equal(
-    response.commands.primary,
-    "node scripts/autoresearch.mjs state --cwd C:/repo --compact",
-  );
-  assert.doesNotMatch(String(response.commands.primary), /\bnext\b/);
-  assert.doesNotMatch(String(response.commands.primary), /\bdoctor\b.*--explain\b/);
-});
-
-test("compact recommend-next skips process-starting metadata fallbacks", () => {
-  const response = buildCompactRecommendNextResponse({
-    workDir: "C:/repo",
-    compactState: {
-      ok: false,
-      commands: {
-        benchmarkLint: "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo",
-        state: "node scripts/autoresearch.mjs state --cwd C:/repo --compact",
-      },
-      canonicalNextAction: {
-        kind: "decision-capsule",
-        reason: "Repair the active decision capsule before another packet.",
-        command: "",
-      },
-    },
-  });
-
-  assert.equal(
-    response.commands.primary,
-    "node scripts/autoresearch.mjs state --cwd C:/repo --compact",
-  );
-  assert.doesNotMatch(String(response.commands.primary), /benchmark-lint/);
+  assert.equal(checklist.blocker, "packet-diagnostic");
+  assert.equal(checklist.evidenceRole, "accepted-checks");
+  assert.equal(checklist.source, "packet-diagnostic");
 });
 
 test("goal frame keeps the durable Autoresearch goal authoritative", () => {
@@ -1410,3 +602,34 @@ test("lane lifecycle ignores direct laneResults from older segments", () => {
   assert.equal(lifecycle.resultLanes.length, 0);
   assert.equal(lifecycle.latestResults.length, 0);
 });
+
+function snapshotFixture(): CoherentSessionSnapshot {
+  return {
+    kind: "coherent-session-snapshot",
+    schemaVersion: 1,
+    generationId: "generation-a",
+    sessionCwd: "/session",
+    workDir: "/worktree",
+    vector: {
+      ledger: { size: 0, mtimeNs: "0", tailHash: "missing" },
+      config: { storage: "session", hash: "config" },
+      packet: { storage: "git-private", hash: "missing" },
+      receipt: { storage: "git-private", hash: "missing" },
+      process: { storage: "git-private", hash: "missing" },
+      git: { head: "head", indexTree: "index", statusHash: "status" },
+    },
+    records: [],
+    config: {},
+    lastRunPacket: null,
+    pendingTransaction: null,
+    processProgress: null,
+    git: { head: "head", indexTree: "index", statusHash: "status" },
+    sourceDiagnostics: { ledgerIssues: [] },
+    semanticFacts: {
+      contractDigest: "contract-a",
+      evaluatorIdentity: "eval-a",
+      acceptedCheckIdentities: ["check-a@digest-a"],
+      preconditionEpoch: "epoch-a",
+    },
+  } as CoherentSessionSnapshot;
+}

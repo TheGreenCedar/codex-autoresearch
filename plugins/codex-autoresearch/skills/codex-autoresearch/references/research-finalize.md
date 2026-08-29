@@ -2,6 +2,8 @@
 
 Load this reference for qualitative research, fanout, current-tree recovery, or review-branch edge cases.
 
+Qualitative work stays direct by default. Use the research loop below only after fit routing returns `run-loop` for an explicit repeated checklist contract. Do not create research files merely because the request mentions docs, UX, product, architecture, quality, or research.
+
 ## Keep research evidence separated
 
 Store dated, claim-specific evidence in `sources.md`. Put judgment and rejected claims in `synthesis.md`. Put only accepted, actionable findings in `quality-gaps.md`.
@@ -12,7 +14,7 @@ Preview checklist changes with `gap-candidates`. Treat hand-edited checkboxes as
 
 Run `research-fanout --dry-run` before recording a fanout plan. Scout commands must parse as strict allowlisted Git read argv; interpreters, shells, network/process-spawning surfaces, and mutation-capable Git forms are refused before execution. Git porcelain is best-effort post-run detection, not containment. Give implementation lanes a disposable worktree or explicit write scope, while treating both as write boundaries rather than process/filesystem containment. Keep big-idea lanes as advice until the user approves a bounded implementation attempt.
 
-Keep the benchmark, accepted evidence, keep/discard decisions, integration, and finalization in the parent session.
+Keep the benchmark, accepted evidence, keep/discard decisions, integration, and finalization in the parent session. A no-learning or same-layer-failure pause never creates a fanout plan automatically.
 
 ## Finalize the work that actually exists
 

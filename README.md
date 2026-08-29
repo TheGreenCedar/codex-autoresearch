@@ -52,21 +52,29 @@ Autoresearch will measure the current result before Codex changes anything. That
 If you do not know what the benchmark should be, say what outcome you want and ask Codex to propose one:
 
 ```text
-/goal @Codex Autoresearch improve the speed of my indexer's pipeline without using more memory.
-Measure a baseline first. Propose a benchmark and a safe edit scope, then ask me about anything the repository cannot answer.
+/goal @Codex Autoresearch help me design a trustworthy benchmark for my indexer's speed and memory use.
+Do this as a direct review first. Do not create a session until I approve a complete repeated experiment contract.
 ```
 
-Codex can help build the measurement, but it cannot decide whether the measurement represents your product. That judgment stays with you.
+Codex can help build the measurement, but it cannot decide whether the measurement represents your product. That judgment stays with you. An explicit loop request with missing inputs stops for those inputs instead of scanning the repository for plausible defaults.
 
 ## How it works
 
-The normal loop is short:
+The normal route starts with fit:
 
 ```text
-setup -> doctor -> next -> log -> state -> finalize-preview
+fit -> continue directly | ask for contract input | run accepted loop
 ```
 
-Setup records the goal, metric, benchmark, checks, budget, and file scope. Doctor makes sure the benchmark can be trusted before the first experiment. `next` runs one benchmark packet. `log` records whether the result was a baseline, a keep, a discard, or a failure. `state` reads the ledger and tells Codex what makes sense next. When there is useful work to review, `finalize-preview` shows what can be turned into review branches without changing branches yet.
+Architecture reviews, documentation, UX, product study, open-ended research, taste, and one-shot fixes normally continue directly. In direct mode Codex states the outcome and uncertainty, gathers the cheapest useful evidence, does the task, verifies it, and bounds the claim. Autoresearch creates no session files or other state in that path, and an unrelated existing session remains untouched.
+
+When repeated measurement does fit, the loop is short:
+
+```text
+setup -> state -> next -> log -> state -> finalize-preview
+```
+
+Setup records one experiment contract: goal, repository and checkout, typed metric semantics, evaluator, independent checks, scope, noise, keep and stop rules, and budgets. `state` compiles the current files and Git state into one decision. `next` may run only the evaluator and checks accepted by that contract. `log` records whether the result was a baseline, a keep, a discard, or a failure, then returns the resulting decision. When there is useful work to review, `finalize-preview` shows what can be turned into review branches without changing branches yet.
 
 The benchmark must print at least one line in this form:
 
@@ -76,7 +84,7 @@ METRIC seconds=12.34
 
 The primary metric decides whether the result moved in the right direction. Checks protect correctness. Secondary metrics can catch known tradeoffs such as lower runtime with much higher memory use.
 
-Autoresearch stores the durable session record in the target project. In a Git repository, transient packet state lives under `.git/autoresearch/`; outside Git it falls back to local worktree files.
+Autoresearch stores the durable session record in the target project. In a Git repository, transient packet state lives under `.git/autoresearch/`; outside Git it falls back to local worktree files. Read surfaces load those sources coherently, and state, doctor, recommendations, finalization, and the dashboard project the same decision rather than recomputing policy independently.
 
 Some commands can change Git state. Keeping a result can create a commit limited to configured paths. Discards, crashes, and failed checks can clean up the configured or explicitly supplied experiment paths. A plain measurement never stages, commits, or reverts anything. Finalization begins with a read-only preview, and review branches are created only after approval. The details are in [Trust](plugins/codex-autoresearch/docs/trust.md).
 
@@ -86,13 +94,13 @@ Autoresearch is a good fit when you can measure the outcome repeatedly, keep the
 
 It is probably the wrong tool for a one-off edit, a result that is mostly a matter of taste, or a benchmark so slow and noisy that another measurement adds little information.
 
-Docs, UX, architecture, and product research can use a quality-gap loop instead of a performance metric. In that mode, source-backed findings become an accepted checklist and the loop measures how many of those gaps remain. Reaching `quality_gap=0` closes that checklist; it does not prove there is nothing left to discover.
+If you explicitly want repeated qualitative evaluation against a stable checklist, docs, UX, architecture, or product research can use a quality-gap contract. Source-backed findings then become an accepted checklist and the loop measures how many gaps remain. Reaching `quality_gap=0` closes that checklist; it does not prove there is nothing left to discover. Ordinary qualitative work stays direct.
 
 ## Dashboard
 
-The dashboard is optional. It gives you a live view of the metric history, the current blocker, the next action, the runtime that produced the evidence, and the state of finalization.
+The dashboard is optional. It gives you a live view of the metric history, decision ID, current phase, blocker, next action kind, parent-task disposition, accepted contract and evaluator identities, runtime provenance, and finalization state.
 
-It is deliberately read-only. The CLI still owns setup, experiments, logging, export, and finalization. If the browser and terminal ever disagree, stop and fix the disagreement rather than choosing the answer you prefer.
+It is deliberately read-only and may redact executable commands. The CLI still owns setup, experiments, logging, export, and finalization. If the browser and terminal disagree on the semantic decision fields, stop and fix the disagreement rather than choosing the answer you prefer.
 
 Ask Codex to serve the dashboard when a visual readout would help. Use an export when you need a portable snapshot rather than live state.
 

@@ -1,6 +1,7 @@
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 
 import { assertSafeWriteTarget } from "./checked-write.js";
@@ -11,6 +12,15 @@ const MAX_RECOVERY_DEPTH = 16;
 
 type LockRecord = { pid: number; command: string; timestamp: string; token: string };
 type RecoveryClaim = { path: string; token: string };
+
+export interface SessionMutationLockContext {
+  command: string;
+  lockPath: string;
+  sessionRoot: string;
+  token: string;
+}
+
+const mutationLockContext = new AsyncLocalStorage<SessionMutationLockContext>();
 
 export async function sessionMutationLockLocation(
   workDir: string,
@@ -72,10 +82,28 @@ export async function withSessionMutationLock<T>(
     token,
   });
   try {
-    return await action();
+    return await mutationLockContext.run(
+      { command, lockPath: acquiredLockPath, sessionRoot, token },
+      action,
+    );
   } finally {
     await release(acquiredLockPath, token);
   }
+}
+
+export function currentSessionMutationLockContext(): SessionMutationLockContext | null {
+  return mutationLockContext.getStore() || null;
+}
+
+export function assertSessionMutationLockHeld(command?: string): SessionMutationLockContext {
+  const context = currentSessionMutationLockContext();
+  if (!context) {
+    throw new Error("The command decision protocol requires the session mutation lock.");
+  }
+  if (command && context.command !== command) {
+    throw new Error(`The session mutation lock belongs to ${context.command}, not ${command}.`);
+  }
+  return context;
 }
 
 async function acquire(lockPath: string, root: string, record: LockRecord): Promise<string> {

@@ -11,14 +11,16 @@ import {
   type OperatorTaskCase,
 } from "../scripts/operator-task-benchmark.js";
 
-const action = {
-  kind: "next-packet",
-  reason: "Run the next bounded packet.",
-  command: "node scripts/autoresearch.mjs next --cwd <project>",
-  safeAction: "next",
-  toolName: "next",
-  priority: 10,
-  triggeredBy: ["continuation"],
+const plan = {
+  decisionId: "decision-a",
+  generationId: "generation-a",
+  phase: "packet",
+  actionKind: "run-packet",
+  primaryBlockerCode: null,
+  parentDisposition: "hand-back",
+  contractDigest: "contract-a",
+  evaluatorIdentity: "evaluator-a",
+  commandDigest: "command-a",
 };
 const repoSnapshot = {
   head: "abc123\n",
@@ -32,13 +34,9 @@ const repoSnapshot = {
 
 const validObservations: Record<OperatorTaskCase, Record<string, unknown>> = {
   "decision-consistency": {
-    terminalActions: Array.from({ length: 3 }, () => ({ ...action })),
-    dashboardAction: Object.fromEntries(
-      Object.entries(action).filter(([key]) => key !== "command"),
-    ),
+    terminalPlans: Array.from({ length: 3 }, () => ({ ...plan })),
+    dashboardPlan: { ...plan },
     dashboardCommandOmitted: true,
-    resolvedCommands: Array.from({ length: 3 }, () => action.command),
-    resolvedNextActions: Array.from({ length: 4 }, () => action.reason),
   },
   "invalid-cli": {
     exitCode: 1,
@@ -64,9 +62,13 @@ const validObservations: Record<OperatorTaskCase, Record<string, unknown>> = {
     after: repoSnapshot,
   },
   "session-friction-journey": {
+    directFitDisposition: "continue-direct",
+    incompleteFitDisposition: "needs-user",
+    incompleteLoopMissing: ["direction", "checks_command", "scope"],
+    fitCallsCreatedFiles: false,
     runs: 0,
-    zeroRunActionKinds: ["next-packet", "next-packet", "next-packet"],
-    zeroRunActionCommands: [action.command, action.command, action.command],
+    zeroRunActionKinds: ["run-packet", "run-packet", "run-packet"],
+    zeroRunDecisionIds: ["decision-a", "decision-a", "decision-a"],
     canMarkCodexGoalComplete: false,
     rawChecklistAccepted: false,
     generatedGitAttributes: false,
@@ -101,7 +103,7 @@ test("every portable case rejects realistic faulty public-output facts with a st
   const faulty: Record<OperatorTaskCase, Record<string, unknown>> = {
     "decision-consistency": {
       ...validObservations["decision-consistency"],
-      terminalActions: [{ ...action }, { ...action }, { ...action, safeAction: "setup-plan" }],
+      terminalPlans: [{ ...plan }, { ...plan }, { ...plan, phase: "setup" }],
     },
     "invalid-cli": {
       exitCode: 1,
@@ -122,12 +124,10 @@ test("every portable case rejects realistic faulty public-output facts with a st
     },
     "session-friction-journey": {
       ...validObservations["session-friction-journey"],
+      directFitDisposition: "run-loop",
+      fitCallsCreatedFiles: true,
       zeroRunActionKinds: ["metric-saturation", "finalization", "finalization"],
-      zeroRunActionCommands: [
-        "node scripts/autoresearch.mjs finalize-preview --cwd <project>",
-        "node scripts/autoresearch.mjs finalize-preview --cwd <project>",
-        "node scripts/autoresearch.mjs finalize-preview --cwd <project>",
-      ],
+      zeroRunDecisionIds: ["decision-a", "decision-b", "decision-c"],
       rawChecklistAccepted: true,
     },
     "output-budgets": {
