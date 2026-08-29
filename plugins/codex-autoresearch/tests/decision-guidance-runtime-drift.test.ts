@@ -14,7 +14,7 @@ const ABSOLUTE_DOCTOR_COMMAND =
   /node ".*codex autoresearch.*scripts[\\/]autoresearch\.mjs" doctor --cwd ".*codex autoresearch" --explain/;
 const SOURCE_FINGERPRINT = "a".repeat(64);
 
-const FIXTURE_VERSION = "2.7.2";
+const FIXTURE_VERSION = "2.8.0";
 const RUNTIME_CONTENT = "export const runtimeFixture = true;\n";
 const runtimePath = (cacheRoot: string, version: string) =>
   path.join(cacheRoot, "TheGreenCedar", "codex-autoresearch", version);
@@ -87,7 +87,7 @@ test("multiple versions fail closed unless the running launcher selects one", as
     const cacheRoot = path.join(dir, "cache");
     const activeRoot = runtimePath(cacheRoot, FIXTURE_VERSION);
     await writeSource(sourceRoot);
-    await writeRuntimePackage(runtimePath(cacheRoot, "2.7.1"), "2.7.1", {
+    await writeRuntimePackage(runtimePath(cacheRoot, "2.7.2"), "2.7.2", {
       runtimeContent: RUNTIME_CONTENT,
     });
     await writeRuntimePackage(activeRoot, FIXTURE_VERSION, {
@@ -140,7 +140,7 @@ test("source-shaped, package, missing, and stale surfaces stay distinct", async 
     assert.equal(missing.installedRuntime, "missing");
 
     const staleCache = path.join(dir, "stale-cache");
-    await writeRuntimePackage(runtimePath(staleCache, "2.7.1"), "2.7.1", {
+    await writeRuntimePackage(runtimePath(staleCache, "2.7.2"), "2.7.2", {
       runtimeContent: RUNTIME_CONTENT,
     });
     const stale = await inspectRuntimeDrift({
@@ -149,7 +149,7 @@ test("source-shaped, package, missing, and stale surfaces stay distinct", async 
       pluginCacheRoot: staleCache,
     });
     assert.equal(stale.installedRuntime, "stale");
-    assert.equal(stale.installedRuntimeVersion, "2.7.1");
+    assert.equal(stale.installedRuntimeVersion, "2.7.2");
 
     const packageRoot = path.join(dir, "package");
     await writeSource(packageRoot, true);

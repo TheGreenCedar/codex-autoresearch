@@ -8,6 +8,8 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased
 
+## 2.8.0 - 2026-08-29
+
 ### Added
 
 - Added fit-first routing with explicit `continue-direct`, `needs-user`, and `run-loop` results. Direct architecture, documentation, UX, product, research, and one-shot work now uses a bounded evidence capsule without creating or changing an Autoresearch session.
