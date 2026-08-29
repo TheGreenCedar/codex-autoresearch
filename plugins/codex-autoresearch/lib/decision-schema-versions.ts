@@ -1,0 +1,2 @@
+export const DECISION_COMPILER_SCHEMA_VERSION = 1 as const;
+export const COMMAND_MUTATION_RECEIPT_SCHEMA_VERSION = 1 as const;

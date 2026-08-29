@@ -9,7 +9,7 @@ import {
   emptyCommandMeta,
   waitFor,
 } from ".././helpers/dashboard.js";
-import { chartLayoutOptions } from "./test-helpers.js";
+import { chartLayoutOptions, dashboardDecisionPlanProjection } from "./test-helpers.js";
 
 const dashboard = createDashboardHarness();
 const { runDashboard } = dashboard;
@@ -67,7 +67,7 @@ test("dashboard ledger bounder keeps latest ledger entry when cap is one", () =>
   assert.deepEqual(bounded.entries, [{ type: "run", run: 2, status: "keep", metric: 2 }]);
 });
 
-test("dashboard action rail uses blocker metadata instead of next fallback", () => {
+test("dashboard action rail projects the canonical checks blocker", () => {
   const viewModel = buildDashboardViewModel({
     state: {
       config: {
@@ -76,29 +76,35 @@ test("dashboard action rail uses blocker metadata instead of next fallback", () 
         bestDirection: "higher",
       },
       current: [],
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "gate-quality",
-          priority: 3,
-          reason: "Configure an independent checks gate before another packet.",
-          command: "",
+      decisionPlanProjection: dashboardDecisionPlanProjection({
+        actionKind: "configure-checks",
+        actionReason: "Configure an independent checks gate before another packet.",
+        blockerCode: "checks-required",
+        capabilityStatuses: {
+          "run-packet": "blocked",
+          "authorize-keep": "blocked",
         },
-      },
+        loopKind: "blocked",
+        phase: "setup",
+      }),
     },
     settings: {},
     commands: [
-      { label: "Next run", command: "node scripts/autoresearch.mjs next --cwd C:/repo" },
-      { label: "Doctor", command: "node scripts/autoresearch.mjs doctor --cwd C:/repo" },
+      {
+        label: "Next run",
+        command: "node scripts/autoresearch.mjs next --cwd C:/repo",
+      },
+      {
+        label: "Doctor",
+        command: "node scripts/autoresearch.mjs doctor --cwd C:/repo",
+      },
     ],
   } as any);
 
-  assert.equal(viewModel.nextBestAction.kind, "gate-quality");
+  assert.equal(viewModel.nextBestAction.kind, "configure-checks");
   assert.equal(viewModel.nextBestAction.packetBrake, true);
-  assert.equal(
-    viewModel.nextBestAction.primaryCommand.command,
-    "node scripts/autoresearch.mjs doctor --cwd C:/repo",
-  );
-  assert.doesNotMatch(viewModel.nextBestAction.primaryCommand.command, /\bnext\b/);
+  assert.equal(viewModel.nextBestAction.primaryCommand, undefined);
+  assert.equal(viewModel.nextBestAction.command ?? "", "");
 });
 
 test("dashboard view model keeps only copyable readout commands", () => {
@@ -113,8 +119,14 @@ test("dashboard view model keeps only copyable readout commands", () => {
     },
     settings: {},
     commands: [
-      { label: "Serve dashboard", command: "node scripts/autoresearch.mjs serve --cwd C:/repo" },
-      { label: "Export dashboard", command: "node scripts/autoresearch.mjs export --cwd C:/repo" },
+      {
+        label: "Serve dashboard",
+        command: "node scripts/autoresearch.mjs serve --cwd C:/repo",
+      },
+      {
+        label: "Export dashboard",
+        command: "node scripts/autoresearch.mjs export --cwd C:/repo",
+      },
       {
         label: "Doctor",
         command: "node scripts/autoresearch.mjs doctor --cwd C:/repo --check-benchmark",
@@ -128,7 +140,10 @@ test("dashboard view model keeps only copyable readout commands", () => {
         command: "node scripts/autoresearch.mjs benchmark-lint --cwd C:/repo -- node evil.js",
       },
       { label: "Bare state", command: "state --cwd C:/repo" },
-      { label: "State", command: "node scripts/autoresearch.mjs state --cwd C:/repo --report" },
+      {
+        label: "State",
+        command: "node scripts/autoresearch.mjs state --cwd C:/repo --report",
+      },
       {
         label: "Quality gap",
         command: "node scripts/autoresearch.mjs quality-gap --cwd C:/repo --research-slug study",
@@ -175,8 +190,18 @@ test("dashboard signals Product proof when claim coverage blocks release readine
 test("dashboard renders proof signals below the chart", async () => {
   const { dom, getById } = await runDashboard(
     [
-      dashboardConfigEntry({ name: "signal order", metricName: "seconds", metricUnit: "s" }),
-      { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline" },
+      dashboardConfigEntry({
+        name: "signal order",
+        metricName: "seconds",
+        metricUnit: "s",
+      }),
+      {
+        type: "run",
+        run: 1,
+        metric: 5,
+        status: "keep",
+        description: "Baseline",
+      },
     ],
     emptyCommandMeta(),
     chartLayoutOptions(),
@@ -193,9 +218,25 @@ test("dashboard renders proof signals below the chart", async () => {
 test("dashboard exposes one native chart range instead of per-point Tab stops", async () => {
   const { dom, getById } = await runDashboard(
     [
-      dashboardConfigEntry({ name: "chart focus", metricName: "seconds", metricUnit: "s" }),
-      { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline" },
-      { type: "run", run: 2, metric: 4, status: "discard", description: "Rejected" },
+      dashboardConfigEntry({
+        name: "chart focus",
+        metricName: "seconds",
+        metricUnit: "s",
+      }),
+      {
+        type: "run",
+        run: 1,
+        metric: 5,
+        status: "keep",
+        description: "Baseline",
+      },
+      {
+        type: "run",
+        run: 2,
+        metric: 4,
+        status: "discard",
+        description: "Rejected",
+      },
       { type: "run", run: 3, metric: 3, status: "keep", description: "Latest" },
     ],
     emptyCommandMeta(),
@@ -229,8 +270,18 @@ test("dashboard exposes one native chart range instead of per-point Tab stops", 
 test("dashboard ledger uses native table semantics", async () => {
   const { getById } = await runDashboard(
     [
-      dashboardConfigEntry({ name: "ledger semantics", metricName: "seconds", metricUnit: "s" }),
-      { type: "run", run: 1, metric: 5, status: "keep", description: "Baseline" },
+      dashboardConfigEntry({
+        name: "ledger semantics",
+        metricName: "seconds",
+        metricUnit: "s",
+      }),
+      {
+        type: "run",
+        run: 1,
+        metric: 5,
+        status: "keep",
+        description: "Baseline",
+      },
     ],
     emptyCommandMeta(),
   );
@@ -245,7 +296,7 @@ test("dashboard ledger uses native table semantics", async () => {
   assert.ok(table?.querySelector(".metric-stack"));
 });
 
-test("dashboard segment transition command matches its safe action metadata", () => {
+test("dashboard segment transition command matches the canonical action metadata", () => {
   const viewModel = buildDashboardViewModel({
     state: {
       config: {
@@ -254,18 +305,24 @@ test("dashboard segment transition command matches its safe action metadata", ()
         bestDirection: "higher",
       },
       current: [],
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "segment-transition",
-          priority: 7,
-          reason: "Start a new segment before another packet.",
-          command: "",
+      decisionPlanProjection: dashboardDecisionPlanProjection({
+        actionKind: "transition-segment",
+        actionReason: "Start a new accepted segment before another packet.",
+        blockerCode: "evaluator-drift",
+        capabilityStatuses: {
+          "run-packet": "blocked",
+          "authorize-keep": "blocked",
         },
-      },
+        loopKind: "blocked",
+        phase: "direct-work",
+      }),
     },
     settings: {},
     commands: [
-      { label: "Next run", command: "node scripts/autoresearch.mjs next --cwd C:/repo" },
+      {
+        label: "Next run",
+        command: "node scripts/autoresearch.mjs next --cwd C:/repo",
+      },
       {
         label: "New segment",
         command: "node scripts/autoresearch.mjs new-segment --cwd C:/repo --dry-run",
@@ -277,14 +334,13 @@ test("dashboard segment transition command matches its safe action metadata", ()
     ],
   } as any);
 
-  assert.equal(viewModel.nextBestAction.kind, "segment-transition");
-  assert.equal(viewModel.nextBestAction.safeAction, "new-segment");
-  assert.equal(viewModel.nextBestAction.primaryCommand.label, "Segment");
-  assert.match(viewModel.nextBestAction.primaryCommand.command, /\bnew-segment\b/);
-  assert.doesNotMatch(viewModel.nextBestAction.primaryCommand.command, /\bgap-candidates\b/);
+  assert.equal(viewModel.nextBestAction.kind, "transition-segment");
+  assert.equal(viewModel.nextBestAction.safeAction ?? "", "");
+  assert.equal(viewModel.nextBestAction.primaryCommand, undefined);
+  assert.equal(viewModel.nextBestAction.command ?? "", "");
 });
 
-test("dashboard current-tree finalization explains proof without packet fallback", () => {
+test("dashboard keeps finalization-only blockers from overriding unrelated direct work", () => {
   const viewModel = buildDashboardViewModel({
     state: {
       config: {
@@ -303,15 +359,15 @@ test("dashboard current-tree finalization explains proof without packet fallback
       ],
       baseline: 10,
       best: 10,
-      decisionEnvelope: {
-        canonicalNextAction: {
-          kind: "current-tree-finalization",
-          priority: 5,
-          reason:
-            "Use finalize-current-tree because commit-level kept evidence does not describe the current branch tree cleanly.",
-          command: "",
-        },
-      },
+      decisionPlanProjection: dashboardDecisionPlanProjection({
+        actionKind: "direct-work",
+        actionReason:
+          "Continue unrelated direct work while current-tree finalization proof is collected.",
+        blockerCode: "finalization-blocked",
+        capabilityStatuses: { finalize: "blocked" },
+        loopKind: "continue",
+        phase: "direct-work",
+      }),
     },
     settings: {},
     finalizePreview: {
@@ -327,19 +383,19 @@ test("dashboard current-tree finalization explains proof without packet fallback
     ],
   } as any);
 
-  assert.equal(viewModel.nextBestAction.kind, "current-tree-finalization");
-  assert.match(viewModel.nextBestAction.explanation.proof, /finalize-current-tree/);
-  assert.match(viewModel.nextBestAction.explanation.avoids, /current branch tree/);
-  assert.doesNotMatch(
-    viewModel.nextBestAction.explanation.proof,
-    /next (?:run|packet) produces evidence/i,
-  );
-  assert.match(viewModel.decisionReceipt.proof, /current non-session diff/);
+  assert.equal(viewModel.nextBestAction.kind, "direct-work");
+  assert.equal(viewModel.nextBestAction.packetBrake, false);
+  assert.match(viewModel.nextBestAction.detail, /Continue unrelated direct work/);
+  assert.equal(viewModel.decisionEnvelopeSummary.kind, "direct-work");
 });
 
 test("dashboard DOM renders non-blank next action in operator rail", async () => {
   const entries = [
-    dashboardConfigEntry({ name: "zero path", metricName: "seconds", metricUnit: "s" }),
+    dashboardConfigEntry({
+      name: "zero path",
+      metricName: "seconds",
+      metricUnit: "s",
+    }),
     {
       type: "run",
       run: 1,
@@ -438,6 +494,14 @@ test("dashboard renders a generated Codex summary of history and plan", async ()
       baseline: 8,
       best: 6,
       confidence: 2,
+      decisionPlanProjection: dashboardDecisionPlanProjection({
+        actionKind: "direct-work",
+        actionReason: "Stress the cache path before finalization.",
+        blockerCode: "finalization-blocked",
+        capabilityStatuses: { finalize: "blocked" },
+        loopKind: "continue",
+        phase: "direct-work",
+      }),
     },
     finalizePreview: { ready: true, nextAction: "Preview finalization." },
     experimentMemory: { latestNextAction: "Stress the cache path." },
@@ -453,7 +517,11 @@ test("dashboard renders a generated Codex summary of history and plan", async ()
 
 test("dashboard view model and rail expose the authoritative decision envelope", async () => {
   const entries = [
-    dashboardConfigEntry({ name: "envelope path", metricName: "seconds", metricUnit: "s" }),
+    dashboardConfigEntry({
+      name: "envelope path",
+      metricName: "seconds",
+      metricUnit: "s",
+    }),
     {
       type: "run",
       run: 1,
@@ -483,31 +551,26 @@ test("dashboard view model and rail expose the authoritative decision envelope",
       baseline: 9,
       best: 9,
       confidence: 1,
-      decisionEnvelope: {
-        activeSegment: { segment: 0, runs: 2, baseline: 9, best: 9 },
-        latestPacketFreshness: {
-          fresh: false,
-          reason: "Last-run packet is stale: history changed.",
-          expectedNextRun: 2,
-          actualNextRun: 3,
-        },
-        scaffoldHealth: { ok: true, status: "ok", blockers: [] },
-        finalizationReadiness: { available: true, ready: true, nextAction: "Preview." },
-        nextAction: "Preview finalization after replacing stale packet.",
-      },
+      decisionPlanProjection: dashboardDecisionPlanProjection({
+        actionKind: "replace-packet",
+        actionReason: "Last-run packet is stale: history changed. Replace it before logging.",
+        blockerCode: "stale-packet",
+        capabilityStatuses: { "run-packet": "recovery-only" },
+        loopKind: "blocked",
+      }),
     },
     finalizePreview: { ready: true, nextAction: "Preview." },
   });
 
-  assert.equal(viewModel.nextBestAction.kind, "stale-packet");
-  assert.equal(viewModel.decisionEnvelopeSummary.kind, "stale-packet");
+  assert.equal(viewModel.nextBestAction.kind, "replace-packet");
+  assert.equal(viewModel.decisionEnvelopeSummary.kind, "replace-packet");
   assert.equal(viewModel.summary.measured, 1);
   assert.equal(viewModel.summary.failed, 0);
   assert.match(viewModel.readout.measurementRuns[0].description, /Trend-only/);
 
   const { getById } = await runDashboard(entries, emptyCommandMeta({ viewModel }));
   assert.match(getById("decision-envelope-summary").textContent, /Replace the stale packet/);
-  assert.match(getById("decision-rail").textContent, /Last-run packet is stale/);
+  assert.match(getById("decision-rail").textContent, /stale-packet|history changed/);
   assert.doesNotMatch(getById("v2-release-signals").textContent || "", /Last-run packet is stale/);
   assert.match(getById("ledger-body").textContent, /Measurement/);
   assert.doesNotMatch(getById("recent-failure-detail").textContent, /Trend-only/);
@@ -551,6 +614,10 @@ test("dashboard view model warns after a watchdog no-progress window", () => {
       baseline: 10,
       best: 10,
       confidence: null,
+      decisionPlanProjection: dashboardDecisionPlanProjection({
+        actionKind: "run-packet",
+        actionReason: "Run the next accepted packet when direct work is complete.",
+      }),
     },
     settings: {
       deliveryMode: "live-server",
@@ -562,12 +629,10 @@ test("dashboard view model warns after a watchdog no-progress window", () => {
   });
 
   assert.equal(viewModel.watchdogSummary.stale, true);
-  assert.equal(viewModel.decisionEnvelope.watchdog.stale, true);
-  assert.equal(viewModel.decisionEnvelopeSummary.kind, "watchdog");
-  assert.match(viewModel.nextBestAction.detail, /Intervene|finalize|rescope/i);
-  assert.equal(viewModel.nextBestAction.safeAction, "state");
-  assert.notEqual(viewModel.nextBestAction.safeAction, "next");
-  assert.doesNotMatch(String(viewModel.nextBestAction.command || ""), /\bnext\b/);
+  assert.equal(viewModel.decisionEnvelopeSummary.kind, "run-packet");
+  assert.match(viewModel.nextBestAction.detail, /next accepted packet/i);
+  assert.equal(viewModel.nextBestAction.safeAction ?? "", "");
+  assert.equal(viewModel.nextBestAction.command ?? "", "");
   assert.match(viewModel.processHygiene.warnings.join("\n"), /Intervene|quiet/i);
 });
 

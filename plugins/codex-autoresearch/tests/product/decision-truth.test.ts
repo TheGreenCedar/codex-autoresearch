@@ -4,14 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { buildLoopContractStatus } from "../../lib/loop-governance.js";
 import {
   QUALITY_GAP_DECISIONS_FILE,
   qualityGapId,
   recordQualityGapDecision,
   summarizeQualityGaps,
 } from "../../lib/research-gaps.js";
-import { resolveSessionDecision } from "../../lib/session-read-model.js";
 import { buildResearchIntegrity } from "../../lib/truth-signals.js";
 import { analyzeWorkflowFriction } from "../../lib/workflow-friction.js";
 
@@ -108,7 +106,7 @@ test("recordQualityGapDecision validates existence and durably appends the decis
   }
 });
 
-test("nonzero quality_gap is not classified as a perfect quality score", () => {
+test("quality_gap values remain round-local rather than global perfect signals", () => {
   const nonzero = buildResearchIntegrity({
     state: { current: [] },
     parsedMetrics: { quality_gap: 6 },
@@ -121,7 +119,7 @@ test("nonzero quality_gap is not classified as a perfect quality score", () => {
     parsedMetrics: { quality_gap: 0 },
     metricName: "quality_gap",
   });
-  assert.deepEqual(zero.suspiciousPerfectMetrics, ["quality_gap=0"]);
+  assert.deepEqual(zero.suspiciousPerfectMetrics, []);
 });
 
 test("saturation requires accepted run evidence and an accepted qualitative round", () => {
@@ -167,95 +165,4 @@ test("saturation requires accepted run evidence and an accepted qualitative roun
     acceptedSignals.some((signal) => signal.kind === "metric_saturated_not_promotable"),
     true,
   );
-});
-
-test("baseline and round evidence outrank finalization projections", () => {
-  const noRuns = buildLoopContractStatus({
-    activeSegment: { runs: 0 },
-    finalizationReadiness: { ready: true, nextAction: "Finalize now." },
-  });
-  assert.equal(noRuns.strongestAction?.kind, "needs-baseline");
-  assert.equal(noRuns.blockers.length, 0);
-  assert.equal(noRuns.canRunNextPacket, true);
-  assert.equal(
-    noRuns.warnings.some((warning) => warning.kind === "finalization"),
-    false,
-  );
-
-  const pendingPacket = buildLoopContractStatus({
-    activeSegment: { runs: 0 },
-    latestPacketFreshness: { fresh: true, reason: "Log the pending packet." },
-    finalizationReadiness: { ready: true },
-  });
-  assert.equal(pendingPacket.strongestAction?.kind, "log-decision");
-
-  const needsEvidence = buildLoopContractStatus({
-    activeSegment: { runs: 1 },
-    workflowFriction: [
-      {
-        kind: "quality_round_evidence_required",
-        reason: "Raw checkbox is provisional.",
-        suggestedAction: { reason: "Record the structured decision." },
-      },
-    ],
-    finalizationReadiness: { ready: true },
-  });
-  assert.equal(needsEvidence.strongestAction?.kind, "needs-evidence");
-  assert.equal(
-    needsEvidence.warnings.some((warning) => warning.kind === "finalization"),
-    false,
-  );
-});
-
-test("resolved decisions cannot preserve stale complete or ready state without a run", () => {
-  const decision = resolveSessionDecision({
-    state: {
-      current: [],
-      resolvedDecision: { status: "complete" },
-      finalizationPressure: { ready: true },
-    },
-  });
-  assert.equal(decision.status, "ready");
-  assert.equal(decision.strongestBlocker, null);
-  assert.equal(decision.canonicalNextAction?.kind, "needs-baseline");
-  assert.equal(decision.finalizationPressure?.ready, false);
-  assert.equal(decision.finalizationPressure?.blockedBy, "needs-baseline");
-});
-
-test("projected run counts and pending packet actions outrank a synthetic zero-run default", () => {
-  const currentTree = resolveSessionDecision({
-    state: {
-      current: [],
-      resolvedDecision: {
-        status: "blocked",
-        canonicalNextAction: {
-          kind: "current-tree-finalization",
-          reason: "Review the current tree.",
-        },
-      },
-    },
-    decisionEnvelope: {
-      activeSegment: { runs: 1 },
-      canonicalNextAction: {
-        kind: "current-tree-finalization",
-        reason: "Review the current tree.",
-      },
-    },
-  });
-  assert.equal(currentTree.canonicalNextAction?.kind, "current-tree-finalization");
-
-  const pendingLog = resolveSessionDecision({
-    state: {
-      current: [],
-      resolvedDecision: {
-        status: "ready",
-        canonicalNextAction: {
-          kind: "log-decision",
-          reason: "Log the pending packet.",
-        },
-      },
-    },
-  });
-  assert.equal(pendingLog.canonicalNextAction?.kind, "log-decision");
-  assert.notEqual(pendingLog.finalizationPressure?.blockedBy, "needs-baseline");
 });

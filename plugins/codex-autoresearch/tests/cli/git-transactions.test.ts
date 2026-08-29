@@ -1,9 +1,122 @@
 import assert from "node:assert/strict";
-import { access, chmod, mkdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  copyFile,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
 import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
+
+async function prepareAcceptedKeep(
+  dir: string,
+  {
+    commitPaths,
+    editableScope,
+    mutate,
+    prepareAcceptedTree,
+    preparePacketHead,
+  }: {
+    commitPaths: string[];
+    editableScope: string[];
+    mutate: () => Promise<void>;
+    prepareAcceptedTree?: () => Promise<void>;
+    preparePacketHead?: () => Promise<void>;
+  },
+): Promise<void> {
+  await mkdir(path.join(dir, "contract"), { recursive: true });
+  await writeFile(
+    path.join(dir, "contract", "evaluator.mjs"),
+    "console.log('METRIC seconds=1');\n",
+  );
+  await writeFile(path.join(dir, "contract", "checks.mjs"), "process.exit(0);\n");
+  const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} contract/evaluator.mjs`;
+  const checksCommand = `${quoteForAcceptedShell(process.execPath)} contract/checks.mjs`;
+  const setup = await setupFixture(dir, {
+    name: "accepted Git transaction fixture",
+    goal: "Keep only contract-qualified repository changes.",
+    metricName: "seconds",
+    direction: "lower",
+    completeContract: true,
+    benchmarkCommand,
+    checksCommand,
+    packetBudget: 20,
+    scope: "src",
+  });
+  assert.equal(setup.code, 0, setup.stderr);
+  const configPath = path.join(dir, "autoresearch.config.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  await writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        ...config,
+        checkImplementationPaths: ["contract/checks.mjs"],
+        checksAuthoritative: true,
+        commitPaths,
+        editableScope,
+        maxIterations: 20,
+        metricSemantics: { kind: "minimize", minimumImprovement: 0 },
+        noiseModel: { kind: "deterministic" },
+        protectedBenchmarkPaths: ["contract/evaluator.mjs", "contract/checks.mjs"],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const sessionScripts =
+    process.platform === "win32"
+      ? ["autoresearch.ps1", "autoresearch.checks.ps1"]
+      : ["autoresearch.sh", "autoresearch.checks.sh"];
+  await git(dir, [
+    "add",
+    "autoresearch.jsonl",
+    "autoresearch.config.json",
+    "autoresearch.md",
+    "autoresearch.ideas.md",
+    ...sessionScripts,
+    "contract",
+  ]);
+  await git(dir, ["commit", "-m", "accepted contract fixture"]);
+  await prepareAcceptedTree?.();
+  await preparePacketHead?.();
+  const accepted = await runCli([
+    "new-segment",
+    "--cwd",
+    dir,
+    "--reason",
+    "Accept the Git transaction fixture contract",
+    "--yes",
+  ]);
+  assert.equal(accepted.code, 0, accepted.stderr);
+  const baseline = await runCli([
+    "log",
+    "--cwd",
+    dir,
+    "--metric",
+    "2",
+    "--status",
+    "measure",
+    "--description",
+    "Manual reference observation",
+  ]);
+  assert.equal(baseline.code, 0, baseline.stderr);
+  await mutate();
+  const packet = await runCli(["next", "--cwd", dir]);
+  assert.equal(packet.code, 0, packet.stderr);
+  const payload = JSON.parse(packet.stdout);
+  assert.ok(payload.decision, packet.stdout);
+  assert.equal(payload.decision.allowedStatuses.includes("keep"), true);
+}
 
 test("keep commits can be scoped to experiment paths", async () => {
   await withTempDir("scoped-commit", async (dir) => {
@@ -15,15 +128,22 @@ test("keep commits can be scoped to experiment paths", async () => {
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "scoped commit" });
-    await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
-    await writeFile(path.join(dir, "scratch.txt"), "do not commit\n", "utf8");
+    await prepareAcceptedKeep(dir, {
+      commitPaths: ["tracked.txt"],
+      editableScope: ["tracked.txt"],
+      prepareAcceptedTree: async () => {
+        await writeFile(path.join(dir, "scratch.txt"), "do not commit\n", "utf8");
+      },
+      mutate: async () => {
+        await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+      },
+    });
 
     const result = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
       "keep",
       "--description",
@@ -52,16 +172,19 @@ test("keep logs require scoped commit paths or explicit add-all in git repos", a
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "add all gate" });
-    await git(dir, ["add", "autoresearch.jsonl"]);
-    await git(dir, ["commit", "-m", "session"]);
-    await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+    await prepareAcceptedKeep(dir, {
+      commitPaths: [],
+      editableScope: ["tracked.txt"],
+      mutate: async () => {
+        await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+      },
+    });
 
     const blocked = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
       "keep",
       "--description",
@@ -75,8 +198,7 @@ test("keep logs require scoped commit paths or explicit add-all in git repos", a
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
       "keep",
       "--description",
@@ -98,25 +220,25 @@ test("keep logs preflight missing commit paths before git add mutates the index"
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "missing path" });
-    await writeFile(
-      path.join(dir, "autoresearch.config.json"),
-      JSON.stringify({ commitPaths: ["docs/testing/research-data-catalog.md"] }, null, 2),
-      "utf8",
-    );
-    await git(dir, ["add", "autoresearch.jsonl", "autoresearch.config.json"]);
-    await git(dir, ["commit", "-m", "session"]);
-    await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+    await prepareAcceptedKeep(dir, {
+      commitPaths: ["tracked.txt"],
+      editableScope: ["tracked.txt"],
+      mutate: async () => {
+        await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+      },
+    });
 
     const blocked = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
       "keep",
       "--description",
       "Blocked missing path",
+      "--commit-paths",
+      "docs/testing/research-data-catalog.md",
     ]);
     assert.notEqual(blocked.code, 0);
     assert.match(blocked.stderr, /Configured commitPaths do not exist before git add/);
@@ -137,26 +259,26 @@ test("keep logs reject Git pathspec magic in commit paths", async () => {
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "pathspec commit" });
-    await writeFile(
-      path.join(dir, "autoresearch.config.json"),
-      JSON.stringify({ commitPaths: [":(top)"] }, null, 2),
-      "utf8",
-    );
-    await git(dir, ["add", "autoresearch.jsonl", "autoresearch.config.json"]);
-    await git(dir, ["commit", "-m", "session"]);
-    await writeFile(path.join(dir, "a.txt"), "after\n", "utf8");
-    await writeFile(path.join(dir, "b.txt"), "after\n", "utf8");
+    await prepareAcceptedKeep(dir, {
+      commitPaths: ["a.txt", "b.txt"],
+      editableScope: ["a.txt", "b.txt"],
+      mutate: async () => {
+        await writeFile(path.join(dir, "a.txt"), "after\n", "utf8");
+        await writeFile(path.join(dir, "b.txt"), "after\n", "utf8");
+      },
+    });
 
     const result = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
       "keep",
       "--description",
       "Blocked pathspec keep",
+      "--commit-paths",
+      ":(top)",
     ]);
 
     assert.notEqual(result.code, 0);
@@ -202,6 +324,234 @@ test("discard cleanup rejects Git pathspec magic in revert paths", async () => {
     assert.match(await git(dir, ["status", "--short"]), /M a\.txt/);
     assert.match(await git(dir, ["status", "--short"]), /M b\.txt/);
   });
+});
+
+test("scoped discard rejects renames that cross the configured ownership boundary", async (t) => {
+  for (const [direction, staged] of [
+    ["outside-to-inside", true],
+    ["outside-to-inside", false],
+    ["inside-to-outside", true],
+    ["inside-to-outside", false],
+  ] as const) {
+    await t.test(`${direction} ${staged ? "staged" : "unstaged"}`, async () => {
+      await withTempDir(`cross-scope-rename-${direction}-${staged}`, async (dir) => {
+        await git(dir, ["init"]);
+        await mkdir(path.join(dir, "src"), { recursive: true });
+        await writeFile(path.join(dir, "src", "inside.txt"), "inside\n");
+        await writeFile(path.join(dir, "outside.txt"), "outside\n");
+        await setupFixture(dir, { name: "cross-scope rename" });
+        await writeFile(
+          path.join(dir, "autoresearch.config.json"),
+          `${JSON.stringify({ commitPaths: ["src"] }, null, 2)}\n`,
+        );
+        await git(dir, ["add", "-A"]);
+        await git(dir, ["commit", "-m", "initial scoped tree"]);
+        const source = direction === "outside-to-inside" ? "outside.txt" : "src/inside.txt";
+        const destination =
+          direction === "outside-to-inside" ? "src/moved.txt" : "moved-outside.txt";
+        if (staged) {
+          await git(dir, ["mv", source, destination]);
+        } else {
+          await rename(path.join(dir, source), path.join(dir, destination));
+        }
+
+        const result = await runCli([
+          "log",
+          "--cwd",
+          dir,
+          "--metric",
+          "1",
+          "--status",
+          "discard",
+          "--description",
+          "Reject cross-scope rename",
+        ]);
+
+        assert.notEqual(result.code, 0);
+        assert.match(result.stderr, /rename.*scope|cross.*scope|ownership boundary/i);
+        assert.match(await git(dir, ["status", "--short"]), /R|D.*\n.*\?\?/s);
+        await access(path.join(dir, destination));
+      });
+    });
+  }
+});
+
+test("broad discard rejects a moved protected session identity", async () => {
+  await withTempDir("broad-protected-session-move", async (dir) => {
+    await git(dir, ["init"]);
+    await setupFixture(dir, { name: "protected session move" });
+    await writeFile(path.join(dir, "autoresearch.md"), "protected operator session\n", "utf8");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "tracked session"]);
+    const destination = path.join(dir, "moved-session-notes.md");
+    await rename(path.join(dir, "autoresearch.md"), destination);
+    await writeFile(destination, "operator notes moved and edited after evaluation\n", "utf8");
+
+    const result = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "discard",
+      "--description",
+      "Reject moved session identity",
+      "--allow-dirty-revert",
+    ]);
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /protected.*move|session.*move|protected.*deleted/i);
+    assert.equal(
+      await readFile(destination, "utf8"),
+      "operator notes moved and edited after evaluation\n",
+    );
+    await assert.rejects(access(path.join(dir, "autoresearch.md")), /ENOENT/);
+  });
+});
+
+test("broad discard rejects protected content moved through a replaced source", async () => {
+  await withTempDir("broad-protected-source-replacement", async (dir) => {
+    await git(dir, ["init"]);
+    await setupFixture(dir, { name: "protected source replacement" });
+    await writeFile(path.join(dir, "autoresearch.md"), "protected identity A\n", "utf8");
+    await writeFile(path.join(dir, "ordinary-notes.md"), "ordinary baseline B\n", "utf8");
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "tracked protected identity"]);
+    await writeFile(path.join(dir, "ordinary-notes.md"), "protected identity A\n", "utf8");
+    await writeFile(path.join(dir, "autoresearch.md"), "replacement content C\n", "utf8");
+
+    const result = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "1",
+      "--status",
+      "discard",
+      "--description",
+      "Reject protected source replacement",
+      "--allow-dirty-revert",
+    ]);
+
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /protected.*content|protected.*identity|moved protected/i);
+    assert.equal(
+      await readFile(path.join(dir, "autoresearch.md"), "utf8"),
+      "replacement content C\n",
+    );
+    assert.equal(
+      await readFile(path.join(dir, "ordinary-notes.md"), "utf8"),
+      "protected identity A\n",
+    );
+  });
+});
+
+test("scoped discard rejects Git copy records that cross the ownership boundary", async (t) => {
+  for (const direction of ["outside-to-inside", "inside-to-outside"] as const) {
+    await t.test(direction, async () => {
+      await withTempDir(`cross-scope-copy-${direction}`, async (dir) => {
+        await git(dir, ["init"]);
+        await mkdir(path.join(dir, "src"), { recursive: true });
+        await writeFile(path.join(dir, "src", "inside.txt"), "inside original\n");
+        await writeFile(path.join(dir, "outside.txt"), "outside original\n");
+        await setupFixture(dir, { name: "cross-scope copy" });
+        await writeFile(
+          path.join(dir, "autoresearch.config.json"),
+          `${JSON.stringify({ commitPaths: ["src"] }, null, 2)}\n`,
+        );
+        await git(dir, ["add", "-A"]);
+        await git(dir, ["commit", "-m", "initial copy tree"]);
+        await git(dir, ["config", "status.renames", "copies"]);
+        const source = direction === "outside-to-inside" ? "outside.txt" : "src/inside.txt";
+        const destination =
+          direction === "outside-to-inside" ? "src/copied.txt" : "copied-outside.txt";
+        const sourceEdit = `${direction} operator source edit\n`;
+        await copyFile(path.join(dir, source), path.join(dir, destination));
+        await writeFile(path.join(dir, source), sourceEdit);
+        await git(dir, ["add", "--", source, destination]);
+        const before = await git(dir, ["status", "--short"]);
+        assert.match(before, /C\s|C[0-9]*\s|->/i, before);
+
+        const result = await runCli([
+          "log",
+          "--cwd",
+          dir,
+          "--metric",
+          "1",
+          "--status",
+          "discard",
+          "--description",
+          "Reject cross-scope copy",
+        ]);
+
+        assert.notEqual(result.code, 0);
+        assert.match(result.stderr, /copy.*scope|cross.*scope|ownership boundary|rename.*scope/i);
+        assert.equal(await readFile(path.join(dir, source), "utf8"), sourceEdit);
+        await access(path.join(dir, destination));
+      });
+    });
+  }
+});
+
+test("scoped discard rejects edited and split-index cross-boundary move shapes", async (t) => {
+  for (const direction of ["outside-to-inside", "inside-to-outside"] as const) {
+    for (const shape of [
+      "edited-unstaged",
+      "destination-staged",
+      "deletion-staged",
+      "both-staged",
+      "tracked-destination-overwrite",
+    ] as const) {
+      await t.test(`${direction} ${shape}`, async () => {
+        await withTempDir(`cross-boundary-${direction}-${shape}`, async (dir) => {
+          const source = direction === "outside-to-inside" ? "outside.txt" : "src/inside.txt";
+          const destination =
+            direction === "outside-to-inside" ? "src/moved.txt" : "moved-outside.txt";
+          await git(dir, ["init"]);
+          await mkdir(path.join(dir, "src"), { recursive: true });
+          await writeFile(path.join(dir, "src", "inside.txt"), "inside original\n");
+          await writeFile(path.join(dir, "outside.txt"), "outside original\n");
+          if (shape === "tracked-destination-overwrite") {
+            await writeFile(path.join(dir, destination), "tracked destination baseline\n");
+          }
+          await setupFixture(dir, { name: "ambiguous cross-boundary move" });
+          await writeFile(
+            path.join(dir, "autoresearch.config.json"),
+            `${JSON.stringify({ commitPaths: ["src"] }, null, 2)}\n`,
+          );
+          await git(dir, ["add", "-A"]);
+          await git(dir, ["commit", "-m", "initial scoped tree"]);
+          const edited = `edited destination ${direction} ${shape} with unrelated content\n`;
+          await rename(path.join(dir, source), path.join(dir, destination));
+          await writeFile(path.join(dir, destination), edited, "utf8");
+          if (shape === "destination-staged") {
+            await git(dir, ["add", "--", destination]);
+          } else if (shape === "deletion-staged") {
+            await git(dir, ["add", "-u", "--", source]);
+          } else if (shape === "both-staged") {
+            await git(dir, ["add", "-A", "--", source, destination]);
+          }
+
+          const result = await runCli([
+            "log",
+            "--cwd",
+            dir,
+            "--metric",
+            "1",
+            "--status",
+            "discard",
+            "--description",
+            "Reject ambiguous cross-boundary move",
+          ]);
+
+          assert.notEqual(result.code, 0);
+          assert.match(result.stderr, /rename.*scope|cross.*scope|ownership boundary|ambiguous/i);
+          assert.equal(await readFile(path.join(dir, destination), "utf8"), edited);
+        });
+      });
+    }
+  }
 });
 
 test("discard preservation rejects linked Autoresearch-owned directories", async (t) => {
@@ -262,18 +612,25 @@ test("keep logs allow tracked deletions in commit paths", async () => {
     await writeFile(path.join(dir, "tracked.txt"), "before\n", "utf8");
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
+    await mkdir(path.join(dir, "scope"), { recursive: true });
+    await writeFile(path.join(dir, "scope", ".keep"), "fixture\n");
+    await git(dir, ["add", "scope/.keep"]);
+    await git(dir, ["commit", "-m", "add fixture scope"]);
 
     await setupFixture(dir, { name: "delete tracked" });
-    await git(dir, ["add", "autoresearch.jsonl"]);
-    await git(dir, ["commit", "-m", "session"]);
-    await rm(path.join(dir, "tracked.txt"));
+    await prepareAcceptedKeep(dir, {
+      commitPaths: ["scope"],
+      editableScope: ["tracked.txt"],
+      mutate: async () => {
+        await rm(path.join(dir, "tracked.txt"));
+      },
+    });
 
     const logged = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
       "keep",
       "--description",
@@ -302,18 +659,22 @@ test("scoped keep commits preserve unrelated staged files", async () => {
     await git(dir, ["commit", "-m", "initial"]);
     const initialized = await setupFixture(dir, { name: "scoped keep" });
     assert.equal(initialized.code, 0, initialized.stderr);
-    await git(dir, ["add", "autoresearch.jsonl"]);
-    await git(dir, ["commit", "-m", "session"]);
-
-    await writeFile(path.join(dir, "scoped.txt"), "after\n");
-    await writeFile(path.join(dir, "unrelated.txt"), "staged elsewhere\n");
-    await git(dir, ["add", "unrelated.txt"]);
+    await prepareAcceptedKeep(dir, {
+      commitPaths: ["scoped.txt"],
+      editableScope: ["scoped.txt"],
+      prepareAcceptedTree: async () => {
+        await writeFile(path.join(dir, "unrelated.txt"), "staged elsewhere\n");
+        await git(dir, ["add", "unrelated.txt"]);
+      },
+      mutate: async () => {
+        await writeFile(path.join(dir, "scoped.txt"), "after\n");
+      },
+    });
     const logged = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
       "keep",
       "--description",
@@ -336,9 +697,13 @@ test("Git scope options reject wildcard pathspec characters", async () => {
     await git(dir, ["add", "file.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
     await setupFixture(dir, { name: "wildcards" });
-    await git(dir, ["add", "autoresearch.jsonl"]);
-    await git(dir, ["commit", "-m", "session"]);
-    await writeFile(path.join(dir, "file.txt"), "after\n");
+    await prepareAcceptedKeep(dir, {
+      commitPaths: ["file.txt"],
+      editableScope: ["file.txt"],
+      mutate: async () => {
+        await writeFile(path.join(dir, "file.txt"), "after\n");
+      },
+    });
     for (const [option, value] of [
       ["--commit-paths", "*.txt"],
       ["--commit-paths", "file?.txt"],
@@ -348,8 +713,7 @@ test("Git scope options reject wildcard pathspec characters", async () => {
         "log",
         "--cwd",
         dir,
-        "--metric",
-        "1",
+        "--from-last",
         "--status",
         option === "--revert-paths" ? "discard" : "keep",
         "--description",
@@ -373,17 +737,20 @@ test("keep logs report structured git index lock recovery", async () => {
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "lock" });
-    await git(dir, ["add", "autoresearch.jsonl"]);
-    await git(dir, ["commit", "-m", "session"]);
-    await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+    await prepareAcceptedKeep(dir, {
+      commitPaths: ["tracked.txt"],
+      editableScope: ["tracked.txt"],
+      mutate: async () => {
+        await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+      },
+    });
     await writeFile(path.join(dir, ".git", "index.lock"), "stale lock\n", "utf8");
 
     const blocked = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
       "keep",
       "--description",
@@ -392,9 +759,9 @@ test("keep logs report structured git index lock recovery", async () => {
       "tracked.txt",
     ]);
     assert.notEqual(blocked.code, 0);
-    assert.match(blocked.stderr, /Git index lock blocked git add/);
-    assert.match(blocked.stderr, /Live git process check/);
-    assert.match(blocked.stderr, /has not staged or committed anything/);
+    assert.match(blocked.stderr, /Git index tree could not be captured/);
+    assert.match(blocked.stderr, /index\.lock.*File exists/s);
+    assert.doesNotMatch(blocked.stderr, /Git index lock blocked git add/);
   });
 });
 
@@ -403,21 +770,19 @@ test("logged packets do not leave .git autoresearch runtime dirs as stale artifa
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
     await git(dir, ["config", "user.name", "Codex Test"]);
-    await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
-    await git(dir, ["add", "tracked.txt"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "tracked.txt"), "base\n", "utf8");
+    await git(dir, ["add", "src/tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "runtime dir" });
-    await writeFile(
-      path.join(dir, "packet.command"),
-      "node -e \"console.log('METRIC seconds=1')\"\n",
-      "utf8",
-    );
-    await git(dir, ["add", "autoresearch.jsonl", "packet.command"]);
-    await git(dir, ["commit", "-m", "session"]);
-
-    const packet = await runCli(["next", "--cwd", dir, "--command-file", "packet.command"]);
-    assert.equal(packet.code, 0, packet.stderr);
+    await prepareAcceptedKeep(dir, {
+      commitPaths: ["tracked.txt"],
+      editableScope: ["tracked.txt"],
+      mutate: async () => {
+        await writeFile(path.join(dir, "tracked.txt"), "candidate\n", "utf8");
+      },
+    });
     const logged = await runCli([
       "log",
       "--cwd",
@@ -463,13 +828,13 @@ test("Git-private state accepts a repository reached through a canonicalized anc
 
     const initialized = await setupFixture(aliasedRepo, { name: "aliased Git-private state" });
     assert.equal(initialized.code, 0, initialized.stderr);
-    await writeFile(
-      path.join(aliasedRepo, "packet.command"),
-      "node -e \"console.log('METRIC seconds=1')\"\n",
-      "utf8",
-    );
-    const packet = await runCli(["next", "--cwd", aliasedRepo, "--command-file", "packet.command"]);
-    assert.equal(packet.code, 0, packet.stderr);
+    await prepareAcceptedKeep(aliasedRepo, {
+      commitPaths: ["tracked.txt"],
+      editableScope: ["tracked.txt"],
+      mutate: async () => {
+        await writeFile(path.join(aliasedRepo, "tracked.txt"), "candidate\n", "utf8");
+      },
+    });
     await access(path.join(realRepo, ".git", "autoresearch", "last-run.json"));
     const logged = await runCli([
       "log",
@@ -499,18 +864,25 @@ test("keep logs can record an existing commit without staging dirty work", async
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "existing commit" });
-    await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
-    await git(dir, ["add", "tracked.txt"]);
-    await git(dir, ["commit", "-m", "manual experiment"]);
-    const manualCommit = await git(dir, ["rev-parse", "HEAD"]);
     await writeFile(path.join(dir, "scratch.txt"), "leave dirty\n", "utf8");
+    let manualCommit = "";
+    await prepareAcceptedKeep(dir, {
+      commitPaths: ["tracked.txt"],
+      editableScope: ["tracked.txt"],
+      mutate: async () => {},
+      preparePacketHead: async () => {
+        await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+        await git(dir, ["add", "tracked.txt"]);
+        await git(dir, ["commit", "-m", "manual experiment"]);
+        manualCommit = await git(dir, ["rev-parse", "HEAD"]);
+      },
+    });
 
     const logged = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
       "keep",
       "--description",
@@ -522,7 +894,7 @@ test("keep logs can record an existing commit without staging dirty work", async
     const payload = JSON.parse(logged.stdout);
     assert.equal(payload.experiment.commit, manualCommit.slice(0, 12));
     assert.match(payload.git, /recorded existing commit/);
-    assert.match(await git(dir, ["status", "--short"]), /\?\? autoresearch\.jsonl/);
+    assert.match(await git(dir, ["status", "--short"]), /M autoresearch\.jsonl/);
     assert.match(await git(dir, ["status", "--short"]), /\?\? scratch\.txt/);
   });
 });
@@ -575,16 +947,17 @@ test("dashboard export decision envelope carries dirty source drift", async () =
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
 
-    await setupFixture(dir, { name: "dirty dashboard" });
-    await writeFile(path.join(dir, "tracked.txt"), "changed\n", "utf8");
+    await setupFixture(dir, { name: "dirty dashboard", acceptedContract: true });
+    await writeFile(path.join(dir, "src", "tracked.txt"), "changed\n", "utf8");
 
     const exported = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exported.code, 0, exported.stderr);
     const payload = JSON.parse(exported.stdout);
-    assert.equal(payload.viewModel.decisionEnvelope.dirtySourceDrift.dirty, true);
+    assert.equal(payload.viewModel.decisionPlanProjection.primaryBlockerCode, "dirty-source");
+    assert.equal(payload.viewModel.decisionPlanProjection.capabilities["run-packet"], "allowed");
     assert.ok(
-      payload.viewModel.decisionEnvelope.dirtySourceDrift.warnings.some(
-        (warning) => warning.code === "git_dirty",
+      payload.viewModel.decisionPlanProjection.requiredEvidence.diagnosticCodes.includes(
+        "dirty-source",
       ),
     );
   });
@@ -655,14 +1028,19 @@ test("keep logs fail instead of recording success when git add fails", async () 
     await git(dir, ["commit", "-m", "initial"]);
 
     await setupFixture(dir, { name: "git add failure" });
-    await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+    await prepareAcceptedKeep(dir, {
+      commitPaths: ["tracked.txt"],
+      editableScope: ["tracked.txt"],
+      mutate: async () => {
+        await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+      },
+    });
 
     const result = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
       "keep",
       "--description",
@@ -678,7 +1056,7 @@ test("keep logs fail instead of recording success when git add fails", async () 
   });
 });
 
-test("keep logs fail instead of recording success when git commit fails", async () => {
+test("keep commit creation does not execute repository hooks", async () => {
   await withTempDir("keep-commit-failure", async (dir) => {
     await git(dir, ["init"]);
     await git(dir, ["config", "user.email", "codex@example.test"]);
@@ -687,32 +1065,36 @@ test("keep logs fail instead of recording success when git commit fails", async 
     await writeFile(path.join(dir, "tracked.txt"), "before\n", "utf8");
     await git(dir, ["add", "tracked.txt"]);
     await git(dir, ["commit", "-m", "initial"]);
+    await setupFixture(dir, { name: "commit failure" });
+    await prepareAcceptedKeep(dir, {
+      commitPaths: ["tracked.txt"],
+      editableScope: ["tracked.txt"],
+      mutate: async () => {
+        await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
+      },
+    });
     await mkdir(path.join(dir, ".git", "hooks"), { recursive: true });
     const hookPath = path.join(dir, ".git", "hooks", "pre-commit");
     await writeFile(hookPath, "#!/bin/sh\nexit 1\n", "utf8");
     await chmod(hookPath, 0o755);
 
-    await setupFixture(dir, { name: "commit failure" });
-    await writeFile(path.join(dir, "tracked.txt"), "after\n", "utf8");
-
     const result = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "1",
+      "--from-last",
       "--status",
       "keep",
       "--description",
-      "Should not commit",
+      "Hook-free commit",
       "--commit-paths",
       "tracked.txt",
     ]);
-    assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /Git commit failed/);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(await git(dir, ["show", "HEAD:tracked.txt"]), "after");
 
     const log = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
-    assert.doesNotMatch(log, /Should not commit/);
+    assert.match(log, /Hook-free commit/);
   });
 });
 
@@ -752,6 +1134,52 @@ test("discard reverts scoped experiment paths without deleting unrelated dirty w
 
     assert.equal(await readFile(path.join(dir, "src", "value.txt"), "utf8"), "base\n");
     assert.equal(await readFile(path.join(dir, "notes.txt"), "utf8"), "unrelated dirty work\n");
+  });
+});
+
+test("scoped discard cleanup preserves ledger and configuration artifacts", async () => {
+  await withTempDir("discard-preserves-session", async (dir) => {
+    await git(dir, ["init"]);
+    await git(dir, ["config", "user.email", "codex@example.test"]);
+    await git(dir, ["config", "user.name", "Codex Test"]);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await writeFile(path.join(dir, "src", "value.txt"), "base\n", "utf8");
+    await setupFixture(dir, { name: "preserve session cleanup" });
+    await writeFile(
+      path.join(dir, "autoresearch.config.json"),
+      `${JSON.stringify({ commitPaths: ["src", "autoresearch.jsonl", "autoresearch.config.json"] }, null, 2)}\n`,
+    );
+    await git(dir, ["add", "-A"]);
+    await git(dir, ["commit", "-m", "initial session"]);
+
+    await writeFile(path.join(dir, "src", "value.txt"), "experiment\n", "utf8");
+    const changedConfig = `${JSON.stringify(
+      {
+        commitPaths: ["src", "autoresearch.jsonl", "autoresearch.config.json"],
+        budgetNote: "keep this operator setting",
+      },
+      null,
+      2,
+    )}\n`;
+    await writeFile(path.join(dir, "autoresearch.config.json"), changedConfig);
+
+    const result = await runCli([
+      "log",
+      "--cwd",
+      dir,
+      "--metric",
+      "2",
+      "--status",
+      "discard",
+      "--description",
+      "Discard source only",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+
+    assert.equal(await readFile(path.join(dir, "src", "value.txt"), "utf8"), "base\n");
+    assert.equal(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"), changedConfig);
+    const ledger = await readFile(path.join(dir, "autoresearch.jsonl"), "utf8");
+    assert.match(ledger, /Discard source only/);
   });
 });
 

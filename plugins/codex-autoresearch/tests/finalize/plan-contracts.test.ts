@@ -13,6 +13,7 @@ import {
   git,
   run,
   testWithTempRoot,
+  writeCompleteFinalizationEvidenceFixture,
   writeFile,
 } from "./helpers.js";
 
@@ -120,6 +121,49 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
+  "complete finalization fixtures earn accepted authority through public packets and logs",
+  "autoresearch-finalization-evidence-fixture-",
+  async (root) => {
+    const repo = path.join(root, "repo");
+    await fsp.mkdir(repo, { recursive: true });
+    await git(["init", "-b", "main"], repo);
+    await writeFile(path.join(repo, "src", "value.txt"), "base\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "base"], repo);
+    await git(["switch", "-c", "codex/real-finalization-fixture"], repo);
+    await writeFile(path.join(repo, "src", "value.txt"), "accepted\n");
+    await git(["add", "src/value.txt"], repo);
+    await git(["commit", "-m", "accepted candidate"], repo);
+    const targetCommit = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit });
+
+    const ledger = await readAutoresearchLedger(repo, { mode: "strict" });
+    const acceptedContractIndex = ledger.findIndex(
+      (entry) => entry.type === "experiment-contract-accepted",
+    );
+    const baselineIndex = ledger.findIndex(
+      (entry, index) => index > acceptedContractIndex && entry.status === "measure",
+    );
+    const acceptedKeepIndex = ledger.findIndex(
+      (entry, index) =>
+        index > baselineIndex &&
+        entry.status === "keep" &&
+        entry.evidenceStatus === "accepted" &&
+        commitReferencesMatch(entry.commit, targetCommit),
+    );
+
+    assert.ok(acceptedContractIndex >= 0);
+    assert.ok(baselineIndex > acceptedContractIndex);
+    assert.ok(acceptedKeepIndex > baselineIndex);
+    assert.equal(ledger[baselineIndex].evaluationAuthority, "accepted-contract");
+    assert.equal(ledger[acceptedKeepIndex].evaluationAuthority, "accepted-contract");
+    assert.equal(ledger[acceptedKeepIndex].candidateOrigin?.kind, "commit");
+    assert.equal(ledger[acceptedKeepIndex].contractEvaluationEvidence?.acceptedEvaluation, true);
+  },
+);
+
+testWithTempRoot(
   "finalize preview suggested plan command keeps the target cwd",
   "autoresearch-finalize-preview-cwd-",
   async (root) => {
@@ -160,9 +204,22 @@ testWithTempRoot(
         "",
       ].join("\n"),
     );
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: kept });
+    const fixtureStatus = (await git(["status", "--short", "--untracked-files=all"], repo)).stdout;
+    assert.equal(fixtureStatus, "", fixtureStatus);
 
     const preview = await run(process.execPath, [cli, "finalize-preview", "--cwd", repo], repo);
     const payload = JSON.parse(preview.stdout);
+    assert.equal(
+      payload.ready,
+      true,
+      JSON.stringify({
+        actionCode: payload.actionCode,
+        blockers: payload.blockers,
+        groups: payload.groups,
+        warnings: payload.warnings,
+      }),
+    );
     const command = payload.suggestedCommands.finalizerPlan.argv;
     assert.deepEqual(command.slice(0, 5), [process.execPath, finalizer, "plan", "--cwd", repo]);
 
@@ -190,6 +247,7 @@ testWithTempRoot(
     await git(["config", "user.name", "Codex Test"], repo);
 
     await writeFile(path.join(repo, "src", "base.txt"), "base\n");
+    await writeFile(path.join(repo, "src", "kept.txt"), "baseline\n");
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "base"], repo);
 
@@ -202,21 +260,6 @@ testWithTempRoot(
     await git(["add", "-A"], repo);
     await git(["commit", "-m", "keep value change"], repo);
     const keptHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
-
-    await writeFile(path.join(repo, "src", "discarded.txt"), "discarded\n");
-    await git(["add", "-A"], repo);
-    await git(["commit", "-m", "discard value change"], repo);
-    const discardHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
-
-    await writeFile(path.join(repo, "src", "crash.txt"), "crash\n");
-    await git(["add", "-A"], repo);
-    await git(["commit", "-m", "crash value change"], repo);
-    const crashHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
-
-    await writeFile(path.join(repo, "src", "unlogged.txt"), "unlogged\n");
-    await git(["add", "-A"], repo);
-    await git(["commit", "-m", "unlogged value change"], repo);
-    const unloggedHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
 
     await writeFile(
       path.join(repo, "autoresearch.jsonl"),
@@ -235,8 +278,25 @@ testWithTempRoot(
           commit: keptHash,
           asi: { hypothesis: "keep the source file" },
         }),
+      ].join("\n") + "\n",
+    );
+    await writeCompleteFinalizationEvidenceFixture(repo, { targetCommit: keptHash });
+
+    await writeFile(path.join(repo, "src", "discarded.txt"), "discarded\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "discard value change"], repo);
+    const discardHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    await writeFile(path.join(repo, "src", "crash.txt"), "crash\n");
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "crash value change"], repo);
+    const crashHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
+
+    await fsp.appendFile(
+      path.join(repo, "autoresearch.jsonl"),
+      [
         JSON.stringify({
-          run: 2,
+          run: 3,
           status: "discard",
           metric: 11,
           description: "Discarded",
@@ -244,7 +304,7 @@ testWithTempRoot(
           asi: { rollback_reason: "Regression" },
         }),
         JSON.stringify({
-          run: 3,
+          run: 4,
           status: "crash",
           description: "Crash",
           commit: crashHash,
@@ -252,6 +312,12 @@ testWithTempRoot(
         }),
       ].join("\n") + "\n",
     );
+
+    await fsp.rm(path.join(repo, "src", "discarded.txt"));
+    await fsp.rm(path.join(repo, "src", "crash.txt"));
+    await git(["add", "-A"], repo);
+    await git(["commit", "-m", "unlogged cleanup"], repo);
+    const unloggedHash = (await git(["rev-parse", "HEAD"], repo)).stdout.trim();
 
     const output = path.join(root, "groups.json");
     const result = await run(
@@ -285,14 +351,14 @@ testWithTempRoot(
 );
 
 testWithTempRoot(
-  "finalizer fingerprints accepted ordering and product-claim inputs but ignores audit-only rows",
-  "autoresearch-finalize-evidence-fingerprint-",
+  "finalizer invalidates a plan when accepted ordering or product-claim inputs change",
+  "autoresearch-finalize-claim-input-fingerprint-",
   async (root) => {
     const stale = await createEvidencePlanFixture(root, "claim-inputs");
     await fsp.appendFile(
       path.join(stale.repo, "autoresearch.jsonl"),
       `${JSON.stringify({
-        run: 2,
+        run: 3,
         status: "keep",
         evidenceStatus: "accepted",
         commit: stale.commit,
@@ -306,7 +372,13 @@ testWithTempRoot(
     assert.notEqual(staleResult.code, 0);
     assert.match(staleResult.stderr, /accepted ledger ordering/i);
     assert.match(staleResult.stderr, /product-claim coverage inputs/i);
+  },
+);
 
+testWithTempRoot(
+  "finalizer ignores audit-only rows when validating an accepted evidence fingerprint",
+  "autoresearch-finalize-audit-only-fingerprint-",
+  async (root) => {
     const audit = await createEvidencePlanFixture(root, "audit-only");
     const malformedCommit = `${audit.commit.slice(0, 12)}not-a-hash`;
     await fsp.appendFile(
@@ -327,7 +399,7 @@ testWithTempRoot(
         }),
         JSON.stringify({
           type: "run",
-          run: 99,
+          run: 3,
           status: "measure",
           commit: audit.commit,
           metric: 1,
@@ -335,7 +407,7 @@ testWithTempRoot(
         }),
         JSON.stringify({
           type: "run",
-          run: 100,
+          run: 4,
           status: "keep",
           evidenceStatus: "rejected",
           commit: malformedCommit,
@@ -347,12 +419,20 @@ testWithTempRoot(
     );
     const auditResult = await run(process.execPath, [finalizer, audit.output], audit.repo);
     assert.match(auditResult.stdout, /Review branches:/);
+  },
+);
 
+testWithTempRoot(
+  "finalizer blocks malformed accepted keep references before writing a plan",
+  "autoresearch-finalize-malformed-keep-fingerprint-",
+  async (root) => {
     const malformedKeep = await createEvidencePlanFixture(root, "malformed-keep", {
       commitRef: (commit) => `${commit.slice(0, 12)}not-a-hash`,
     });
-    assert.deepEqual(malformedKeep.plan.kept_commits, []);
-    assert.deepEqual(malformedKeep.plan.groups, []);
-    assert.equal(malformedKeep.plan.excluded_commits[0]?.status, "unlogged");
+    assert.notEqual(malformedKeep.planResult.code, 0);
+    const refusal = JSON.parse(malformedKeep.planResult.stderr);
+    assert.equal(refusal.code, "mutation-precondition-blocked");
+    assert.equal(refusal.preconditionDecision.capabilities.finalize, "blocked");
+    await assert.rejects(fsp.access(malformedKeep.output));
   },
 );

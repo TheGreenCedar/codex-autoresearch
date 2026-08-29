@@ -13,9 +13,10 @@ git -C <project> status --short --branch
 node scripts/autoresearch.mjs setup --cwd <project> --name "Test runtime" --metric-name seconds --direction lower --benchmark-command "npm test -- --runInBand" --benchmark-prints-metric false --checks-command "npm test" --packet-budget 5 --wall-clock-budget-seconds 1800
 node scripts/autoresearch.mjs config --cwd <project> --commit-paths "vitest.config.ts,tests/helpers/"
 node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
+node scripts/autoresearch.mjs state --cwd <project> --report
 ```
 
-The status check keeps unrelated changes visible before setup writes session files. Doctor should confirm that Autoresearch can produce `METRIC seconds=<number>` from the timed raw command and surface any Git, runtime, or packet problem that would make the first comparison unreliable.
+The status check keeps unrelated changes visible before setup writes session files. Doctor should confirm that the accepted evaluator can produce `METRIC seconds=<number>` from the timed raw command. The state report is the authority for whether the first packet may run.
 
 Now record the baseline:
 
@@ -47,15 +48,15 @@ Because `commitPaths` is configured, Autoresearch can commit only the permitted 
 
 ## Decide whether to continue
 
-The log result says whether another loop action is expected. `continuation.shouldContinue` means the session is still active, not that another packet is authorized; check `loopContract.canRunNextPacket` or compact state's `canRunNextPacket` before running one. `continuation.forbidFinalAnswer` means Codex must not call the goal complete yet.
+The log result includes the precondition and resulting decisions. The resulting `DecisionPlan` says whether packet work, direct handback, repair, transition, or finalization comes next. Compatibility continuation fields do not separately authorize a packet.
 
-Before spending another packet, ask for the current recommendation:
+Before spending another packet, read the canonical state:
 
 ```bash
-node scripts/autoresearch.mjs recommend-next --cwd <project> --compact --operator-checklist
+node scripts/autoresearch.mjs state --cwd <project> --report
 ```
 
-Another run may be useful if the improvement needs a cold-process repeat or there is a different low-risk hypothesis to test. A stale packet, exhausted budget, changed benchmark, or failed check should send the session into repair instead.
+Another run may be useful if the accepted contract needs a cold-process repeat or there is a different low-risk hypothesis to test. A stale packet, exhausted budget, no-learning pause, evaluator drift, or failed check should send the session to its named action instead.
 
 ## Preview the review work
 

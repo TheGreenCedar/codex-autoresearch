@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import {
+  findDecisionCompilerBoundaryOffenders,
   findLooseObjectCompatibilityOffenders,
   findSourceHygieneOffenders,
   formatSourceHygieneOffenders,
@@ -103,6 +104,107 @@ test("source hygiene forbids new local LooseObject any aliases outside allowlist
       reason: "new local LooseObject compatibility alias; use UnknownRecord from lib/types/json.js",
     },
   ]);
+});
+
+test("source hygiene keeps canonical decisions downstream-only and retired authorities deleted", () => {
+  const offenders = findDecisionCompilerBoundaryOffenders([
+    {
+      path: "plugins/codex-autoresearch/lib/decision-compiler.ts",
+      content:
+        'import { projectResolvedDecision } from "./decision-projection.js";\nconst resolvedDecision = {};\n',
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/coherent-session-snapshot.ts",
+      content: 'import type { DecisionPlan } from "./decision-compiler.js";\n',
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/decision-authority.ts",
+      content: "export function selectDecisionAuthority() {}\n",
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/session-core.ts",
+      content: "export function buildDecisionEnvelope() {}\n",
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/session-decision.ts",
+      content: "const reason = finalization.nextAction;\nconst code = finalization.actionCode;\n",
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/finalize-preview.ts",
+      content:
+        "const blocked = sessionDecisionCapsule?.enforcement?.blocksFinalization === true;\n",
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/decision-projection.ts",
+      content: 'import type { DecisionPlan } from "./decision-compiler.js";\n',
+    },
+  ]);
+
+  assert.deepEqual(
+    offenders.map((offender) => offender.path),
+    [
+      "plugins/codex-autoresearch/lib/coherent-session-snapshot.ts",
+      "plugins/codex-autoresearch/lib/decision-authority.ts",
+      "plugins/codex-autoresearch/lib/decision-compiler.ts",
+      "plugins/codex-autoresearch/lib/finalize-preview.ts",
+      "plugins/codex-autoresearch/lib/session-core.ts",
+      "plugins/codex-autoresearch/lib/session-decision.ts",
+    ],
+  );
+  assert.match(offenders[0].reason, /cycle/i);
+  assert.match(offenders[1].reason, /retired/i);
+  assert.match(offenders[2].reason, /projection|compiler input/i);
+  assert.match(offenders[3].reason, /capsule|display/i);
+  assert.match(offenders[4].reason, /retired/i);
+  assert.match(offenders[5].reason, /projection|nextAction/i);
+});
+
+test("decision-boundary hygiene scans hostile source text without backtracking", () => {
+  const whitespace = "\t".repeat(50_000);
+  const repeatedSpecifier = "session-decision".repeat(10_000);
+  const offenders = findDecisionCompilerBoundaryOffenders([
+    {
+      path: "plugins/codex-autoresearch/lib/finalize-preview.ts",
+      content: `const blocked = sessionDecisionCapsule${whitespace}?.${whitespace}enforcement;`,
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/session-decision.ts",
+      content: `const action = finalization${whitespace}.${whitespace}nextAction;`,
+    },
+    {
+      path: "plugins/codex-autoresearch/lib/coherent-session-snapshot.ts",
+      content: `const module = import${whitespace}("./${repeatedSpecifier}.js");`,
+    },
+    {
+      path: `plugins/codex-autoresearch/lib/${"nested/".repeat(10_000)}safe.ts`,
+      content: "export const safe = true;",
+    },
+  ]);
+
+  assert.deepEqual(
+    offenders.map((offender) => offender.path),
+    [
+      "plugins/codex-autoresearch/lib/coherent-session-snapshot.ts",
+      "plugins/codex-autoresearch/lib/finalize-preview.ts",
+      "plugins/codex-autoresearch/lib/session-decision.ts",
+    ],
+  );
+});
+
+test("public finalization fixtures cannot overwrite planner groups and self-sign the result", () => {
+  const fixtureSources = [
+    path.join(pluginRoot, "tests", "finalize", "helpers.ts"),
+    path.join(pluginRoot, "tests", "finalize", "review-branches.test.ts"),
+  ]
+    .map((sourcePath) => readFileSync(sourcePath, "utf8"))
+    .join("\n");
+
+  assert.doesNotMatch(fixtureSources, /\battachCurrentFinalizationAuthority\b/);
+  assert.doesNotMatch(fixtureSources, /\bgroups\s*:\s*requestedPlan\.groups\b/);
+  assert.doesNotMatch(
+    fixtureSources,
+    /\bplan_fingerprint\s*=\s*finalizationPlanFingerprint\s*\(\s*authorizedPlan\s*\)/,
+  );
 });
 
 test("plugin metadata keeps the public product boundary", () => {

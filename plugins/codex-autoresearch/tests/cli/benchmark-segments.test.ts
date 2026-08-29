@@ -4,18 +4,64 @@ import path from "node:path";
 import test from "node:test";
 import { renderExportedDashboard } from "../helpers/dashboard-export.js";
 import { cliPayload } from "../helpers/cli-session.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell, quoteForRunShell } from "../helpers/process.js";
 
 import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
 
+const contractChecksCommand = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
+const contractEvaluatorCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC metric=1')"`;
+
+async function writeCompleteContractConfig(dir: string, overrides: Record<string, unknown> = {}) {
+  await mkdir(path.join(dir, "src"), { recursive: true });
+  await writeFile(
+    path.join(dir, "autoresearch.config.json"),
+    `${JSON.stringify(
+      {
+        benchmarkCommand: contractEvaluatorCommand,
+        checksCommand: contractChecksCommand,
+        commitPaths: ["src"],
+        editableScope: ["src"],
+        maxIterations: 5,
+        ...overrides,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
+async function appendLegacyLedgerRows(dir: string, rows: Record<string, unknown>[]) {
+  const ledgerPath = path.join(dir, "autoresearch.jsonl");
+  const ledger = await readFile(ledgerPath, "utf8");
+  await writeFile(
+    ledgerPath,
+    `${ledger}${rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    "utf8",
+  );
+}
+
 test("state and doctor surface scaffold health and evidence labels", async () => {
   await withTempDir("truth-layer-state", async (dir) => {
-    await setupFixture(dir, { name: "truth layer", metricName: "score", direction: "higher" });
-    await writeFile(
-      path.join(dir, "autoresearch.config.json"),
-      JSON.stringify({ commitPaths: ["src/missing.ts"] }, null, 2),
-      "utf8",
-    );
+    await setupFixture(dir, {
+      name: "truth layer",
+      metricName: "score",
+      direction: "higher",
+    });
+    await writeCompleteContractConfig(dir, {
+      benchmarkCommand: `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=1')"`,
+      commitPaths: ["src/missing.ts"],
+      editableScope: ["src/missing.ts"],
+    });
+    const accepted = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--reason",
+      "Accept the scaffold-health fixture contract",
+      "--yes",
+    ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
     await writeFile(
       path.join(dir, "autoresearch.ps1"),
       "& powershell -NoProfile -ExecutionPolicy Bypass -File ./autoresearch.ps1\n",
@@ -23,18 +69,14 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
     );
     await writeFile(path.join(dir, "autoresearch.sh"), "bash ./autoresearch.sh\n", "utf8");
 
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "1",
-      "--status",
-      "keep",
-      "--description",
-      "perfect dev slice pending repeat",
-      "--metrics",
-      JSON.stringify({ repeatRequired: 1 }),
+    await appendLegacyLedgerRows(dir, [
+      {
+        run: 1,
+        metric: 1,
+        metrics: { repeatRequired: 1 },
+        status: "keep",
+        description: "perfect dev slice pending repeat",
+      },
     ]);
 
     const state = await runCli(["state", "--cwd", dir, "--json-full"]);
@@ -47,7 +89,8 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
     assert.ok(payload.scaffoldHealth.checks.some((check) => check.code === "missing_commit_path"));
     assert.ok(payload.researchIntegrity.evidenceLabels.includes("dev_best"));
     assert.ok(payload.researchIntegrity.evidenceLabels.includes("pending_repeat"));
-    assert.match(payload.researchIntegrity.warnings.join("\n"), /perfect/i);
+    assert.doesNotMatch(payload.researchIntegrity.warnings.join("\n"), /perfect/i);
+    assert.match(payload.researchIntegrity.warnings.join("\n"), /pending repeat/i);
 
     const doctor = await runCli(["doctor", "--cwd", dir, "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
@@ -58,8 +101,14 @@ test("state and doctor surface scaffold health and evidence labels", async () =>
     const compact = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(compact.code, 0, compact.stderr);
     const compactPayload = JSON.parse(compact.stdout);
-    assert.equal(compactPayload.resolvedDecision.canonicalNextAction.kind, "safety-blocker");
-    assert.ok(compactPayload.resolvedDecision.loopContract.blockers.length > 0);
+    const plan = compactPayload.decisionPlanProjection;
+    assert.equal(plan.action.kind, "repair-contract-conflict");
+    assert.equal(plan.primaryBlockerCode, "legacy-contract-conflict");
+    assert.equal(plan.capabilities["run-packet"], "blocked");
+    assert.equal(plan.capabilities["authorize-keep"], "blocked");
+    assert.equal(plan.loopDisposition.kind, "blocked");
+    assert.ok(plan.requiredEvidence.diagnosticCodes.includes("scaffold-invalid"));
+    assert.ok(plan.requiredEvidence.diagnosticCodes.includes("legacy-contract-conflict"));
   });
 });
 
@@ -106,7 +155,7 @@ test("benchmark-lint uses config benchmark command without wrapper fallback", as
       metricName: "score",
       direction: "higher",
     });
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC score=7')"`;
+    const benchmarkCommand = `${quoteForRunShell(process.execPath)} -e "console.log('METRIC score=7')"`;
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
       JSON.stringify({ benchmarkCommand }, null, 2),
@@ -194,7 +243,7 @@ test("doctor does not treat routine rollback wording as evidence invalidation", 
   });
 });
 
-test("prompt-plan prefers documented repo benchmark hints over generic cargo recipes", async () => {
+test("prompt-plan returns direct work before reading documented benchmark hints", async () => {
   await withTempDir("prompt-plan-doc-hints", async (dir) => {
     await mkdir(path.join(dir, "scripts"), { recursive: true });
     await mkdir(path.join(dir, "docs"), { recursive: true });
@@ -242,16 +291,12 @@ test("prompt-plan prefers documented repo benchmark hints over generic cargo rec
     ]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
-    assert.match(payload.intent.setupDefaults.benchmarkCommand, /embedding-harness\.mjs/);
-    assert.doesNotMatch(payload.intent.setupDefaults.benchmarkCommand, /cargo\s+(test|bench)/);
-    assert.equal(
-      payload.intent.inferredFrom.discoveredBenchmark.path,
-      "docs/autoresearch-benchmark.md",
-    );
+    assert.equal(payload.fit.disposition, "continue-direct");
+    assert.equal("intent" in payload, false);
   });
 });
 
-test("prompt-plan flags retrieval speed work as needing a quality constraint", async () => {
+test("prompt-plan does not invent a retrieval constraint for direct speed work", async () => {
   await withTempDir("prompt-plan-retrieval-quality", async (dir) => {
     const result = await runCli([
       "prompt-plan",
@@ -264,9 +309,8 @@ test("prompt-plan flags retrieval speed work as needing a quality constraint", a
     const payload = JSON.parse(result.stdout);
     const serialized = JSON.stringify(payload);
 
-    assert.match(serialized, /quality constraint/i);
-    assert.match(serialized, /accuracy|recall|ranking/i);
-    assert.doesNotMatch(serialized, /cargo test.*primary benchmark/i);
+    assert.equal(payload.fit.disposition, "continue-direct");
+    assert.doesNotMatch(serialized, /retrieval_constraint/i);
   });
 });
 
@@ -286,7 +330,7 @@ test("run notes append inside the managed ledger block", async () => {
         "--metric",
         metric,
         "--status",
-        "keep",
+        "measure",
         "--description",
         `Run ${metric}`,
       ]);
@@ -295,7 +339,7 @@ test("run notes append inside the managed ledger block", async () => {
     const note = await readFile(path.join(dir, "autoresearch.md"), "utf8");
     assert.match(note, /## Run Ledger/);
     assert.equal((note.match(/AUTORESEARCH_RUN_LEDGER:START/g) || []).length, 1);
-    assert.match(note, /Run 1 keep: Run 3[\s\S]+Run 2 keep: Run 2/);
+    assert.match(note, /Run 1 measure: Run 3[\s\S]+Run 2 measure: Run 2/);
     assert.match(note, /## Guardrails\nKeep this section stable\.\n\n## Run Ledger/);
   });
 });
@@ -304,47 +348,56 @@ test("benchmark contract changes block the next packet until a new segment", asy
   await withTempDir("contract-drift", async (dir) => {
     await setupFixture(dir, { name: "contract", metricName: "score", direction: "higher" });
     await writeFile(
-      path.join(dir, "autoresearch.config.json"),
-      JSON.stringify({ maxIterations: 5 }, null, 2),
-      "utf8",
-    );
-    await writeFile(
       path.join(dir, "packet.cmd"),
-      "node -e \"console.log('METRIC score=1')\"\n",
+      "node -e \"console.log('METRIC score=1')\"",
       "utf8",
     );
+    const benchmarkCommand = await readFile(path.join(dir, "packet.cmd"), "utf8");
+    await writeCompleteContractConfig(dir, {
+      benchmarkCommand,
+      protectedBenchmarkPaths: ["packet.cmd"],
+    });
+    const accepted = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--benchmark-command",
+      benchmarkCommand,
+      "--reason",
+      "Accept the command-file benchmark contract",
+      "--yes",
+    ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
 
     const packet = await runCli(["next", "--cwd", dir, "--command-file", "packet.cmd"]);
     assert.equal(packet.code, 0, packet.stderr);
+    assert.ok(JSON.parse(packet.stdout).run, packet.stdout);
     const logged = await runCli([
       "log",
       "--cwd",
       dir,
       "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Baseline contract",
     ]);
     assert.equal(logged.code, 0, logged.stderr);
 
-    await writeFile(
-      path.join(dir, "autoresearch.config.json"),
-      JSON.stringify({ maxIterations: 8 }, null, 2),
-      "utf8",
-    );
+    await writeCompleteContractConfig(dir, {
+      benchmarkCommand,
+      maxIterations: 8,
+      protectedBenchmarkPaths: ["packet.cmd"],
+    });
     const blocked = await runCli(["next", "--cwd", dir, "--command-file", "packet.cmd"]);
-    assert.equal(blocked.code, 0, blocked.stderr);
-    const payload = JSON.parse(blocked.stdout);
-    assert.equal(payload.ok, false);
-    assert.match(payload.doctor.issues.join("\n"), /Benchmark\/check\/config contract changed/);
-    assert.match(payload.nextAction, /new segment|old evidence|contract/i);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr, /accepted.*packet|new segment/i);
   });
 });
 
 test("new segment rebaselines benchmark contract drift for changed benchmark surface", async () => {
   await withTempDir("segment-contract-rebaseline", async (dir) => {
-    const benchmarkCommand = `${quoteForShell(process.execPath)} benchmark.mjs`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} benchmark.mjs`;
     await setupFixture(dir, {
       name: "contract rebaseline",
       metricName: "score",
@@ -357,11 +410,21 @@ test("new segment rebaselines benchmark contract drift for changed benchmark sur
       "utf8",
     );
     await writeFile(path.join(dir, "score.txt"), "1\n", "utf8");
-    await writeFile(
-      path.join(dir, "autoresearch.config.json"),
-      JSON.stringify({ protectedBenchmarkPaths: ["bench-a.txt"] }, null, 2),
-      "utf8",
-    );
+    await writeCompleteContractConfig(dir, {
+      benchmarkCommand,
+      protectedBenchmarkPaths: ["bench-a.txt"],
+    });
+    const accepted = await runCli([
+      "new-segment",
+      "--cwd",
+      dir,
+      "--benchmark-command",
+      benchmarkCommand,
+      "--reason",
+      "Accept the initial benchmark surface",
+      "--yes",
+    ]);
+    assert.equal(accepted.code, 0, accepted.stderr);
 
     const packet = await runCli(["next", "--cwd", dir, "--command", benchmarkCommand]);
     assert.equal(packet.code, 0, packet.stderr);
@@ -371,7 +434,7 @@ test("new segment rebaselines benchmark contract drift for changed benchmark sur
       dir,
       "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Baseline contract",
     ]);
@@ -379,11 +442,10 @@ test("new segment rebaselines benchmark contract drift for changed benchmark sur
 
     await writeFile(path.join(dir, "bench-b.txt"), "protected B\n", "utf8");
     await writeFile(path.join(dir, "score.txt"), "2\n", "utf8");
-    await writeFile(
-      path.join(dir, "autoresearch.config.json"),
-      JSON.stringify({ protectedBenchmarkPaths: ["bench-b.txt"] }, null, 2),
-      "utf8",
-    );
+    await writeCompleteContractConfig(dir, {
+      benchmarkCommand,
+      protectedBenchmarkPaths: ["bench-b.txt"],
+    });
     const segment = await runCli([
       "new-segment",
       "--cwd",
@@ -411,6 +473,7 @@ test("new segment rebaselines benchmark contract drift for changed benchmark sur
 test("new segment warns when metric semantics change across segments", async () => {
   await withTempDir("segment-metric-semantics", async (dir) => {
     await setupFixture(dir, { name: "metric semantics", metricUnit: "s", direction: "lower" });
+    await writeCompleteContractConfig(dir);
     await runCli([
       "log",
       "--cwd",
@@ -418,7 +481,7 @@ test("new segment warns when metric semantics change across segments", async () 
       "--metric",
       "3",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Seconds baseline",
     ]);
@@ -457,6 +520,7 @@ test("new segment warns when metric semantics change across segments", async () 
 test("new segment honors explicit lower direction after a higher segment", async () => {
   await withTempDir("segment-direction-lower", async (dir) => {
     await setupFixture(dir, { name: "direction flip", metricName: "score", direction: "higher" });
+    await writeCompleteContractConfig(dir);
     await runCli([
       "log",
       "--cwd",
@@ -464,7 +528,7 @@ test("new segment honors explicit lower direction after a higher segment", async
       "--metric",
       "10",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Higher baseline",
     ]);
@@ -495,7 +559,11 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     await git(dir, ["config", "user.name", "Codex Test"]);
     await writeFile(path.join(dir, "tracked.txt"), "base\n", "utf8");
     await setupFixture(dir, { name: "segment" });
-    await runCli([
+    await writeCompleteContractConfig(dir, {
+      commitPaths: ["src", "tracked.txt"],
+      editableScope: ["src", "tracked.txt"],
+    });
+    const measurement = await runCli([
       "log",
       "--cwd",
       dir,
@@ -506,6 +574,7 @@ test("new segment does not treat its own ledger append as dirty source drift", a
       "--description",
       "Initial segment measurement",
     ]);
+    assert.equal(measurement.code, 0, measurement.stderr);
     await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-m", "initial session"]);
 
@@ -522,7 +591,7 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
-    assert.equal(payload.segment, 1);
+    assert.equal(payload.segment, 1, segment.stdout);
     assert.equal(payload.sourceCleanliness.sourceDirty, false);
     assert.equal(payload.sourceCleanliness.status, "session-artifacts-dirty");
     assert.equal(payload.sourceCleanliness.sourceDirty, false);
@@ -558,14 +627,15 @@ test("new segment does not treat its own ledger append as dirty source drift", a
     const dirtyCompact = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(dirtyCompact.code, 0, dirtyCompact.stderr);
     const dirtyCompactPayload = JSON.parse(dirtyCompact.stdout);
-    assert.equal(dirtyCompactPayload.resolvedDecision.status, "blocked");
     assert.equal(dirtyCompactPayload.sourceCleanliness.status, "source-dirty");
     assert.equal(dirtyCompactPayload.sourceCleanliness.cleanupCommand, "");
-    assert.ok(
-      dirtyCompactPayload.resolvedDecision.loopContract.blockers.some((blocker) =>
-        JSON.stringify(blocker).includes("Git worktree is dirty"),
-      ),
-    );
+    const plan = dirtyCompactPayload.decisionPlanProjection;
+    assert.equal(plan.action.kind, "review-dirty-source");
+    assert.equal(plan.primaryBlockerCode, "dirty-source");
+    assert.equal(plan.capabilities["run-packet"], "allowed");
+    assert.equal(plan.capabilities["authorize-keep"], "blocked");
+    assert.equal(plan.loopDisposition.kind, "continue");
+    assert.ok(plan.requiredEvidence.diagnosticCodes.includes("dirty-source"));
     const dirtyDoctor = await runCli(["doctor", "--cwd", dir, "--json-full"]);
     assert.equal(dirtyDoctor.code, 0, dirtyDoctor.stderr);
     assert.equal(JSON.parse(dirtyDoctor.stdout).git.clean, false);
@@ -574,28 +644,10 @@ test("new segment does not treat its own ledger append as dirty source drift", a
 
 test("state and recommend-next share watchdog canonical next-action parity", async () => {
   await withTempDir("watchdog-cli-parity", async (dir) => {
-    await setupFixture(dir, { name: "watchdog parity" });
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "10",
-      "--status",
-      "keep",
-      "--description",
-      "Baseline",
-    ]);
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "10",
-      "--status",
-      "discard",
-      "--description",
-      "No movement",
+    await setupFixture(dir, { name: "watchdog parity", acceptedContract: true });
+    await appendLegacyLedgerRows(dir, [
+      { run: 1, metric: 10, status: "keep", description: "Baseline" },
+      { run: 2, metric: 10, status: "discard", description: "No movement" },
     ]);
 
     const ledgerPath = path.join(dir, "autoresearch.jsonl");
@@ -613,34 +665,28 @@ test("state and recommend-next share watchdog canonical next-action parity", asy
       "utf8",
     );
 
-    await writeFile(
-      path.join(dir, "autoresearch.config.json"),
-      JSON.stringify({ maxIterations: 100 }, null, 2),
-      "utf8",
-    );
-
     const state = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.equal(statePayload.watchdogSummary?.stale, true);
-    assert.equal(statePayload.resolvedDecision?.canonicalNextAction?.kind, "watchdog");
     assert.equal(statePayload.limitReached, false);
+    const statePlan = statePayload.decisionPlanProjection;
+    assert.notEqual(statePlan.action.kind, "watchdog");
+    assert.equal(statePlan.capabilities["run-packet"], "allowed");
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
-    assert.equal(recommendPayload.resolvedDecision?.canonicalNextAction?.kind, "watchdog");
-    assert.equal(
-      recommendPayload.resolvedDecision?.canonicalNextAction?.kind,
-      statePayload.resolvedDecision?.canonicalNextAction?.kind,
-    );
-    assert.equal(
-      recommendPayload.resolvedDecision?.nextAction,
-      statePayload.resolvedDecision?.nextAction,
-    );
-    assert.match(
-      String(statePayload.resolvedDecision?.nextAction || ""),
-      /Intervene|finalize|rescope/i,
+    const recommendPlan = recommendPayload.decisionPlanProjection;
+    assert.equal(recommendPlan.decisionId, statePlan.decisionId);
+    assert.equal(recommendPlan.action.kind, statePlan.action.kind);
+    assert.equal(recommendPlan.primaryBlockerCode, statePlan.primaryBlockerCode);
+    assert.deepEqual(recommendPlan.capabilities, statePlan.capabilities);
+    assert.deepEqual(recommendPlan.loopDisposition, statePlan.loopDisposition);
+    assert.deepEqual(recommendPlan.parentDisposition, statePlan.parentDisposition);
+    assert.deepEqual(
+      recommendPlan.requiredEvidence.diagnosticCodes,
+      statePlan.requiredEvidence.diagnosticCodes,
     );
   });
 });
@@ -648,28 +694,12 @@ test("state and recommend-next share watchdog canonical next-action parity", asy
 test("dashboard includes segment controls and visual-aid layout", async () => {
   await withTempDir("dashboard-cockpit", async (dir) => {
     await setupFixture(dir, { name: "first segment" });
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "4",
-      "--status",
-      "keep",
-      "--description",
-      "Baseline",
+    await appendLegacyLedgerRows(dir, [
+      { run: 1, metric: 4, status: "keep", description: "Baseline" },
     ]);
     await setupFixture(dir, { name: "second segment" });
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "3",
-      "--status",
-      "keep",
-      "--description",
-      "Second baseline",
+    await appendLegacyLedgerRows(dir, [
+      { run: 2, metric: 3, status: "keep", description: "Second baseline" },
     ]);
 
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);

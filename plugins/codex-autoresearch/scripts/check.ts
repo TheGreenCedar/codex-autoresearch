@@ -19,7 +19,6 @@ import {
   type CommandResult,
   type CommandSpec,
 } from "../lib/checks/check-common.js";
-import { acceptedCurrentTreeFinalizationIssue } from "../lib/finalization-acceptance.js";
 import {
   releaseChecksumIssue,
   releaseProvenanceGhVerifyArgs,
@@ -315,9 +314,8 @@ function reportDogfoodDoctorResult(label: string, result: CommandResult) {
     ...(Array.isArray(payload.state?.warnings) ? payload.state.warnings.map(String) : []),
   ];
   const issues: string[] = Array.isArray(payload.issues) ? payload.issues.map(String) : [];
-  const acceptedFinalizationIssue = acceptedCurrentTreeFinalizationIssue(payload);
   const failures = [
-    ...issues.filter((issue) => issue !== acceptedFinalizationIssue),
+    ...issues,
     ...warningDetails
       .filter((warning) => warning?.code === "missing_commit_paths")
       .map((warning) => warning.message || "Configured commitPaths are stale."),
@@ -333,10 +331,6 @@ function reportDogfoodDoctorResult(label: string, result: CommandResult) {
     return false;
   }
 
-  if (acceptedFinalizationIssue) {
-    console.log(`ok ${label} (current-tree finalization blocker exposed)`);
-  } else {
-    console.log(`ok ${label}`);
-  }
+  console.log(`ok ${label}`);
   return true;
 }

@@ -58,17 +58,7 @@ export function buildMissionControl({
   const gapState = qualityGap ? (hasQualityGaps ? "ready" : "done") : "idle";
   const logState = lastRun ? (hasFreshLastRun ? "ready" : "blocked") : "idle";
   const finalizeState = finalizePreview?.ready ? "ready" : runCount ? "idle" : "blocked";
-  const activeStep = canLog
-    ? "log"
-    : stage === "needs-setup"
-      ? "setup"
-      : hasQualityGaps
-        ? "gaps"
-        : finalizePreview?.ready
-          ? "finalize"
-          : qualityGap
-            ? "gaps"
-            : actionRail?.[0]?.kind || "next";
+  const activeStep = missionStepForCanonicalAction(actionRail?.[0]?.kind);
   return {
     activeStep,
     staticFallback: "Serve the dashboard locally for a fresh readout; use CLI for actions.",
@@ -138,6 +128,26 @@ export function buildMissionControl({
       guidedSetup?.nextAction ||
       "",
   };
+}
+
+function missionStepForCanonicalAction(kind: unknown): string {
+  const actionKind = typeof kind === "string" ? kind : "decision-unavailable";
+  if (actionKind === "log-decision") return "log";
+  if (actionKind === "finalize" || actionKind === "resolve-finalization") {
+    return "finalize";
+  }
+  if (
+    [
+      "configure-benchmark",
+      "configure-checks",
+      "repair-goal",
+      "repair-scaffold",
+      "request-approval",
+    ].includes(actionKind)
+  ) {
+    return "setup";
+  }
+  return actionKind;
 }
 
 function missionStep({

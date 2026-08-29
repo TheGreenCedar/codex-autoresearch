@@ -1,68 +1,85 @@
 # Control-plane contracts
 
-The CLI, terminal report, compact state, and dashboard must tell the same story. If they disagree about the goal, blocker, or next action, the disagreement is the bug.
+State, doctor, recommendation, continuation, finalization, and dashboard must project one compiled `DecisionPlan`. If they disagree about the phase, blocker, or next action, the disagreement is the bug.
 
-## Shared decisions
+## One decision authority
 
-| Contract | Question |
+Every canonical decision includes:
+
+| Field | Meaning |
 | --- | --- |
-| Goal | Does the current prompt still match the durable goal, benchmark, and final claim? |
-| Approval | Is there a current approval for this gate and this exact scope? |
-| Resources | Is another process, packet, or wall-clock slice allowed? |
-| Evidence | What is the strongest claim accepted evidence can support? |
-| Lanes | Which scout, implementation, review, or finalization lane owns the next work? |
-| Finalization | Is the work previewed, local, pushed, in CI, merged, or safe to clean up? |
-| Readout | What single action should the person or Codex take next? |
+| `decisionId` | Hash of normalized semantic inputs plus the compiler schema version |
+| `generationId` | Hash of the raw source version vector |
+| `phase` | Current session phase |
+| `action` | One canonical action kind and bounded reason |
+| `primaryBlockerCode` | Strongest blocker code, independent of explanatory prose |
+| `loopDisposition` | Whether the loop is absent, runnable, blocked, paused, or complete |
+| `parentDisposition` | Whether the parent should continue the loop, continue directly, ask the user, or consider completion |
+| `contractDigest` | Identity of the accepted experiment contract |
+| `evaluatorIdentity` | Identity of the accepted evaluator execution specification |
+| `requiredEvidence` | Evidence still required for the action or claim |
 
-`state --compact`, `state --report`, `recommend-next --compact`, doctor, finalization preview, and the dashboard project the same validated `resolvedDecision` authority. The status, strongest blocker, next action, safe command, runtime provenance, and finalization pressure must agree. Field names are listed in [Concepts](concepts.md#state-fields).
+The terminal and dashboard must agree on decision ID, phase, action kind, blocker code, parent disposition, contract digest, and evaluator identity. The dashboard deliberately strips executable commands.
 
-Default projections are deliberately bounded so a long session remains readable: compact state is capped at 10 KiB and 200 lines, default state at 20 KiB and 260 lines, and doctor/report at 8 KiB and 100 lines. A synthetic 100-run regression fixture enforces those ceilings and requires compact state to remain smaller than default state. Use explicit `--json-full` only for complete state or doctor diagnostics.
+`resolvedDecision`, `loopContract`, `nextAction`, continuation fields, and dashboard action structures remain compatibility outputs. They are one-way projections from `DecisionPlan`, never inputs to the compiler. Watchdog, portfolio advice, doctor, and older policy helpers may produce diagnostics or candidate inputs; they do not choose the canonical action.
 
-## Goal contract
+Default projections stay bounded so long sessions remain readable. Use explicit `--json-full` only when a maintainer needs complete machine diagnostics.
 
-The durable Autoresearch goal is authoritative. A fresh chat prompt is an instruction unless it clearly matches or deliberately replaces that goal.
+## Coherent reads
 
-A missing live objective warns and offers `codex-goal-brief`. A mismatched objective blocks broad packet and finalization work until the goal is restated, repaired, or moved to a new segment.
+A session snapshot covers the ledger, config, last packet, transaction receipt, process state, and Git identity. Its version vector includes ledger size, modification time and tail hash; source hashes; Git HEAD; index tree; and status hash.
 
-## Approval contract
+Read-only commands:
 
-Approvals record gate, scope, source, time, expiry, and evidence. Approval for one lane or an expired approval cannot unlock another.
+1. Read version vector A.
+2. Load and parse every source.
+3. Read version vector B.
+4. Accept only when A equals B.
+5. Retry up to three times, then return `coherent-snapshot-unavailable`.
 
-A `big_idea` lane may record advice without approval. Turning it into implementation or a measured packet requires a new scoped approval.
+A timestamp-only change may create a new generation while retaining the same semantic decision. Diagnostic ordering and duplicate prose do not change `decisionId`; a blocker code or contract change does.
 
-## Resource contract
+Mutating commands acquire the mutation lock before the first snapshot and hold it through mutation and the resulting snapshot. They return a precondition decision, a mutation receipt, and the resulting decision. `doctor --check-benchmark` follows the mutation protocol because it starts a process; pure doctor reads do not.
 
-Packet and lane work checks active process count, wall-clock budget, repeated command heads, output size, polling, and the latest typed process lifecycle state. Historical prose about stale or orphaned PIDs is compatibility context only; it cannot create a blocker. Malformed lifecycle rows and terminal rows with unproven termination fail closed.
+## Capability-scoped blockers
 
-When output is already large, use compact state, bounded file reads, `partial-results`, or an evidence index. Reprinting the same wall of output is not progress.
+Diagnostics block capabilities rather than the whole session:
 
-## Evidence contract
+- `mutate-session`
+- `run-packet`
+- `authorize-keep`
+- `transition-segment`
+- `finalize`
+- `parent-final-answer`
 
-Benchmark-specific detectors, static citations, protected probes, and scorer-tuned fixes may support a narrow diagnostic claim. Broad superiority needs repeat, holdout, breadth, and the checks implied by the claim.
+A budget or no-learning pause blocks `run-packet` while allowing direct work and a bounded final answer. A finalization problem blocks `finalize`, not an unrelated task. Evaluator drift blocks packet execution and keep authorization while allowing an explicit contract transition. A pending or inconsistent log or Git transaction blocks unsafe mutation, finalization, and session-dependent final claims.
 
-The control plane must choose the weaker supportable wording when proof is incomplete, even if branch creation is technically possible.
+The parent-task relationship matters. A session blocker affects `parent-final-answer` only when the current claim depends on that session. An unrelated request stays independent.
 
-## Lane contract
+## Fit contract
 
-Broad work may split into:
+Fit is decided before benchmark discovery, repository scanning, default inference, or setup:
 
-- **scout** - map the problem without source edits
-- **implementation** - change one bounded surface in a worktree or write scope
-- **review** - test regressions and overclaim risk
-- **finalization** - package, publish, merge, and verify
+```text
+continue-direct | needs-user | run-loop
+```
 
-The parent session combines lane evidence only after each lane reports its scope, evidence, recommendation, and merge criteria.
+Direct work uses the evidence capsule and creates no session state. An explicit loop with missing or conflicting inputs returns `needs-user`. A matching session requires compatible repository, checkout, goal, metric semantics, evaluator, checks, and scope. Replacement requires explicit intent.
 
-## Finalization contract
+## Experiment and evidence contracts
 
-Keep these states separate: preview, branch created, local-only, pushed or PR, CI, merged, merge verified, cleanup-ready.
+The accepted `ExperimentContract` is the sole evaluator and checks authority. Its typed metric semantics, canonical commands, environment, working directory, parser, protected inputs, timeouts, noise model, keep and stop rules, and budgets make invalid combinations reject at the boundary. Command overrides must reproduce the accepted execution digest exactly.
 
-An existing branch is reusable only after it is checked against the current finalization plan. A branch name alone proves nothing.
+Evidence records separate run purpose, evaluation authority, and candidate origin. A keep is authorized mechanically only for a candidate evaluated by the accepted contract, with accepted checks, metric comparison, and noise qualification satisfied. Manual observations and imported commits do not authorize a keep until evaluated under that contract.
 
-## When surfaces disagree
+Learning defaults to `none`. Two eligible no-learning candidates or two failures in the same registered layer pause packet work unless the relevant precondition digest changes. Remaining budget never causes another packet to run, and a pause does not create fanout or a new segment.
+
+## Surface disagreement
 
 1. Save the disagreeing outputs.
-2. Stop packet and branch mutation.
-3. Compare their source ledger, config, segment, runtime fingerprint, and generation time.
-4. Fix the shared state or projection bug.
+2. Stop session mutation and session-dependent final claims.
+3. Compare decision ID, generation ID, contract digest, evaluator identity, and runtime provenance.
+4. Fix the shared source, coherent read, or projection bug.
 5. Rerun all affected readouts before continuing.
+
+Field details are listed in [Concepts](concepts.md#state-fields). Persistence and module ownership are documented in [Architecture](architecture.md).

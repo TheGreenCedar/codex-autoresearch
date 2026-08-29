@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import path from "node:path";
 import test from "node:test";
@@ -13,20 +13,36 @@ import {
   setupFixture,
 } from "../helpers/cli-test-context.js";
 
-test("spawned CLI contract covers source launcher startup and env workdir resolution", async () => {
+async function appendLegacyLedgerRows(dir: string, rows: Record<string, unknown>[]) {
+  const ledgerPath = path.join(dir, "autoresearch.jsonl");
+  const ledger = await readFile(ledgerPath, "utf8");
+  await writeFile(
+    ledgerPath,
+    `${ledger}${rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    "utf8",
+  );
+}
+
+test("spawned CLI contract covers source launcher startup and explicit workdir resolution", async () => {
   await withTempDir("spawned-contract", async (dir) => {
     const help = await runSpawnedCli(["--help"]);
     assert.equal(help.code, 0, help.stderr);
     assert.match(help.stdout, /Usage:/);
 
     const env = { ...process.env, CODEX_AUTORESEARCH_WORKDIR: dir };
-    const init = await runSpawnedCli(["setup", "--name", "spawned", "--metric-name", "seconds"], {
+    const init = await runSpawnedCli(
+      ["setup", "--cwd", dir, "--name", "spawned", "--metric-name", "seconds"],
+      {
+        cwd: pluginRoot,
+        env,
+      },
+    );
+    assert.equal(init.code, 0, init.stderr);
+
+    const state = await runSpawnedCli(["state", "--cwd", dir, "--json-full"], {
       cwd: pluginRoot,
       env,
     });
-    assert.equal(init.code, 0, init.stderr);
-
-    const state = await runSpawnedCli(["state", "--json-full"], { cwd: pluginRoot, env });
     assert.equal(state.code, 0, state.stderr);
     const payload = JSON.parse(state.stdout);
     assert.equal(payload.config.name, "spawned");
@@ -127,27 +143,21 @@ test("compact state exposes authoritative goal frame and operator handoff", asyn
 test("state recommend-next and dashboard share workflow friction readout", async () => {
   await withTempDir("shared-workflow-friction-readout", async (dir) => {
     const repeatedCommand = "node scripts/check.mjs --fast";
-    await writeFile(
-      path.join(dir, "autoresearch.jsonl"),
-      [
-        JSON.stringify({
-          type: "config",
-          name: "shared friction",
-          goal: "Keep the operator readout consistent.",
-          metricName: "seconds",
-          bestDirection: "lower",
-        }),
-        ...Array.from({ length: 10 }, (_, index) =>
-          JSON.stringify({
-            run: index + 1,
-            metric: 10 - index,
-            status: "measure",
-            command: repeatedCommand,
-            benchmarkContract: { command: repeatedCommand },
-            description: `Repeat verification ${index + 1}`,
-          }),
-        ),
-      ].join("\n") + "\n",
+    await setupFixture(dir, {
+      name: "shared friction",
+      goal: "Keep the operator readout consistent.",
+      acceptedContract: true,
+    });
+    await appendLegacyLedgerRows(
+      dir,
+      Array.from({ length: 10 }, (_, index) => ({
+        run: index + 1,
+        metric: 10 - index,
+        status: "measure",
+        command: repeatedCommand,
+        benchmarkContract: { command: repeatedCommand },
+        description: `Repeat verification ${index + 1}`,
+      })),
     );
 
     const fullState = JSON.parse((await runCli(["state", "--cwd", dir])).stdout);
@@ -163,10 +173,19 @@ test("state recommend-next and dashboard share workflow friction readout", async
     assert.equal(hasVerificationChurn(compactState.workflowFriction), true);
     assert.equal(Object.hasOwn(compactState, "decisionEnvelope"), false);
     assert.match((recommendNext.frictionSignals || []).join("\n"), /ran 10 times/);
-    assert.equal(
-      hasVerificationChurn(exported.viewModel?.decisionEnvelope?.workflowFriction),
-      true,
-    );
+    assert.equal(hasVerificationChurn(exported.viewModel?.workflowFriction), true);
+
+    const fullPlan = fullState.decisionPlanProjection || fullState.decisionPlan;
+    const compactPlan = compactState.decisionPlanProjection;
+    const recommendPlan = recommendNext.decisionPlanProjection;
+    const dashboardPlan = exported.viewModel.decisionPlanProjection;
+    assert.equal(compactPlan.decisionId, fullPlan.decisionId);
+    assert.equal(recommendPlan.decisionId, fullPlan.decisionId);
+    assert.equal(dashboardPlan.decisionId, fullPlan.decisionId);
+    assert.equal(compactPlan.action.kind, fullPlan.action.kind);
+    assert.deepEqual(compactPlan.capabilities, fullPlan.capabilities);
+    assert.deepEqual(recommendPlan.capabilities, fullPlan.capabilities);
+    assert.deepEqual(dashboardPlan.capabilities, fullPlan.capabilities);
   });
 });
 

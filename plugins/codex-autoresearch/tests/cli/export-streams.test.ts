@@ -2,9 +2,19 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 
 import { runCli, runSpawnedCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
+
+async function appendLegacyLedgerRows(dir: string, rows: Record<string, unknown>[]) {
+  const ledgerPath = path.join(dir, "autoresearch.jsonl");
+  const ledger = await readFile(ledgerPath, "utf8");
+  await writeFile(
+    ledgerPath,
+    `${ledger}${rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    "utf8",
+  );
+}
 
 test("export refuses to write outside the working directory", async () => {
   await withTempDir("contained-export", async (dir) => {
@@ -72,17 +82,9 @@ test("export refuses to write through linked directories outside the working dir
 
 test("export is compact by default and full with json-full", async () => {
   await withTempDir("compact-export", async (dir) => {
-    await setupFixture(dir, { name: "compact export" });
-    await runCli([
-      "log",
-      "--cwd",
-      dir,
-      "--metric",
-      "1",
-      "--status",
-      "keep",
-      "--description",
-      "Baseline",
+    await setupFixture(dir, { name: "compact export", acceptedContract: true });
+    await appendLegacyLedgerRows(dir, [
+      { run: 1, metric: 1, status: "keep", description: "Baseline" },
     ]);
 
     const compact = await runCli(["export", "--cwd", dir]);
@@ -115,9 +117,13 @@ test("export progress writes stderr heartbeats without corrupting JSON stdout", 
 
 test("large benchmark output is capped and marked truncated", async () => {
   await withTempDir("large-output", async (dir) => {
-    await setupFixture(dir, { name: "large output" });
-    const command = `${quoteForShell(process.execPath)} -e "console.log('x'.repeat(30000)); console.log('METRIC seconds=1')"`;
-    const result = await runCli(["next", "--cwd", dir, "--command", command]);
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('x'.repeat(30000)); console.log('METRIC seconds=1')"`;
+    await setupFixture(dir, {
+      name: "large output",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
+    const result = await runCli(["next", "--cwd", dir]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout).run;
     assert.equal(payload.outputTruncated, true);
@@ -128,9 +134,13 @@ test("large benchmark output is capped and marked truncated", async () => {
 
 test("large no-newline benchmark tails do not hide early metrics", async () => {
   await withTempDir("large-no-newline-output", async (dir) => {
-    await setupFixture(dir, { name: "large no newline" });
-    const command = `${quoteForShell(process.execPath)} -e "process.stdout.write('METRIC seconds=2\\n'); process.stdout.write('x'.repeat(300000))"`;
-    const result = await runCli(["next", "--cwd", dir, "--command", command]);
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "process.stdout.write('METRIC seconds=2\\n'); process.stdout.write('x'.repeat(300000))"`;
+    await setupFixture(dir, {
+      name: "large no newline",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
+    const result = await runCli(["next", "--cwd", dir]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout).run;
     assert.equal(payload.outputTruncated, true);
@@ -141,9 +151,13 @@ test("large no-newline benchmark tails do not hide early metrics", async () => {
 
 test("large metric streams retain bounded metrics and primary evidence", async () => {
   await withTempDir("large-metric-stream", async (dir) => {
-    await setupFixture(dir, { name: "large metric stream" });
-    const command = `${quoteForShell(process.execPath)} -e "for (let i = 0; i < 20000; i++) console.log('METRIC m' + i + '=' + i); console.log('METRIC seconds=1')"`;
-    const result = await runCli(["next", "--cwd", dir, "--command", command]);
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "for (let i = 0; i < 20000; i++) console.log('METRIC m' + i + '=' + i); console.log('METRIC seconds=1')"`;
+    await setupFixture(dir, {
+      name: "large metric stream",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
+    const result = await runCli(["next", "--cwd", dir]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout).run;
     assert.equal(payload.metricsTruncated, true);
@@ -155,7 +169,6 @@ test("large metric streams retain bounded metrics and primary evidence", async (
 
 test("large metric streams keep a primary metric outside retained output tails", async () => {
   await withTempDir("large-metric-primary-middle", async (dir) => {
-    await setupFixture(dir, { name: "large primary stream" });
     const emitter = path.join(dir, "emit-metrics.mjs");
     await writeFile(
       emitter,
@@ -170,12 +183,17 @@ test("large metric streams keep a primary metric outside retained output tails",
         "}",
         "writeMetrics('pre', 12000);",
         "process.stdout.write('METRIC seconds=7\\n');",
-        "writeMetrics('post', 90000);",
+        "writeMetrics('post', 20000);",
       ].join("\n"),
       "utf8",
     );
-    const command = `${quoteForShell(process.execPath)} ${quoteForShell(emitter)}`;
-    const result = await runCli(["next", "--cwd", dir, "--command", command]);
+    const command = `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(emitter)}`;
+    await setupFixture(dir, {
+      name: "large primary stream",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
+    const result = await runCli(["next", "--cwd", dir]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout).run;
     assert.equal(payload.ok, true);

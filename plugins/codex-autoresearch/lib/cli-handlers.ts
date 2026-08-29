@@ -35,6 +35,8 @@ const HANDLER_ADAPTERS: Partial<Record<ActiveHandlerBinding, HandlerAdapter>> = 
       ...args,
       metrics: args.metricsFile ? args.metrics : deps.parseJsonOption(args.metrics, null),
       asi: args.asiFile || args.asiJsonFile ? args.asi : deps.parseJsonOption(args.asi, null),
+      learning: args.learningJsonFile ? args.learning : deps.parseJsonOption(args.learning, null),
+      failure: args.failureJsonFile ? args.failure : deps.parseJsonOption(args.failure, null),
     }),
   }),
   publicState: async (deps, args) => ({

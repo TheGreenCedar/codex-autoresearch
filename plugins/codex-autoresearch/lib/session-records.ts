@@ -51,6 +51,21 @@ export interface SessionReadCache {
   invalidateOnLedgerChange?: boolean;
 }
 
+export function sessionSegmentTimeline(records: readonly UnknownRecord[]): number[] {
+  let segment = 0;
+  let observedRun = false;
+  return records.map((record) => {
+    if (record.type === "config" && observedRun) segment += 1;
+    const current = segment;
+    if (record.run != null) observedRun = true;
+    return current;
+  });
+}
+
+export function activeSessionSegment(records: readonly UnknownRecord[]): number {
+  return sessionSegmentTimeline(records).at(-1) ?? 0;
+}
+
 export function createSessionReadCache(
   options: { invalidateOnLedgerChange?: boolean } = {},
 ): SessionReadCache {
@@ -67,8 +82,17 @@ export function jsonlPath(workDir: string): string {
 }
 
 export function appendJsonl(workDir: string, entry: UnknownRecord): void {
+  appendJsonlEntries(workDir, [entry]);
+}
+
+export function appendJsonlEntries(workDir: string, entries: UnknownRecord[]): void {
+  if (entries.length === 0) return;
   const paths = resolveSessionPaths({ workDir });
-  checkedAppendFileSync(paths.sessionDir, paths.ledgerPath, `${JSON.stringify(entry)}\n`);
+  checkedAppendFileSync(
+    paths.sessionDir,
+    paths.ledgerPath,
+    `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+  );
 }
 
 export function readJsonl(workDir: string): SessionRecord[] {

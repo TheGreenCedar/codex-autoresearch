@@ -7,6 +7,21 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
 import { decisionGuidance } from "../lib/decision-guidance.js";
+import { decisionDiagnostic, type DecisionPlan } from "../lib/decision-compiler.js";
+import {
+  projectCompactDecisionPlan,
+  projectDashboardDecisionPlan,
+  projectLoopContinuation,
+  projectResolvedDecision,
+} from "../lib/decision-projection.js";
+import { loadCanonicalSessionDecision } from "../lib/session-decision.js";
+import {
+  adaptAcceptedSessionMetadata,
+  adaptLegacySessionMetadata,
+  classifyFit,
+  requestsNamedSessionContinuation,
+  withFitCompatibilityConflicts,
+} from "../lib/fit-gate.js";
 import { stripDashboardGuidanceCommandFields } from "../lib/dashboard-command-safety.js";
 import { dashboardSafeGuidanceText } from "../lib/dashboard-transport.js";
 import { DASHBOARD_LEDGER_MAX_ENTRIES, type DashboardLedgerFold } from "../lib/dashboard-ledger.js";
@@ -14,15 +29,10 @@ import {
   buildDashboardSettings as dashboardSettings,
   dashboardCommands,
 } from "../lib/commands/dashboard.js";
-import {
-  buildContinuationCommands,
-  continuationCommands,
-  loopContinuation,
-} from "../lib/commands/continuation.js";
+import { buildContinuationCommands, continuationCommands } from "../lib/commands/continuation.js";
 import {
   buildCompactRecommendNextResponse,
   buildRecommendNextResponse,
-  selectRecommendNextRuntimeAuthority,
 } from "../lib/commands/recommend-next.js";
 import { doctorSession as runDoctorSession } from "../lib/commands/doctor.js";
 import { runExperiment } from "../lib/commands/run.js";
@@ -40,15 +50,14 @@ import {
   type CommandShell,
 } from "../lib/command-rendering.js";
 import {
-  actionSafeActionForKind,
   actionToolNameForKind,
   actionTitleForKind,
   resolveActionCommand,
-  withCanonicalActionCommand,
 } from "../lib/action-metadata.js";
 import { renderCliHelp } from "../lib/cli/help.js";
 import {
   commandRequiresSessionMutationLock,
+  commandUsesSessionDecisionProtocol,
   compatibilityErrorForCli,
 } from "../lib/command-table.js";
 import {
@@ -67,27 +76,39 @@ import {
 } from "../lib/cli/args.js";
 import {
   resolveAuthorizedWorkDir,
+  withAcceptedWorkdirResolution,
   withOutsideWorkdirAuthorization,
 } from "../lib/cli/workdir-context.js";
 import { createCliCommandHandlers, runCliCommand } from "../lib/cli-handlers.js";
+import { resolveInitialSessionMutationRoute } from "../lib/coherent-session-snapshot.js";
 import { buildDriftReport, runtimeProvenance } from "../lib/drift-doctor.js";
 import { analyzeExperimentEconomics } from "../lib/experiment-economics.js";
+import {
+  acceptedExperimentContractForMutation,
+  appendExperimentContractAcceptance,
+  contractDerivationError,
+  deriveExperimentContract,
+  executionCommandText,
+} from "../lib/experiment-contract.js";
 import {
   createActiveProgressWriter,
   deleteActiveProgressSnapshotIfSafe,
   readActiveProgressSnapshot,
+  recoverTerminationFailedProgress,
 } from "../lib/active-progress-store.js";
 import { rekeyProcessLifecycleRecords } from "../lib/process-governor.js";
 import { COMMAND_EXECUTION_BOUNDARY } from "../lib/command-execution-boundary.js";
+import {
+  CommandDecisionProtocolError,
+  commandDecisionProtocolFailureEnvelope,
+  runCommandDecisionProtocol,
+  type CommandDecisionProtocolResult,
+} from "../lib/command-decision-protocol.js";
 import { defaultChecksCommand } from "../lib/check-policy.js";
 import { buildSourceCleanliness } from "../lib/source-cleanliness.js";
-import {
-  buildSessionReadModel,
-  buildSessionReadModelState,
-  resolveSessionDecision,
-  withResolvedSessionDecision,
-} from "../lib/session-read-model.js";
+import { buildSessionReadModelState } from "../lib/session-read-model.js";
 import { normalizeProtectedBenchmarkPaths } from "../lib/benchmark/contract-guards.js";
+import { packetBudgetUsage } from "../lib/benchmark/budget-contract.js";
 import {
   defaultBenchmarkCommand,
   defaultBenchmarkCommandExists,
@@ -108,8 +129,7 @@ import { artifactList } from "../lib/evidence-registry.js";
 import { isPathInside } from "../lib/path-containment.js";
 import { resolveSafeResearchPath } from "../lib/research-path-guard.js";
 import { buildExperimentMemory } from "../lib/experiment-memory.js";
-import { goalCompletionUnresolvedBlockers } from "../lib/goal-frame.js";
-import { fixedControlBlockForCommand } from "../lib/fixed-control.js";
+import { fixedControlBlockForCommand, fixedControlRerunError } from "../lib/fixed-control.js";
 import { runWithRequiredCleanup } from "../lib/required-cleanup.js";
 import { normalizeRelativePaths } from "../lib/literal-paths.js";
 import {
@@ -165,7 +185,6 @@ import {
 } from "../lib/runner-progress.js";
 import {
   appendJsonl,
-  buildDecisionEnvelope,
   createSessionReadCache,
   finiteMetric,
   currentState,
@@ -175,7 +194,6 @@ import {
   pathExists,
   stateFromSessionRecords,
   safeSlug,
-  iterationLimitInfo,
   promotionGradeValue,
   readConfig as readSessionConfig,
 } from "../lib/session-core.js";
@@ -189,7 +207,6 @@ import {
 import { analyzeWorkflowFriction } from "../lib/workflow-friction.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
-import { isBoundedNextAllowedByCapsule } from "../lib/session-decision-capsule.js";
 import {
   AUTORESEARCH_RESEARCH_DIR,
   researchDirPathForSession,
@@ -246,6 +263,9 @@ async function serveAutoresearchLazy(
   return (await import("../lib/live-server.js")).serveAutoresearch(...args);
 }
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
+export const AUTORESEARCH_RUNTIME_IDENTITY = {
+  pluginVersion: PLUGIN_VERSION,
+} as const;
 
 async function publicState(args: LooseObject): Promise<LooseObject> {
   return await readPublicState(args);
@@ -914,28 +934,20 @@ function guidedNextStep({
   });
 }
 
-function canonicalActionForGuidedSetup({
-  doctor,
-  explicitBenchmarkCommand,
-  stage,
-}: LooseObject): LooseObject | null {
+function canonicalActionForGuidedSetup({ doctor, stage }: LooseObject): LooseObject | null {
+  const plan = compactRecord(doctor?.decisionPlan);
+  const action = compactRecord(plan?.action);
+  const capabilities = compactRecord(plan?.capabilities);
+  const runPacket = compactRecord(capabilities?.["run-packet"]);
+  if (!action || runPacket?.status === "allowed") return null;
   if (
-    stage === "stale-last-run" ||
-    stage === "needs-log-decision" ||
-    stage === "needs-setup" ||
-    stage === "needs-benchmark-command"
+    (stage === "stale-last-run" && action.kind === "replace-packet") ||
+    (stage === "needs-log-decision" && action.kind === "log-decision") ||
+    (stage === "needs-setup" && action.kind === "setup") ||
+    (stage === "needs-benchmark-command" && action.kind === "configure-benchmark")
   ) {
     return null;
   }
-  const loopContract = doctor?.resolvedDecision?.loopContract || doctor?.loopContract || {};
-  const canonicalNextAction =
-    doctor?.resolvedDecision?.canonicalNextAction || doctor?.canonicalNextAction || null;
-  const action = blockingLoopAction(loopContract, canonicalNextAction);
-  if (!action || action.kind === "next-packet") return null;
-  if (stage === "needs-baseline" && action.kind === "preflight" && explicitBenchmarkCommand) {
-    return null;
-  }
-  if (loopContract.canRunNextPacket !== false) return null;
   return action;
 }
 
@@ -974,542 +986,72 @@ function guidedSafetyForCanonicalKind(kind: string): string {
 }
 
 async function promptPlan(args: LooseObject): Promise<LooseObject> {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const prompt = String(args.prompt || args.goal || args.request || "").trim();
   if (!prompt) throw new Error("prompt-plan requires --prompt <text>.");
-  const intent = await analyzeAutoresearchPrompt(workDir, prompt, args);
-  const setupDefaults = intent.setupDefaults as LooseObject;
-  const setupArgs = {
-    cwd: workDir,
-    ...intent.setupDefaults,
-    name: args.name || intent.setupDefaults.name,
-    goal: args.goal || intent.setupDefaults.goal,
-    metricName: args.metricName ?? args.metric_name ?? intent.setupDefaults.metricName,
-    metric_name: args.metric_name ?? args.metricName ?? intent.setupDefaults.metricName,
-    metricUnit: args.metricUnit ?? args.metric_unit ?? intent.setupDefaults.metricUnit,
-    metric_unit: args.metric_unit ?? args.metricUnit ?? intent.setupDefaults.metricUnit,
-    direction: args.direction || intent.setupDefaults.direction,
-    benchmarkCommand:
-      args.benchmarkCommand ?? args.benchmark_command ?? intent.setupDefaults.benchmarkCommand,
-    benchmark_command:
-      args.benchmark_command ?? args.benchmarkCommand ?? intent.setupDefaults.benchmarkCommand,
-    checksCommand: args.checksCommand ?? args.checks_command ?? intent.setupDefaults.checksCommand,
-    checks_command: args.checks_command ?? args.checksCommand ?? intent.setupDefaults.checksCommand,
-    filesInScope: args.filesInScope ?? args.files_in_scope ?? intent.setupDefaults.filesInScope,
-    files_in_scope: args.files_in_scope ?? args.filesInScope ?? intent.setupDefaults.filesInScope,
-    offLimits: args.offLimits ?? args.off_limits ?? intent.setupDefaults.offLimits,
-    off_limits: args.off_limits ?? args.offLimits ?? intent.setupDefaults.offLimits,
-    constraints: args.constraints ?? intent.setupDefaults.constraints,
-    qualityConstraints:
-      args.qualityConstraints ??
-      args.quality_constraints ??
-      intent.setupDefaults.qualityConstraints,
-    quality_constraints:
-      args.quality_constraints ??
-      args.qualityConstraints ??
-      intent.setupDefaults.qualityConstraints,
-    secondaryMetrics:
-      args.secondaryMetrics ?? args.secondary_metrics ?? intent.setupDefaults.secondaryMetrics,
-    secondary_metrics:
-      args.secondary_metrics ?? args.secondaryMetrics ?? intent.setupDefaults.secondaryMetrics,
-    commitPaths: args.commitPaths ?? args.commit_paths ?? intent.setupDefaults.commitPaths,
-    commit_paths: args.commit_paths ?? args.commitPaths ?? intent.setupDefaults.commitPaths,
-    maxIterations: args.maxIterations ?? args.max_iterations ?? intent.setupDefaults.maxIterations,
-    max_iterations: args.max_iterations ?? args.maxIterations ?? intent.setupDefaults.maxIterations,
-    recipe: args.recipe ?? args.recipe_id ?? args.recipeId ?? intent.setupDefaults.recipe,
-    recipe_id: args.recipe_id ?? args.recipeId ?? args.recipe ?? intent.setupDefaults.recipe,
-    catalog: args.catalog ?? setupDefaults.catalog,
-    trustCatalog: args.trustCatalog ?? args.trust_catalog ?? setupDefaults.trustCatalog,
-    trust_catalog: args.trust_catalog ?? args.trustCatalog ?? setupDefaults.trustCatalog,
-  };
-  const setup = await setupPlan(setupArgs);
-  const dashboardCommand = commandLine([
-    "node",
-    path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
-    "serve",
-    "--cwd",
-    workDir,
-  ]);
+  const directFit = classifyFit({ prompt, session: null });
+  if (directFit.disposition === "continue-direct") {
+    return {
+      ok: true,
+      workDir,
+      kind: "codex-autoresearch-prompt-plan",
+      prompt,
+      fit: directFit,
+      directEvidence: directFit.nextAction.capsule,
+      nextAction: directFit.nextAction,
+    };
+  }
+  const records = loadSessionRecords(workDir);
+  const sessionConfig = records.length
+    ? { ...stateFromSessionRecords(workDir, records).config, ...config }
+    : config;
+  let session = adaptLegacySessionMetadata(sessionConfig);
+  if (session && requestsNamedSessionContinuation(prompt, session.name)) {
+    const derivation = await deriveExperimentContract({ workDir, config });
+    if (derivation.status === "accepted") {
+      session = adaptAcceptedSessionMetadata(sessionConfig, derivation.contract);
+    } else if (derivation.status === "invalid") {
+      session = withFitCompatibilityConflicts(
+        session,
+        derivation.conflicts.map(({ field, sources, message }) => ({
+          field,
+          sources,
+          message,
+        })),
+      );
+    }
+  }
+  const fit = classifyFit({ prompt, session });
+  if (fit.disposition === "continue-direct") {
+    return {
+      ok: true,
+      workDir,
+      kind: "codex-autoresearch-prompt-plan",
+      prompt,
+      fit,
+      directEvidence: fit.nextAction.capsule,
+      nextAction: fit.nextAction,
+    };
+  }
+  if (fit.disposition === "needs-user") {
+    return {
+      ok: true,
+      workDir,
+      kind: "codex-autoresearch-prompt-plan",
+      prompt,
+      fit,
+      nextAction: fit.nextAction,
+    };
+  }
   return {
     ok: true,
     workDir,
     kind: "codex-autoresearch-prompt-plan",
     prompt,
-    intent,
-    qualityConstraints: intent.qualityConstraints,
-    setup,
-    commands: {
-      promptPlan: commandLine([
-        "node",
-        path.join(PLUGIN_ROOT, "scripts", "autoresearch.mjs"),
-        "prompt-plan",
-        "--cwd",
-        workDir,
-        "--prompt",
-        prompt,
-      ]),
-      setup: setup.nextCommand,
-      doctor: setup.guidedFlow.find((step: any) => step.step === "doctor")?.command || "",
-      dashboard: dashboardCommand,
-      firstPacket: setup.baselineCommand,
-    },
-    missingEssentials: intent.missing || setup.missing || [],
-    nextStep:
-      setup.nextStep ||
-      sharedNextStep({
-        stage: "setup-repair",
-        title: "Create session setup",
-        reason: intent.nextAction,
-        command: setup.nextCommand,
-        toolName: "setup_session",
-        safety: "state_mutation",
-        missingEssentials: intent.missing || setup.missing || [],
-      }),
-    nextAction: intent.nextAction,
+    fit,
+    contractCandidate: fit.contract,
+    nextAction: fit.nextAction,
   };
-}
-
-async function analyzeAutoresearchPrompt(workDir: string, prompt: string, args: LooseObject) {
-  const explicit = parsePromptFields(prompt);
-  const discoveredBenchmark = await discoverAutoresearchBenchmark(workDir, prompt);
-  const lower = prompt.toLowerCase();
-  const speed = /\b(speed|fast|faster|latency|runtime|p99|p90|performance|slow)\b/.test(lower);
-  const memory = /\b(memory|rss|heap|footprint|ram)\b/.test(lower);
-  const bugs = /\b(bug|bugs|defect|defects|failure|failures|low hanging fruits?)\b/.test(lower);
-  const productResearch =
-    /\b(product|docs?|documentation|ux|dashboard|architecture|study|research|delight)\b/.test(
-      lower,
-    );
-  const testSpeed = /\b(unit tests?|tests?)\b/.test(lower) && speed;
-  const latencyRatio = /\bp99\b/.test(lower) && /\bp90\b/.test(lower);
-  const qualityGapIntent =
-    /\bquality[_ -]?gap\b/.test(lower) ||
-    /\b(friction|smooth|manual tests?|manual-test|end to end|e2e|user experience|ai experience|skill-first|security hygiene|evidence hygiene|release readiness|release path|operator ux|readout ux|dashboard ux)\b/.test(
-      lower,
-    );
-  const explicitMeasuredContract =
-    !/\bquality[_ -]?gap\b/.test(lower) &&
-    Boolean(explicit.benchmarkCommand || explicit.metricName);
-  const maxIterations =
-    positiveIntegerFromPrompt(prompt) ??
-    positiveIntegerOption(args.max_iterations ?? args.maxIterations, null, "maxIterations");
-  const suspects = parseSuspects(prompt);
-  const referencedFiles = parseReferencedFiles(prompt);
-  const qualityConstraints = qualityConstraintsForText(prompt);
-  const explicitScope = explicit.scope.length ? explicit.scope : [];
-  const repoRecipe = await recommendRecipe(workDir);
-  const loopKind =
-    !explicitMeasuredContract &&
-    (bugs || qualityGapIntent || (productResearch && !speed && !memory))
-      ? "quality-gap"
-      : "measured-optimization";
-  const useDiscoveredBenchmark = loopKind === "measured-optimization" ? discoveredBenchmark : null;
-  const metricName =
-    explicit.metricName ||
-    useDiscoveredBenchmark?.metricName ||
-    (bugs || qualityGapIntent || (productResearch && !speed && !memory)
-      ? "quality_gap"
-      : latencyRatio
-        ? "p99_p90_ratio"
-        : speed && memory
-          ? "score"
-          : speed
-            ? "seconds"
-            : memory
-              ? "rss_mb"
-              : repoRecipe?.metricName || "seconds");
-  const direction =
-    explicit.direction ||
-    useDiscoveredBenchmark?.direction ||
-    (metricName === "quality_gap" ||
-    metricName === "p99_p90_ratio" ||
-    metricName === "seconds" ||
-    metricName === "rss_mb"
-      ? "lower"
-      : metricLooksHigherIsBetter(metricName)
-        ? "higher"
-        : repoRecipe?.direction || "lower");
-  const metricUnit =
-    explicit.metricUnit ||
-    useDiscoveredBenchmark?.metricUnit ||
-    (metricName === "quality_gap"
-      ? "gaps"
-      : metricName === "seconds"
-        ? "s"
-        : metricName === "rss_mb"
-          ? "MB"
-          : "");
-  const secondaryMetrics = uniqueStrings([
-    ...explicit.secondaryMetrics,
-    ...(speed && memory ? ["seconds", "rss_mb"] : []),
-    ...(latencyRatio ? ["p90_ms", "p99_ms"] : []),
-    ...suspects.map((suspect: any) => `suspect:${suspect}`),
-  ]);
-  const constraints = uniqueStrings([
-    ...explicit.constraints,
-    ...(useDiscoveredBenchmark?.constraints || []),
-    ...(testSpeed ? ["Do not delete or skip correctness tests to improve runtime."] : []),
-    ...(memory ? ["Treat memory regressions as tradeoffs, not invisible wins."] : []),
-    ...(suspects.length ? [`Evaluate suspect families separately: ${suspects.join(", ")}.`] : []),
-    ...(referencedFiles.length
-      ? [
-          `Use referenced experiment notes before inventing new families: ${referencedFiles.join(", ")}.`,
-        ]
-      : []),
-    ...qualityConstraints.map(
-      (constraint) => `Quality constraint (${constraint.domain}): ${constraint.guidance}`,
-    ),
-  ]);
-  const filesInScope = uniqueStrings([
-    ...explicitScope,
-    ...(useDiscoveredBenchmark ? [useDiscoveredBenchmark.path] : []),
-    ...(testSpeed ? ["test runner config", "test helpers"] : []),
-    ...(repoRecipe?.scope || []),
-  ]);
-  const offLimits = uniqueStrings(explicit.offLimits);
-  const benchmarkCommand = explicit.benchmarkCommand || useDiscoveredBenchmark?.command || "";
-  const checksCommand = explicit.checksCommand || "";
-  const recipe = benchmarkCommand
-    ? ""
-    : loopKind === "quality-gap"
-      ? "quality-gap"
-      : repoRecipe?.id || "custom";
-  const missing = [];
-  if (!benchmarkCommand && loopKind === "measured-optimization") {
-    missing.push("benchmark_command");
-  }
-  if (!checksCommand && qualityConstraints.length > 0) missing.push("checks_command");
-  if (!checksCommand && (testSpeed || bugs)) missing.push("checks_command");
-  if (!filesInScope.length) missing.push("scope");
-  const setupMissing = uniqueStrings(missing);
-  const experimentPlan = buildPromptExperimentPlan({
-    prompt,
-    speed,
-    memory,
-    bugs,
-    latencyRatio,
-    testSpeed,
-    suspects,
-    referencedFiles,
-    discoveredBenchmark: useDiscoveredBenchmark,
-  });
-  const nextAction =
-    setupMissing.length > 0
-      ? `Confirm ${setupMissing.join(", ")} or accept the suggested recipe before setup.`
-      : "Run setup, doctor, then one packet. Serve the live dashboard only if the operator asks or freshness needs a browser readout.";
-  return {
-    loopKind,
-    confidence: promptPlanConfidence({
-      benchmarkCommand,
-      explicit,
-      speed,
-      memory,
-      bugs,
-      productResearch,
-    }),
-    inferredFrom: {
-      speed,
-      memory,
-      bugs,
-      productResearch,
-      latencyRatio,
-      testSpeed,
-      maxIterations,
-      suspects,
-      referencedFiles,
-      discoveredBenchmark: useDiscoveredBenchmark
-        ? {
-            path: useDiscoveredBenchmark.path,
-            metricName: useDiscoveredBenchmark.metricName,
-            command: useDiscoveredBenchmark.command,
-          }
-        : null,
-    },
-    metric: { name: metricName, unit: metricUnit, direction },
-    missing: setupMissing,
-    qualityConstraints,
-    experimentPlan,
-    setupDefaults: {
-      recipe,
-      name: titleFromPrompt(prompt, loopKind),
-      goal: prompt,
-      metricName,
-      metricUnit,
-      direction,
-      benchmarkCommand,
-      checksCommand,
-      filesInScope,
-      offLimits,
-      constraints,
-      qualityConstraints,
-      secondaryMetrics,
-      maxIterations,
-      commitPaths: filesInScope,
-    },
-    safeInterpretation: safePromptInterpretation({ prompt, testSpeed, bugs, speed, memory }),
-    nextAction,
-  };
-}
-
-async function discoverAutoresearchBenchmark(workDir: string, prompt: string) {
-  const candidates = [];
-  for (const script of await discoverBenchmarkFiles(workDir)) {
-    const absolute = path.join(workDir, script.path);
-    const text = await fsp.readFile(absolute, "utf8").catch(() => "");
-    const metrics = metricNamesFromScript(text);
-    if (!metrics.length) continue;
-    candidates.push({
-      path: script.path,
-      command: script.command,
-      metricName: choosePrimaryMetricName(metrics),
-      metrics,
-      score: benchmarkPromptScore(prompt, script.path, text, metrics),
-      constraints: benchmarkConstraintsFromScript(script.path, metrics),
-    });
-  }
-  candidates.push(...(await discoverDocumentationBenchmarkHints(workDir, prompt)));
-  candidates.push(...(await discoverPackageBenchmarkScripts(workDir, prompt)));
-  candidates.push(...(await discoverCargoBenchmarkHints(workDir, prompt)));
-  candidates.sort((a: any, b: any) => b.score - a.score || a.path.localeCompare(b.path));
-  const best = candidates[0];
-  if (!best || best.score <= 0) return null;
-  return {
-    ...best,
-    direction: metricLooksHigherIsBetter(best.metricName) ? "higher" : "lower",
-    metricUnit: metricLooksHigherIsBetter(best.metricName)
-      ? "points"
-      : inferMetricUnit(best.metricName),
-  };
-}
-
-async function discoverDocumentationBenchmarkHints(workDir: string, prompt: string) {
-  const docsRoot = path.join(workDir, "docs");
-  if (!(await pathExists(docsRoot))) return [];
-  const files: string[] = [];
-  await collectDocumentationHintFiles(workDir, docsRoot, files, 0);
-  const candidates = [];
-  for (const relative of files) {
-    const text = await fsp.readFile(path.join(workDir, relative), "utf8").catch(() => "");
-    const metrics = metricNamesFromScript(text);
-    const command = commandFromDocumentationHint(text);
-    if (!metrics.length || !command) continue;
-    candidates.push({
-      path: relative,
-      command,
-      metricName: choosePrimaryMetricName(metrics),
-      metrics,
-      score: benchmarkPromptScore(prompt, relative, text, metrics) + 6,
-      constraints: benchmarkConstraintsFromScript(relative, metrics),
-    });
-  }
-  return candidates;
-}
-
-async function collectDocumentationHintFiles(
-  workDir: string,
-  dir: string,
-  files: string[],
-  depth: number,
-) {
-  if (depth > 2 || files.length >= 100) return;
-  for (const entry of await fsp.readdir(dir, { withFileTypes: true }).catch((): [] => [])) {
-    const absolute = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      await collectDocumentationHintFiles(workDir, absolute, files, depth + 1);
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    const relative = path.relative(workDir, absolute).replace(/\\/g, "/");
-    if (!/\.(?:md|mdx|txt)$/i.test(relative)) continue;
-    if (
-      !/autoresearch|benchmark|bench|perf|score|quality|eval|evaluator|holdout|promotion|research/i.test(
-        relative,
-      )
-    ) {
-      continue;
-    }
-    files.push(relative);
-  }
-}
-
-function commandFromDocumentationHint(text: string) {
-  const commandMatches = [
-    ...String(text).matchAll(
-      /`([^`\r\n]*(?:node|python|cargo|npm|pnpm|yarn|bash|powershell|pwsh)[^`\r\n]*)`/gi,
-    ),
-  ];
-  const preferred = commandMatches.find((match: any) =>
-    /METRIC|holdout|benchmark|autoresearch|score|eval|harness/i.test(
-      `${match[1]}\n${text.slice(Math.max(0, match.index || 0), (match.index || 0) + 800)}`,
-    ),
-  );
-  return String((preferred || commandMatches[0])?.[1] || "").trim();
-}
-
-async function discoverBenchmarkFiles(workDir: string) {
-  const roots = ["scripts", "bench", "benches", "benchmarks", "test", "tests", "docs"];
-  const candidates: LooseObject[] = [];
-  for (const rootName of roots) {
-    const root = path.join(workDir, rootName);
-    if (!(await pathExists(root))) continue;
-    await collectBenchmarkFiles(workDir, root, candidates, 0);
-  }
-  const gitHints = path.join(workDir, ".git", "autoresearch");
-  if (await pathExists(gitHints)) await collectBenchmarkFiles(workDir, gitHints, candidates, 0);
-  const seen = new Set<string>();
-  return candidates.filter((candidate: any) => {
-    if (seen.has(candidate.path)) return false;
-    seen.add(candidate.path);
-    return true;
-  });
-}
-
-async function collectBenchmarkFiles(
-  workDir: string,
-  dir: string,
-  candidates: any[],
-  depth: number,
-) {
-  if (depth > 3 || candidates.length >= 200) return;
-  for (const entry of await fsp.readdir(dir, { withFileTypes: true }).catch((): [] => [])) {
-    if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "target") continue;
-    const absolute = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      await collectBenchmarkFiles(workDir, absolute, candidates, depth + 1);
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    const relative = path.relative(workDir, absolute).replace(/\\/g, "/");
-    if (!benchmarkFileNameLooksRelevant(relative)) continue;
-    const command = commandForBenchmarkFile(relative);
-    if (!command) continue;
-    candidates.push({ path: relative, command });
-  }
-}
-
-function benchmarkFileNameLooksRelevant(relativePath: string) {
-  return (
-    /\.(?:mjs|js|cjs|ts|py|ps1|sh)$/i.test(relativePath) &&
-    /autoresearch|benchmark|bench|perf|score|quality|eval|evaluator|holdout|promotion|research/i.test(
-      relativePath,
-    )
-  );
-}
-
-function commandForBenchmarkFile(relativePath: string) {
-  const quoted = shellQuote(relativePath);
-  if (/\.(?:mjs|js|cjs|ts)$/i.test(relativePath)) return `node ${quoted}`;
-  if (/\.py$/i.test(relativePath)) return `python ${quoted}`;
-  if (/\.ps1$/i.test(relativePath)) {
-    return `powershell -NoProfile -ExecutionPolicy Bypass -File ${quoted}`;
-  }
-  if (/\.sh$/i.test(relativePath)) return `bash ${quoted}`;
-  return "";
-}
-
-async function discoverPackageBenchmarkScripts(workDir: string, prompt: string) {
-  const packagePath = path.join(workDir, "package.json");
-  if (!(await pathExists(packagePath))) return [];
-  const parsed = JSON.parse(await fsp.readFile(packagePath, "utf8"));
-  const scripts = parsed?.scripts || {};
-  const candidates = [];
-  for (const [name, command] of Object.entries(scripts)) {
-    if (
-      !/autoresearch|benchmark|bench|perf|score|quality|eval|holdout|promotion|research/i.test(name)
-    )
-      continue;
-    const text = String(command || "");
-    const metrics = metricNamesFromScript(text);
-    if (!metrics.length) continue;
-    candidates.push({
-      path: `package.json#scripts.${name}`,
-      command: `npm run ${shellQuote(name)}`,
-      metricName: choosePrimaryMetricName(metrics),
-      metrics,
-      score: benchmarkPromptScore(prompt, `package.json ${name}`, text, metrics) + 1,
-      constraints: benchmarkConstraintsFromScript(`package.json#scripts.${name}`, metrics),
-    });
-  }
-  return candidates;
-}
-
-async function discoverCargoBenchmarkHints(workDir: string, prompt: string) {
-  const cargoPath = path.join(workDir, "Cargo.toml");
-  if (!(await pathExists(cargoPath))) return [];
-  const text = await fsp.readFile(cargoPath, "utf8").catch(() => "");
-  if (!/\[\[bench\]\]|\bcriterion\b|\biai\b/i.test(text)) return [];
-  const score = benchmarkPromptScore(prompt, "Cargo.toml cargo bench", text, ["score"]) + 1;
-  return [
-    {
-      path: "Cargo.toml#bench",
-      command: "",
-      metricName: "score",
-      metrics: ["score"],
-      requiresWrapper: true,
-      score,
-      constraints: [
-        "Create or choose a Cargo benchmark wrapper that prints METRIC score=<number>; raw cargo bench output is not a valid Autoresearch packet command.",
-      ],
-    },
-  ];
-}
-
-function metricNamesFromScript(text: string) {
-  const names = new Set<string>();
-  for (const match of text.matchAll(/METRIC\s+([A-Za-z_][A-Za-z0-9_.:-]*)\s*=/g)) {
-    names.add(match[1]);
-  }
-  for (const match of text.matchAll(/METRIC\s+\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?\s*=/g)) {
-    names.add(match[1]);
-  }
-  return [...names].filter((name: string) => /^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(name));
-}
-
-function choosePrimaryMetricName(metrics: string[]) {
-  return (
-    metrics.find((metric: any) => /(^|[_:-])score$/i.test(metric)) ||
-    metrics.find((metric: any) => /^quality_gap$/i.test(metric)) ||
-    metrics[0]
-  );
-}
-
-function benchmarkPromptScore(
-  prompt: string,
-  relativePath: string,
-  text: string,
-  metrics: string[],
-) {
-  const haystack = `${relativePath}\n${text.slice(0, 4000)}`.toLowerCase();
-  const words = uniqueStrings(
-    prompt
-      .toLowerCase()
-      .split(/[^a-z0-9_]+/)
-      .filter((word: any) => word.length >= 4),
-  );
-  let score = relativePath.includes("autoresearch") ? 2 : 0;
-  for (const word of words) {
-    if (haystack.includes(word)) score += 1;
-  }
-  if (metrics.some((metric: any) => /score/i.test(metric))) score += 2;
-  if (
-    /parse|index|embed|pipeline|benchmark/.test(prompt.toLowerCase()) &&
-    /parse|index|embed|pipeline/.test(haystack)
-  ) {
-    score += 4;
-  }
-  return score;
-}
-
-function benchmarkConstraintsFromScript(relativePath: string, metrics: string[]) {
-  const constraints = [
-    `Use existing benchmark surface ${relativePath} before inventing a new timer.`,
-  ];
-  if (metrics.some((metric: any) => /quality|score/i.test(metric))) {
-    constraints.push(
-      "Treat the primary score as the decision contract; inspect quality, speed, and footprint components before promoting a speedup.",
-    );
-  }
-  return constraints;
 }
 
 function qualitySensitivePerformanceDomain(text: string): string[] {
@@ -1590,62 +1132,6 @@ function metricLooksHigherIsBetter(metricName: string) {
   return /score|quality|throughput|docs_per_second|hit|mrr/i.test(metricName);
 }
 
-function inferMetricUnit(metricName: string) {
-  if (/seconds|duration|latency|time/i.test(metricName)) return "s";
-  if (/rss|memory|heap|mb/i.test(metricName)) return "MB";
-  return "";
-}
-
-function parsePromptFields(prompt: string) {
-  const field = (name: string) => {
-    const match = prompt.match(new RegExp(`^${name}:\\s*(.+)$`, "im"));
-    return match?.[1]?.trim() || "";
-  };
-  const metricText = field("Metric");
-  const metricMatch = metricText.match(
-    /^([A-Za-z_][A-Za-z0-9_.:-]*)(?:\s*\(([^)]+)\))?(?:\s*,\s*(lower|higher)\s+is\s+better)?/i,
-  );
-  const secondaryText = field("Secondary metrics") || field("Secondary");
-  return {
-    benchmarkCommand: field("Benchmark"),
-    checksCommand: field("Checks"),
-    metricName: metricMatch ? validateMetricName(metricMatch[1]) : "",
-    metricUnit: metricMatch?.[2] || "",
-    direction: metricMatch?.[3]?.toLowerCase() || "",
-    scope: splitHumanList(field("Scope")),
-    offLimits: splitHumanList(field("Off limits") || field("Off-limits")),
-    constraints: splitHumanList(field("Constraints")),
-    secondaryMetrics: splitHumanList(secondaryText),
-  };
-}
-
-function splitHumanList(value: string) {
-  if (!value) return [];
-  return value
-    .split(/\r?\n|,|;|\band\b/i)
-    .map((item: any) => item.trim())
-    .filter(Boolean);
-}
-
-function positiveIntegerFromPrompt(prompt: string) {
-  const match = prompt.match(/\b(\d{1,4})\s*(?:times|iterations|packets|runs)\b/i);
-  if (!match) return null;
-  const value = Number(match[1]);
-  return Number.isInteger(value) && value > 0 ? value : null;
-}
-
-function parseSuspects(prompt: string) {
-  const match = prompt.match(/\bI suspect:\s*([^.\n]+)/i);
-  if (!match) return [];
-  return uniqueStrings(splitHumanList(match[1]).map((item: any) => item.replace(/^or\s+/i, "")));
-}
-
-function parseReferencedFiles(prompt: string) {
-  return uniqueStrings(
-    [...prompt.matchAll(/@([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+)/g)].map((m: any) => m[1]),
-  );
-}
-
 function uniqueStrings(items: any[]) {
   return [
     ...new Set(
@@ -1654,81 +1140,6 @@ function uniqueStrings(items: any[]) {
         .filter(Boolean),
     ),
   ];
-}
-
-function titleFromPrompt(prompt: string, loopKind: string) {
-  const stripped = prompt
-    .replace(/^Use\s+\$?Codex Autoresearch\s+to\s+/i, "")
-    .replace(/^Use\s+Codex Autoresearch\s+to\s+/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  const title = stripped.split(/[.!?]/)[0].slice(0, 72).trim();
-  return title || (loopKind === "quality-gap" ? "Quality gap loop" : "Measured improvement loop");
-}
-
-function buildPromptExperimentPlan({
-  speed,
-  memory,
-  bugs,
-  latencyRatio,
-  testSpeed,
-  suspects,
-  referencedFiles,
-  discoveredBenchmark,
-}: LooseObject) {
-  const lanes = [];
-  if (discoveredBenchmark)
-    lanes.push(`Start from existing benchmark surface ${discoveredBenchmark.path}.`);
-  if (latencyRatio) lanes.push("Measure p90 and p99 separately before optimizing the ratio.");
-  if (speed) lanes.push("Start with profiling or timing the current slow path.");
-  if (memory) lanes.push("Track memory as a secondary or composite metric for every packet.");
-  if (testSpeed)
-    lanes.push(
-      "Try runner configuration, fixture reuse, and expensive setup isolation before changing assertions.",
-    );
-  if (bugs)
-    lanes.push(
-      "Convert accepted bug findings into quality_gap checklist items, then close them with checks.",
-    );
-  for (const suspect of suspects) lanes.push(`Run a bounded suspect family: ${suspect}.`);
-  for (const file of referencedFiles)
-    lanes.push(`Read ${file} before generating experiment families.`);
-  return {
-    lanes: lanes.length
-      ? lanes
-      : ["Run one baseline packet, then choose the smallest measurable next experiment."],
-    stopRules: [
-      "Stop a family when it regresses the primary metric without reducing risk.",
-      "Repeat measurement before keeping noisy or surprising wins.",
-      "Do not finalize until checks and packet freshness are current.",
-    ],
-  };
-}
-
-function promptPlanConfidence({
-  benchmarkCommand,
-  explicit,
-  speed,
-  memory,
-  bugs,
-  productResearch,
-}: LooseObject) {
-  let score = 0.35;
-  if (benchmarkCommand) score += 0.25;
-  if (explicit.metricName) score += 0.15;
-  if (explicit.checksCommand) score += 0.1;
-  if (speed || memory || bugs || productResearch) score += 0.15;
-  return Math.min(0.95, Number(score.toFixed(2)));
-}
-
-function safePromptInterpretation({ prompt, testSpeed, bugs, speed, memory }: LooseObject) {
-  if (testSpeed)
-    return "Optimize test runtime by changing runner/config/helpers while preserving test coverage and correctness checks.";
-  if (bugs)
-    return "Find likely defects, measure accepted fixes through quality_gap or checks, and avoid broad rewrites without evidence.";
-  if (speed && memory)
-    return "Optimize speed with memory as an explicit tradeoff, preferably through a composite metric or secondary metric gate.";
-  return `Turn the prompt into a measured Autoresearch session: ${prompt}`;
 }
 
 async function guidedSetup(args: LooseObject): Promise<LooseObject> {
@@ -1826,7 +1237,6 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
   };
   const canonicalGuideAction = canonicalActionForGuidedSetup({
     doctor,
-    explicitBenchmarkCommand: Boolean(args.benchmarkCommand || args.benchmark_command),
     stage,
   });
   let nextStep = guidedNextStep({
@@ -1864,8 +1274,10 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
       issues: doctor.issues,
       warnings: doctor.warnings,
       nextAction: doctor.nextAction,
-      canonicalNextAction: doctor.resolvedDecision?.canonicalNextAction || null,
-      loopContract: doctor.resolvedDecision?.loopContract || null,
+      decisionPlanProjection:
+        doctor.decisionPlan?.kind === "decision-plan"
+          ? projectCompactDecisionPlan(doctor.decisionPlan as DecisionPlan)
+          : null,
     },
     lastRun: lastRun
       ? {
@@ -1906,7 +1318,8 @@ async function guidedSetup(args: LooseObject): Promise<LooseObject> {
 
 async function compactGuidedSetup({ workDir, config, readCache }: LooseObject) {
   const state: LooseObject = await publicState({ cwd: workDir, compact: true, readCache });
-  const canonicalNextAction = state.resolvedDecision?.canonicalNextAction || null;
+  const compactPlan = compactRecord(state.decisionPlanProjection);
+  const canonicalNextAction = compactRecord(compactPlan?.action);
   const shouldReadLastRun =
     state.requiresLogDecision === true ||
     ["log-decision", "stale-packet"].includes(String(canonicalNextAction?.kind || ""));
@@ -2021,10 +1434,9 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
   const commands = continuationCommands(workDir);
   const guidePacket = guide as LooseObject;
   const nextPacket = next as LooseObject;
-  const resolvedDecision =
-    nextPacket.resolvedDecision ||
-    state.resolvedDecision ||
-    resolveSessionDecision({ state: nextPacket, commands: nextPacket.commands });
+  const resolvedDecision = nextPacket.resolvedDecision || state.resolvedDecision || null;
+  const decisionPlanProjection =
+    nextPacket.decisionPlanProjection || state.decisionPlanProjection || null;
   const stateStorage = await preflightAutoresearchPrivateState(workDir).catch((error: unknown) => ({
     storageMode: "unavailable",
     targets: [],
@@ -2056,6 +1468,7 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
     ],
     state,
     sessionDecisionCapsule: state.sessionDecisionCapsule || null,
+    decisionPlanProjection,
     resolvedDecision,
     guidedSetup: guidePacket,
     doctor: {
@@ -2102,6 +1515,7 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
     kind: full.kind,
     generatedAt: full.generatedAt,
     operatorSnapshot,
+    decisionPlanProjection,
     resolvedDecision,
     nextAction: operatorSnapshot.nextAction,
     nextStep: {
@@ -2117,143 +1531,82 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
 }
 
 async function recommendNext(args: LooseObject): Promise<LooseObject> {
-  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
-  const readCache = args.readCache;
+  const requestedCwd = String(args.working_dir || args.cwd || "");
   if (boolOption(args.compact, false) && !boolOption(args.full, false)) {
     const compact = await publicState({
-      cwd: workDir,
+      cwd: requestedCwd,
       compact: true,
       codexGoalObjective: args.codexGoalObjective || args.codex_goal_objective,
-      readCache,
     });
+    const workDir = String(compact.workDir || requestedCwd);
     const response = buildCompactRecommendNextResponse({
       workDir,
       compactState: compact,
     });
     if (boolOption(args.operatorChecklist ?? args.operator_checklist, false)) {
-      const action = (response.action || {}) as LooseObject;
-      const canonicalNextAction = (compact.resolvedDecision?.canonicalNextAction ||
-        {}) as LooseObject;
-      const loopContract = (response.resolvedDecision?.loopContract || null) as LooseObject | null;
+      const compactPlan = (compact.decisionPlanProjection || null) as LooseObject | null;
+      const requiredEvidence = (compactPlan?.requiredEvidence || {}) as LooseObject;
       return {
         ...response,
-        operatorChecklist: buildOperatorChecklist(action, {
-          workDir,
-          pluginRoot: PLUGIN_ROOT,
+        operatorChecklist: buildOperatorChecklist(compactPlan, {
           primaryCommand: (response.commands as LooseObject)?.primary,
-          loopContract,
-          source: recommendNextChecklistSource(action, canonicalNextAction, loopContract),
+          actionReason: response.nextAction,
+          source:
+            Array.isArray(requiredEvidence.diagnosticCodes) &&
+            requiredEvidence.diagnosticCodes.length > 0
+              ? requiredEvidence.diagnosticCodes.join(",")
+              : "decision-plan",
         }),
       };
     }
     return response;
   }
-  const viewModel = await dashboardViewModel(workDir, config, {
-    deliveryMode: "cli",
-    sourceCwd: workDir,
-    pluginVersion: PLUGIN_VERSION,
+  const state: LooseObject = await publicState({
+    cwd: requestedCwd,
+    jsonFull: true,
+    codexGoalObjective: args.codexGoalObjective || args.codex_goal_objective,
   });
-  const compact: LooseObject = await publicState({ cwd: workDir, compact: true, readCache });
-  const authority = selectRecommendNextRuntimeAuthority({ viewModel, compact }) as LooseObject;
-  const canonicalNextAction = authority.canonicalNextAction || null;
-  const action = canonicalNextAction
-    ? canonicalActionForRecommendNext(
-        canonicalNextAction,
-        viewModel.nextBestAction,
-        compact.commands,
-      )
-    : ((viewModel.nextBestAction || {}) as LooseObject);
-  const nextAction =
-    canonicalNextAction?.reason ||
-    action.detail ||
-    viewModel.readout?.nextAction ||
-    compact.nextAction;
-  const baseEnvelope = authority.decisionEnvelope || null;
-  const decisionEnvelope = baseEnvelope
-    ? {
-        ...baseEnvelope,
-        finalizationReadiness: viewModel.finalizePreview
-          ? {
-              available: true,
-              ready: viewModel.finalizePreview.ready === true,
-              productGradeReady: viewModel.finalizePreview.productGradeReady !== false,
-              productGradeIssue: viewModel.finalizePreview.productGradeIssue || null,
-              nextAction: viewModel.finalizePreview.nextAction || "",
-              warnings: viewModel.finalizePreview.warnings || [],
-            }
-          : baseEnvelope.finalizationReadiness,
-        nextAction,
-        canonicalNextAction: action.kind
-          ? {
-              ...baseEnvelope.canonicalNextAction,
-              ...canonicalNextAction,
-              command: action.command || canonicalNextAction?.command || "",
-            }
-          : baseEnvelope.canonicalNextAction,
-      }
-    : null;
-  const loopContract = decisionEnvelope?.loopContract || authority.loopContract || null;
+  const workDir = String(state.workDir || requestedCwd);
+  const decisionPlan = state.decisionPlan as DecisionPlan | undefined;
+  if (!decisionPlan || decisionPlan.kind !== "decision-plan") {
+    throw new TypeError("full recommend-next requires a canonical decision plan.");
+  }
+  const resolvedProjection = projectResolvedDecision(decisionPlan);
+  const action = resolvedProjection.canonicalNextAction as LooseObject;
+  const loopContract = resolvedProjection.loopContract as LooseObject;
   const operatorChecklist = boolOption(args.operatorChecklist ?? args.operator_checklist, false)
-    ? buildOperatorChecklist(action, {
-        workDir,
-        pluginRoot: PLUGIN_ROOT,
-        loopContract,
-        source: recommendNextChecklistSource(action, canonicalNextAction, loopContract),
+    ? buildOperatorChecklist(decisionPlan as unknown as LooseObject, {
+        actionReason: decisionPlan.action.reason,
+        source: decisionPlan.requiredEvidence.diagnosticCodes.join(",") || "decision-plan",
       })
     : undefined;
   return buildRecommendNextResponse({
-    ok: true,
+    ok: state.ok !== false,
     workDir,
     action,
-    nextAction,
-    whySafe:
-      action.explanation?.evidence ||
-      action.utilityCopy ||
-      "Derived from state, doctor warnings, ASI memory, and dashboard trust state.",
-    avoids:
-      action.explanation?.avoids ||
-      "Avoids running a packet before setup, stale-last-run, or trust blockers are resolved.",
-    proof:
-      action.explanation?.proof || "The next command should update state or clear the blocker.",
-    blockers: viewModel.trustBlockers || compact.blockers || [],
+    nextAction: decisionPlan.action.reason,
+    whySafe: "Projected from the coherent session snapshot and canonical decision plan.",
+    avoids: "Avoids reinterpreting dashboard, prose, or compatibility projections.",
+    proof: `Decision ${decisionPlan.decisionId}.`,
+    blockers: Array.isArray(loopContract?.blockers) ? loopContract.blockers : [],
     commands: {
-      primary: action.command || action.primaryCommand?.command || "",
-      ...compact.commands,
+      primary: action.command || "",
+      ...state.commands,
     },
-    nextStep:
-      viewModel.guidedSetup?.nextStep || recommendedActionNextStep(action, viewModel, compact),
-    compactState: boolOption(args.compact, false) ? compact : undefined,
-    resumeAudit: decisionEnvelope,
-    decisionEnvelope,
+    nextStep: action.kind ? { stage: state.decisionPlan?.phase, action } : null,
     operatorChecklist,
-    runtimeProvenance: authority.runtimeProvenance,
-    loopContract,
-    approvalLedger: compact.approvalLedger,
-    resourcePreflight: compact.resourcePreflight,
-    evidenceMaturity: compact.evidenceMaturity,
-    laneOrchestration: compact.laneOrchestration,
-    finalizationRunway: compact.finalizationRunway,
-    operatorReadout: compact.operatorReadout || decisionEnvelope?.operatorReadout || null,
-    laneLifecycle: compact.laneLifecycle,
-    packetDiagnostics: compact.packetDiagnostics,
-    portfolioRecommendation: compact.portfolioRecommendation,
-    sessionDecisionCapsule:
-      decisionEnvelope?.sessionDecisionCapsule || compact.sessionDecisionCapsule || null,
-    resolvedDecision: resolveSessionDecision({
-      state: {
-        resolvedDecision: authority.resolvedDecision,
-        decisionEnvelope,
-        blockers: viewModel.trustBlockers || compact.blockers || [],
-        nextAction,
-      },
-      decisionEnvelope,
-      commands: {
-        primary: action.command || action.primaryCommand?.command || "",
-        ...compact.commands,
-      },
-      runtimeProvenance: authority.runtimeProvenance,
-      finalization: viewModel.finalizePreview,
-    }),
+    runtimeProvenance: state.runtimeProvenance,
+    approvalLedger: state.approvalLedger,
+    resourcePreflight: state.resourcePreflight,
+    evidenceMaturity: state.evidenceMaturity,
+    laneOrchestration: state.laneOrchestration,
+    finalizationRunway: state.finalizationRunway,
+    operatorReadout: state.operatorReadout,
+    laneLifecycle: state.laneLifecycle,
+    packetDiagnostics: state.packetDiagnostics,
+    portfolioRecommendation: state.portfolioRecommendation,
+    sessionDecisionCapsule: state.sessionDecisionCapsule || null,
+    decisionPlan,
   });
 }
 
@@ -2263,45 +1616,6 @@ function compactRecord(value: unknown): LooseObject | null {
     : null;
 }
 
-function recommendNextChecklistSource(
-  action: LooseObject,
-  canonicalNextAction: LooseObject | null,
-  loopContract: LooseObject | null,
-) {
-  const actionSource = String(action.source || "");
-  return (
-    (actionSource === "decision-envelope" ? "" : actionSource) ||
-    String(canonicalNextAction?.triggeredBy || "") ||
-    String(loopContract?.strongestAction?.triggeredBy || "") ||
-    actionSource ||
-    "recommend-next"
-  );
-}
-
-function canonicalActionForRecommendNext(
-  canonical: LooseObject,
-  existing: unknown,
-  commands: unknown,
-): LooseObject {
-  const base = existing && typeof existing === "object" ? (existing as LooseObject) : {};
-  const command = resolveActionCommand(canonical.kind, commands, {
-    explicitCommand: canonical.command,
-  });
-  return {
-    ...base,
-    kind: canonical.kind || base.kind || "next-packet",
-    priority: String(canonical.priority ?? base.priority ?? "Next"),
-    title: actionTitleForKind(canonical.kind, String(base.title || "Next action")),
-    detail: canonical.reason || base.detail || "",
-    utilityCopy: base.utilityCopy || "Decision envelope is the authoritative next-action source.",
-    safeAction:
-      base.safeAction || actionSafeActionForKind(canonical.kind, String(canonical.kind || "")),
-    command,
-    primaryCommand: command ? { label: "Run", command } : base.primaryCommand || null,
-    source: "decision-envelope",
-  };
-}
-
 async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = await publicState({ cwd: workDir, compact: false, readCache: args.readCache });
@@ -2309,11 +1623,25 @@ async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
   const commands = continuationCommands(workDir);
   const importedGoal = importedCodexGoal(args);
   const objectiveDraft = codexGoalObjectiveDraft(state, importedGoal);
+  const completionClaimRequired =
+    boolOption(args.completionConfirmed ?? args.completion_confirmed, false) &&
+    Boolean(String(args.completionEvidence || args.completion_evidence || "").trim());
+  const canonicalDecision = await loadCanonicalSessionDecision({
+    requestedCwd: workDir,
+    facts: {
+      finalization: (state.finalizationPressure || null) as LooseObject | null,
+      finalizationClaimRequired: completionClaimRequired,
+    },
+  });
+  if (!canonicalDecision.ok) {
+    throw new Error(canonicalDecision.diagnostic.message);
+  }
   const completionAudit = codexGoalCompletionAudit({
     args,
     compact,
     importedGoal,
     state,
+    decisionPlan: canonicalDecision.plan,
   });
   const completionBlocker = completionAudit.canMarkCodexGoalComplete
     ? null
@@ -2338,6 +1666,7 @@ async function codexGoalBrief(args: LooseObject): Promise<LooseObject> {
     objectiveDraft,
     objectiveLength: objectiveDraft.length,
     completionAudit,
+    decisionPlanProjection: projectCompactDecisionPlan(canonicalDecision.plan),
     commands: {
       codexSlashGoal: `/goal ${objectiveDraft}`,
       explicitGoalToolPrompt: [
@@ -2456,9 +1785,11 @@ function truncateGoalObjective(text: string): string {
 function codexGoalCompletionAudit({
   args,
   compact,
+  decisionPlan,
   importedGoal,
   state,
 }: LooseObject): LooseObject {
+  const plan = decisionPlan as DecisionPlan;
   const completionEvidence = String(
     args.completionEvidence || args.completion_evidence || "",
   ).trim();
@@ -2466,42 +1797,18 @@ function codexGoalCompletionAudit({
     args.completionConfirmed ?? args.completion_confirmed,
     false,
   );
-  const evidenceBlockers = [
-    ...(Array.isArray(compact.blockers) ? compact.blockers : []),
-    ...(Array.isArray(state.researchIntegrity?.notPromotableBecause)
-      ? state.researchIntegrity.notPromotableBecause
-      : []),
-  ].filter(Boolean);
   const limitReached = compact.limitReached === true;
-  const finalizationPressure = state.resolvedDecision?.finalizationPressure || null;
-  const finalizationReady = finalizationPressure?.ready === true;
+  const finalizationReady =
+    plan.capabilities.finalize === "allowed" && plan.action.kind === "finalize";
   const qualityRound = state.qualityRound || {};
   const completionRequested = completionConfirmed && Boolean(completionEvidence);
-  const blockers = [
-    ...new Set([
-      ...evidenceBlockers.map((blocker) => String(blocker)),
-      ...goalCompletionUnresolvedBlockers({
-        completionClaimed: completionRequested,
-        blockers: evidenceBlockers,
-        finalizationReadiness: finalizationPressure,
-        preflight: state.preflight,
-        qualityRound,
-        warningDetails: state.warningDetails,
-        workflowFriction: state.workflowFriction || compact.workflowFriction,
-      }),
-    ]),
-  ];
+  const blockers = plan.requiredEvidence.diagnosticCodes;
   const importedGoalCompletable = importedGoal?.status === "active";
   const hasMeasuredEvidence =
     Number(state.runs) > 0 &&
     (state.best != null || state.development?.best != null || state.promotion?.best != null);
   const hasLocalCompletionEvidence =
     hasMeasuredEvidence || finalizationReady || (qualityRound.active && qualityRound.done === true);
-  const completionBlockingIssues = blockers.filter(
-    (blocker) =>
-      !/finalize-current-tree|current non-session branch diff/i.test(blocker) &&
-      !/No benchmark command is available for future packets/i.test(blocker),
-  );
   let status = "active";
   if (importedGoal?.status === "budget_limited" || limitReached) {
     status = "budget_limited";
@@ -2511,13 +1818,15 @@ function codexGoalCompletionAudit({
     status = "no_codex_goal_imported";
   } else if (completionRequested && !importedGoalCompletable) {
     status = "codex_goal_not_active";
+  } else if (completionRequested && plan.parentDisposition.mayClaimCompletion !== true) {
+    status = "blocked";
   } else if (
     completionRequested &&
     hasLocalCompletionEvidence &&
-    completionBlockingIssues.length === 0
+    plan.parentDisposition.mayClaimCompletion === true
   ) {
     status = "complete";
-  } else if (blockers.length) {
+  } else if (plan.parentDisposition.mayAnswer !== true) {
     status = "blocked";
   } else if (completionRequested) {
     status = "completion_evidence_insufficient";
@@ -2583,47 +1892,6 @@ function recommendedCodexGoalAction(status: string, importedGoal: LooseObject | 
     return "Do not mark complete. Add local Autoresearch evidence such as a promotion-grade logged metric, ready finalization preview, or explicitly reviewed closed quality round before completion.";
   }
   return "Continue toward the active Codex Goal using Autoresearch next-action evidence.";
-}
-
-function recommendedActionNextStep(
-  action: LooseObject,
-  viewModel: LooseObject,
-  compact: LooseObject,
-) {
-  const kind = String(action.kind || action.safeAction || "");
-  const stage = kind.includes("finalize")
-    ? "finalization-preview"
-    : kind.includes("segment")
-      ? "segment-reset"
-      : kind.includes("log")
-        ? "log-decision"
-        : kind.includes("serve") || kind.includes("dashboard")
-          ? "dashboard-serve"
-          : kind.includes("doctor")
-            ? "doctor"
-            : (viewModel.trustBlockers || compact.blockers || []).length
-              ? "blocker"
-              : "baseline-packet";
-  return sharedNextStep({
-    stage,
-    title: action.title || "Run next safe action",
-    reason: action.detail || viewModel.readout?.nextAction || compact.nextAction,
-    command: action.command || action.primaryCommand?.command || "",
-    toolName:
-      stage === "log-decision"
-        ? "log_experiment"
-        : stage === "finalization-preview"
-          ? "finalize_preview"
-          : stage === "segment-reset"
-            ? "new_segment"
-            : stage === "doctor"
-              ? "doctor_session"
-              : stage === "blocker"
-                ? ""
-                : "next_experiment",
-    safety:
-      stage === "log-decision" ? "git_mutation" : stage === "blocker" ? "read" : "process_start",
-  });
 }
 
 function compactHazards({ doctor, guide, state }: LooseObject) {
@@ -3069,16 +2337,6 @@ async function writeSessionFile(filePath: string, content: any, options: LooseOb
     await fsp.chmod(filePath, 0o755).catch(() => {});
   }
   return { path: filePath, action: exists ? "overwritten" : "created" };
-}
-
-function fixedControlBlockedDoctorSummary(doctor: LooseObject): LooseObject {
-  return redactEvidenceObject({
-    ok: doctor.ok === true,
-    workDir: doctor.workDir || "",
-    issues: Array.isArray(doctor.issues) ? doctor.issues.slice(0, 10) : [],
-    warnings: Array.isArray(doctor.warnings) ? doctor.warnings.slice(0, 10) : [],
-    nextAction: typeof doctor.nextAction === "string" ? doctor.nextAction : "",
-  }) as LooseObject;
 }
 
 function mergeRuntimeConfig(sessionCwd: any, updates: any) {
@@ -3730,7 +2988,6 @@ async function researchStart(args: LooseObject) {
     skipInit,
     skip_init: skipInit,
   });
-  const benchmarkCommand = await defaultBenchmarkCommand(workDir);
   const runtimeConfig = preserveExecutableMetric
     ? await writeRuntimeConfig(setup.sessionCwd, {
         name: configuredBeforeStart.name || args.name || `Deep research: ${goal}`,
@@ -3746,73 +3003,110 @@ async function researchStart(args: LooseObject) {
         metricName: "quality_gap",
         metricUnit: "gaps",
         bestDirection: "lower",
-        benchmarkCommand,
       });
-  const lint = await benchmarkLint({ cwd: workDir, metricName: primaryMetricName });
-  const doctor = await doctorSession({
-    cwd: workDir,
-    checkBenchmark: true,
-    explain: true,
-    metricName: primaryMetricName,
-  });
-  let baselinePacket: LooseObject | null = null;
-  let baselineLogResult: LooseObject | null = null;
-  if (shouldLogBaseline) {
-    baselinePacket = await nextExperiment({ cwd: workDir, compact: true });
-    baselineLogResult = await logExperiment({
-      cwd: workDir,
-      fromLast: true,
-      status: "measure",
-      description: `Baseline ${primaryMetricName} measurement`,
-    });
-  }
-  const full = {
-    ...output,
-    dryRun: false,
-    setup,
-    runtimeConfig,
-    benchmarkLint: lint,
-    doctor,
-    baselinePacket,
-    baselineLog: baselineLogResult,
-    baselineLogged: Boolean(baselineLogResult),
-  };
-  if (boolOption(args.jsonFull ?? args.json_full, false)) return full;
+  return await withAcceptedWorkdirResolution(
+    {
+      sessionCwd: setup.sessionCwd,
+      workDir,
+      config: runtimeConfig,
+      sessionPaths: resolveSessionPaths({ sessionCwd: setup.sessionCwd, workDir }),
+    },
+    async () => {
+      const lint = await benchmarkLint({ cwd: workDir, metricName: primaryMetricName });
+      const doctor = await doctorSession({
+        cwd: workDir,
+        checkBenchmark: true,
+        explain: true,
+        metricName: primaryMetricName,
+      });
+      let baselinePacket: LooseObject | null = null;
+      let baselineLogResult: LooseObject | null = null;
+      if (shouldLogBaseline) {
+        baselinePacket = await nextExperiment({ cwd: workDir, compact: true });
+        baselineLogResult = await logExperiment({
+          cwd: workDir,
+          fromLast: true,
+          status: "measure",
+          description: `Baseline ${primaryMetricName} measurement`,
+        });
+      }
+      const full = {
+        ...output,
+        dryRun: false,
+        setup,
+        runtimeConfig,
+        benchmarkLint: lint,
+        doctor,
+        baselinePacket,
+        baselineLog: baselineLogResult,
+        baselineLogged: Boolean(baselineLogResult),
+      };
+      if (boolOption(args.jsonFull ?? args.json_full, false)) return full;
+      return {
+        ...output,
+        dryRun: false,
+        warnings: output.warnings.length ? output.warnings : undefined,
+        baselineSkippedReason: output.baselineSkippedReason || undefined,
+        baselineLogged: full.baselineLogged,
+        stateStorage: compactStateStorage(setup.stateStorage),
+        setup: {
+          qualityGap: compactResearchStartQualityGap(setup.qualityGap),
+          checkpoint: setup.checkpoint,
+        },
+        benchmarkLint: {
+          ok: lint.ok,
+          metricName: lint.metricName,
+        },
+        ...(baselinePacket ? { baselinePacket } : {}),
+        ...(baselineLogResult
+          ? {
+              baselineLog: {
+                ok: baselineLogResult.ok,
+                experiment: baselineLogResult.experiment || null,
+                continuation: baselineLogResult.continuation
+                  ? {
+                      shouldContinue: baselineLogResult.continuation.shouldContinue,
+                      nextAction: baselineLogResult.continuation.nextAction,
+                      stopReason: baselineLogResult.continuation.stopReason || "",
+                    }
+                  : null,
+              },
+            }
+          : {}),
+      };
+    },
+  );
+}
+
+function compactResearchStartQualityGap(value: unknown): LooseObject | null {
+  const qualityGap = compactRecord(value);
+  if (!qualityGap) return null;
+  const researchReadiness = compactRecord(qualityGap.researchReadiness) || {};
+  const roundDecision = compactRecord(qualityGap.roundDecision) || {};
   return {
-    ...output,
-    dryRun: false,
-    baselineLogged: full.baselineLogged,
-    stateStorage: setup.stateStorage || null,
-    setup: {
-      slug: setup.slug,
-      qualityGap: setup.qualityGap,
-      checkpoint: setup.checkpoint,
+    open: qualityGap.open ?? null,
+    closed: qualityGap.closed ?? 0,
+    total: qualityGap.total ?? 0,
+    researchReadiness: {
+      open: researchReadiness.open ?? 0,
+      closed: researchReadiness.closed ?? 0,
+      total: researchReadiness.total ?? 0,
     },
-    benchmarkLint: {
-      ok: lint.ok,
-      metricName: lint.metricName,
-      parsedMetrics: lint.parsedMetrics || null,
+    roundDecision: {
+      accepted: roundDecision.accepted === true,
+      status: roundDecision.status || "unknown",
+      reason: roundDecision.reason || "",
     },
-    doctor: {
-      ok: doctor.ok,
-      issues: Array.isArray(doctor.issues) ? doctor.issues.slice(0, 5) : [],
-      warnings: Array.isArray(doctor.warnings) ? doctor.warnings.slice(0, 5) : [],
-      nextAction: doctor.nextAction || "",
-    },
-    baselinePacket,
-    baselineLog: baselineLogResult
-      ? {
-          ok: baselineLogResult.ok,
-          experiment: baselineLogResult.experiment || null,
-          continuation: baselineLogResult.continuation
-            ? {
-                shouldContinue: baselineLogResult.continuation.shouldContinue,
-                nextAction: baselineLogResult.continuation.nextAction,
-                stopReason: baselineLogResult.continuation.stopReason || "",
-              }
-            : null,
-        }
-      : null,
+  };
+}
+
+function compactStateStorage(value: unknown): LooseObject | null {
+  const storage = compactRecord(value);
+  if (!storage) return null;
+  return {
+    storageMode: storage.storageMode || "unavailable",
+    targetCount: Array.isArray(storage.targets) ? storage.targets.length : 0,
+    warnings: Array.isArray(storage.warnings) ? storage.warnings.slice(0, 3) : [],
   };
 }
 
@@ -3859,20 +3153,6 @@ async function measureQualityGap(args: any) {
     roundDecision: summary.roundDecision,
     gaps: summary.gaps,
     metricOutput,
-  };
-}
-
-function decisionSetupState(guided: any, plan: any) {
-  const blockers = [...listOption(plan?.missing), ...listOption(plan?.missingEssentials)];
-  if (!guided?.stage && blockers.length === 0) return null;
-  return {
-    stage: guided?.stage || "",
-    blockers,
-    nextAction:
-      guided?.nextStep?.nextAction?.reason ||
-      guided?.nextAction ||
-      plan?.nextStep?.nextAction?.reason ||
-      "",
   };
 }
 
@@ -4011,6 +3291,10 @@ function dashboardStateFromLedgerFold(
 }
 
 async function dashboardViewModel(workDir: string, config: any, context: LooseObject = {}) {
+  const canonicalState = await publicState({
+    cwd: context.requestedCwd || workDir,
+    jsonFull: true,
+  });
   const readCache = context.readCache || createSessionReadCache();
   const ledgerFold = dashboardLedgerFoldFromContext(context.ledgerFold);
   const records = ledgerFold?.analysisRecords || loadSessionRecords(workDir, readCache);
@@ -4063,9 +3347,6 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     : finalizePreview;
   const lastRun = await readLastRunPacket(workDir).catch((): null => null);
   const activeProgress = await readActiveProgressSnapshot(workDir, config);
-  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun, config) : null;
-  const replaceLastRunCommand = await replacementNextCommandForLastRun(workDir, lastRun);
-  const continuation = loopContinuation(workDir, state, config, "dashboard");
   const setupPlanResult = await setupPlan({ cwd: workDir, readCache }).catch((error: any) => ({
     ok: false,
     warnings: [error.message],
@@ -4158,85 +3439,25 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
       lastRun?.packetEvidence?.progressSnapshot ||
       null,
   });
-  const readModel = buildSessionReadModel({
-    workDir,
-    config,
-    state,
-    records,
-    codexGoalObjective: context.codexGoalObjective || context.codex_goal_objective,
-    parallelLanes,
-    workflowFriction,
-    finalization: effectiveFinalizePreview,
-    commands: continuationCommands(workDir),
-    processProgress: activeProgress,
-    qualityGap,
-    laneLifecycle,
-    packetDiagnostics,
-    runtimeProvenance: currentRuntimeProvenance,
-    runtimeDriftSummary: guidance.runtimeDriftSummary,
-    sourceCleanliness,
+  const controlPlane = {
+    goalContract: canonicalState.goalContract || null,
+    approvalLedger: canonicalState.approvalLedger || null,
+    resourcePreflight: canonicalState.resourcePreflight || null,
+    evidenceMaturity: canonicalState.evidenceMaturity || null,
+    laneOrchestration: canonicalState.laneOrchestration || null,
+    finalizationRunway: canonicalState.finalizationRunway || null,
+  };
+  const commands = dashboardCommands(workDir, qualityGap);
+  const portfolioRecommendation = recommendPortfolioDirection({
+    runtimeDrift: guidance.runtimeDriftSummary,
     gateQuality: guidance.gateQuality,
     preflight: guidance.preflight,
-  });
-  const controlPlane = readModel.controlPlane;
-  const commands = dashboardCommands(workDir, qualityGap);
-  const guidedCommands = (dashboardGuidedSetup as LooseObject).commands || {};
-  const canonicalCommandHints = {
-    ...commandLookupObject(commands),
-    replaceLast: replaceLastRunCommand || guidedCommands.replaceLast || "",
-    logLast: guidedCommands.logLast || "",
-    setup: guidedCommands.setup || "",
-  };
-  const decisionInput = {
-    state: {
-      ...stateWithQualityGap,
-      ...controlPlane,
-      limit: iterationLimitInfo(state, config),
-    },
-    nextAction: continuation.nextAction,
-    lastRunFreshness,
-    warningDetails: warnings,
-    scaffoldHealth,
-    researchIntegrity,
-    qualityGap,
-    finalization: effectiveFinalizePreview,
-    experimentEconomics,
-    salvageCandidates: partialResults.candidates,
-    workflowFriction,
+    laneLifecycle,
+    laneResults: laneLifecycle.latestResults,
+    packetDiagnostics,
     experimentMemory: memory,
-    setupState: decisionSetupState(dashboardGuidedSetup, dashboardSetupPlan),
-    watchdog: watchdogSummary,
-  };
-  const preliminaryDecisionEnvelope = buildDecisionEnvelope(decisionInput);
-  const portfolioRecommendation =
-    preliminaryDecisionEnvelope.loopContract?.canRunNextPacket === false
-      ? null
-      : recommendPortfolioDirection({
-          runtimeDrift: guidance.runtimeDriftSummary,
-          gateQuality: guidance.gateQuality,
-          preflight: guidance.preflight,
-          laneLifecycle,
-          laneResults: laneLifecycle.latestResults,
-          packetDiagnostics,
-          experimentMemory: memory,
-          best: state.best,
-          current: state.current,
-        });
-  const decisionEnvelope = withCanonicalActionCommand(
-    portfolioRecommendation
-      ? buildDecisionEnvelope({
-          ...decisionInput,
-          state: { ...decisionInput.state, portfolioRecommendation },
-        })
-      : preliminaryDecisionEnvelope,
-    canonicalCommandHints,
-  );
-  const resolvedReadModel = withResolvedSessionDecision(readModel, {
-    state: { ...decisionInput.state, decisionEnvelope },
-    decisionEnvelope,
-    commands: canonicalCommandHints,
-    runtimeProvenance: currentRuntimeProvenance,
-    finalization: effectiveFinalizePreview,
+    best: state.best,
+    current: state.current,
   });
   const enrichedState = {
     ...state,
@@ -4257,8 +3478,11 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
     workflowFriction,
     portfolioRecommendation,
     ...controlPlane,
-    decisionEnvelope,
-    resolvedDecision: resolvedReadModel.resolvedDecision,
+    decisionPlanProjection:
+      canonicalState.decisionPlan?.kind === "decision-plan"
+        ? projectDashboardDecisionPlan(canonicalState.decisionPlan as DecisionPlan)
+        : null,
+    resolvedDecision: canonicalState.resolvedDecision || null,
   };
   return buildDashboardViewModelLazy({
     state: enrichedState as any,
@@ -4308,7 +3532,7 @@ async function configureSession(args: LooseObject) {
   if (maxIterations != null) updates.maxIterations = maxIterations;
   if (extend != null) {
     const state = currentState(workDir);
-    const activeRuns = state.current.length;
+    const activeRuns = packetBudgetUsage(state.current);
     const currentMax = Number.isFinite(Number(config.maxIterations))
       ? Math.floor(Number(config.maxIterations))
       : activeRuns;
@@ -4442,6 +3666,8 @@ export async function persistTerminationFailure(
       timedOut: true,
       terminationFailed: true,
       termination: evidence.termination,
+      spawnState: evidence.spawnState,
+      spawnError: evidence.spawnError,
       timeoutPhase: "unknown",
       completedAt: evidence.finishedAt || new Date().toISOString(),
     },
@@ -4458,6 +3684,8 @@ function redactLastRunPacketForStorage(packet: LooseObject): LooseObject {
   }
   redactRunPacketProcessEvidence(stored.run, context);
   redactBenchmarkContractForStorage(stored.run?.benchmarkContract, context);
+  redactAcceptedEvaluatorForStorage(stored.run?.acceptedEvaluator, context);
+  redactAcceptedChecksForStorage(stored.run?.acceptedChecks, context);
   if (stored.doctor) {
     redactKnownOptionFileFields(stored.doctor, context);
     stored.doctor = redactEvidenceObject(stored.doctor, context);
@@ -4640,6 +3868,57 @@ function redactBenchmarkContractForStorage(
   }
 }
 
+function redactAcceptedEvaluatorForStorage(
+  value: LooseObject | null | undefined,
+  context: LooseObject,
+) {
+  if (!value || typeof value !== "object") return;
+  redactAcceptedExecutionForStorage(value.execution, context);
+}
+
+function redactAcceptedChecksForStorage(value: unknown, context: LooseObject) {
+  if (!Array.isArray(value)) return;
+  for (const check of value) {
+    if (!check || typeof check !== "object") continue;
+    redactAcceptedExecutionForStorage((check as LooseObject).execution, context);
+  }
+}
+
+function redactAcceptedExecutionForStorage(
+  value: LooseObject | null | undefined,
+  context: LooseObject,
+) {
+  if (!value || typeof value !== "object") return;
+  const command = value.command as LooseObject | undefined;
+  if (command && typeof command === "object") {
+    if (typeof command.script === "string") {
+      command.script = redactCommandDisplay(command.script, context);
+    }
+    if (typeof command.executable === "string") {
+      command.executable = redactEvidenceText(command.executable, context);
+    }
+    if (Array.isArray(command.args)) {
+      command.args = command.args.map((argument) => redactEvidenceText(argument, context));
+    }
+  }
+  const environment = value.environment as LooseObject | undefined;
+  const source = environment?.source as LooseObject | undefined;
+  if (source?.kind === "file" && typeof source.path === "string") {
+    source.path = "<env-file>";
+  }
+  if (Array.isArray(value.protectedInputs)) {
+    for (const input of value.protectedInputs) {
+      if (!input || typeof input !== "object") continue;
+      const protectedInput = input as LooseObject;
+      if (typeof protectedInput.path !== "string") continue;
+      protectedInput.path =
+        protectedInput.role === "environment-file"
+          ? "<env-file>"
+          : redactPathDisplay(protectedInput.path, context.workDir);
+    }
+  }
+}
+
 const CLI_RESPONSE_TEXT_EVIDENCE_KEYS = new Set([
   "latestOutputTail",
   "outputPreview",
@@ -4675,6 +3954,8 @@ function redactCliResponseNode(value: unknown, context: LooseObject): void {
     redactBenchmarkContractForStorage(node.history.benchmarkContract, localContext);
   }
   redactBenchmarkContractForStorage(node.benchmarkContract, localContext);
+  redactAcceptedEvaluatorForStorage(node.acceptedEvaluator, localContext);
+  redactAcceptedChecksForStorage(node.acceptedChecks, localContext);
 
   for (const [key, child] of Object.entries(node)) {
     if (typeof child === "string") {
@@ -4879,20 +4160,6 @@ async function researchFanout(args: LooseObject) {
   };
 }
 
-function commandLookupObject(commands: unknown): LooseObject {
-  if (Array.isArray(commands)) {
-    const result: LooseObject = {};
-    for (const item of commands) {
-      const label = String(item?.label || "")
-        .replace(/\s+([a-z])/g, (_match, char) => String(char).toUpperCase())
-        .replace(/^[A-Z]/, (char) => char.toLowerCase());
-      if (label) result[label] = item.command || "";
-    }
-    return result;
-  }
-  return commands && typeof commands === "object" ? (commands as LooseObject) : {};
-}
-
 function actionMessage(value: unknown): string {
   if (typeof value === "string") return value.trim();
   if (!value || typeof value !== "object" || Array.isArray(value)) return "";
@@ -4936,7 +4203,7 @@ async function doctorHooks(args: LooseObject = {}): Promise<LooseObject> {
 }
 
 async function newSegment(args: any) {
-  const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const state = currentState(workDir);
   const dryRun = boolOption(args.dry_run ?? args.dryRun, false);
   const confirmed = boolOption(args.confirm ?? args.yes, false);
@@ -4966,8 +4233,12 @@ async function newSegment(args: any) {
     segmentReason: reason,
     timestamp: new Date().toISOString(),
   };
-  const benchmarkCommand = String(args.benchmark_command || args.benchmarkCommand || "").trim();
-  const checksCommand = String(args.checks_command || args.checksCommand || "").trim();
+  const benchmarkCommand = String(
+    args.benchmark_command || args.benchmarkCommand || config.benchmarkCommand || "",
+  ).trim();
+  const checksCommand = String(
+    args.checks_command || args.checksCommand || config.checksCommand || "",
+  ).trim();
   if (benchmarkCommand || checksCommand) {
     entry.benchmarkContractAccepted = true;
     entry.benchmarkContractScope = "segment";
@@ -4982,12 +4253,35 @@ async function newSegment(args: any) {
     bestDirection: nextDirection,
   });
   if (metricSemanticsWarning) entry.metricSemanticsWarning = metricSemanticsWarning;
+  const prospectiveEntries = [...loadSessionRecords(workDir), entry];
+  const prospectiveState = stateFromSessionRecords(workDir, prospectiveEntries);
+  const contractDerivation = await deriveExperimentContract({
+    workDir,
+    args,
+    config,
+    entries: prospectiveEntries,
+    ignoreAccepted: true,
+  });
+  if (contractDerivation.status === "invalid") {
+    throw contractDerivationError(contractDerivation);
+  }
+  if (contractDerivation.status !== "derived") {
+    throw new Error("New-segment contract derivation unexpectedly resolved an active contract.");
+  }
   if (!dryRun && !confirmed) {
     throw new Error(
       "new-segment requires --dry-run or --yes because it appends to autoresearch.jsonl.",
     );
   }
-  if (!dryRun) appendJsonl(workDir, entry);
+  let contractEvent = null;
+  if (!dryRun) {
+    appendJsonl(workDir, entry);
+    contractEvent = await appendExperimentContractAcceptance(
+      workDir,
+      contractDerivation,
+      prospectiveState.segment,
+    );
+  }
   return {
     ok: true,
     workDir,
@@ -4997,6 +4291,13 @@ async function newSegment(args: any) {
     entry,
     metricSemanticsWarning,
     benchmarkContract: entry.benchmarkContract || null,
+    experimentContract: {
+      status: contractEvent ? "accepted" : "derived",
+      contract: contractDerivation.contract,
+      event: contractEvent,
+      missing: [],
+      conflicts: [],
+    },
     nextAction: dryRun
       ? "Review the segment entry, then rerun with --yes to append it."
       : "Run and log a fresh baseline or next packet for the new segment.",
@@ -5140,6 +4441,8 @@ async function packetEvidenceForRun(run: LooseObject, history: LooseObject) {
     timedOut: Boolean(run.timedOut),
     termination: run.termination || null,
     terminationFailed: Boolean(run.terminationFailed),
+    spawnState: run.spawnState || "unknown",
+    spawnError: run.spawnError || null,
     processLifecycle: rekeyProcessLifecycleRecords(run.processLifecycle, packetId),
     stdoutTail: redactEvidenceText(run.tailOutput || run.progress?.latestOutputTail || "", {
       workDir: run.workDir,
@@ -5308,31 +4611,40 @@ async function realPathOrResolved(target: string): Promise<string> {
 
 async function nextExperiment(args: any) {
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
+  let ownsActiveProgress = false;
   return await runWithRequiredCleanup(
-    () => nextExperimentWithActiveProgress(args),
-    () => deleteActiveProgressSnapshotIfSafe(workDir),
+    () =>
+      nextExperimentWithActiveProgress(args, () => {
+        ownsActiveProgress = true;
+      }),
+    async () => {
+      if (ownsActiveProgress) await deleteActiveProgressSnapshotIfSafe(workDir);
+    },
     "Failed to remove active progress snapshot",
   );
 }
 
-async function nextExperimentWithActiveProgress(args: any) {
+async function nextExperimentWithActiveProgress(args: any, markProgressOwned: () => void) {
   const { workDir, config } = resolveWorkDir(args.working_dir || args.cwd);
   const retainedProgress = await readActiveProgressSnapshot(workDir, config);
   if (retainedProgress?.exitState === "termination_failed") {
-    const state = currentState(workDir);
-    const decisionEnvelope = withCanonicalActionCommand(
-      buildDecisionEnvelope({
-        state,
-        nextAction: "Prove the prior process tree is gone before another packet.",
-        experimentEconomics: { progress: retainedProgress },
-      }),
-      continuationCommands(workDir),
-    );
-    const loopContract = compactRecord(decisionEnvelope.loopContract) || {};
-    const blockingAction = blockingLoopAction(
-      loopContract,
-      compactRecord(decisionEnvelope.canonicalNextAction),
-    );
+    const canonical = await loadCanonicalSessionDecision({
+      requestedCwd: String(args.working_dir || args.cwd || workDir),
+      allowOutsideWorkdir: boolOption(
+        args.allowOutsideWorkdir ?? args.allow_outside_workdir,
+        false,
+      ),
+    });
+    if (!canonical.ok) {
+      return {
+        ok: false,
+        workDir,
+        refused: true,
+        code: canonical.diagnostic.code,
+        diagnostic: canonical.diagnostic,
+      };
+    }
+    const decision = projectResolvedDecision(canonical.plan);
     return {
       ok: false,
       workDir,
@@ -5340,195 +4652,87 @@ async function nextExperimentWithActiveProgress(args: any) {
       code: "termination_failed",
       run: null,
       decision: null,
-      blockingAction,
-      loopContract,
-      decisionEnvelope,
+      blockingAction: decision.canonicalNextAction,
+      decisionPlanProjection: projectCompactDecisionPlan(canonical.plan),
+      resolvedDecision: decision,
       progress: retainedProgress,
-      nextAction: blockingAction?.reason || "Prove the prior process tree is gone.",
+      nextAction: canonical.plan.action.reason,
       clearingCondition:
         "Verify the reported PID and descendants are absent, then clear the retained progress marker before retrying next.",
       commandHint: continuationCommands(workDir).state,
-      continuation: loopContinuation(workDir, state, config, "blocked", {
-        stopReason: blockingAction?.reason || "Prior process-tree termination is unproven.",
-      }),
+      continuation: projectLoopContinuation(canonical.plan),
     };
   }
-  await writeNextPreflightProgressSnapshot(workDir, args, config);
-  const doctor = await doctorSession({
-    ...args,
-    check_benchmark: false,
-    checkBenchmark: false,
-    jsonFull: true,
+  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
+  const contractAuthority = await acceptedExperimentContractForMutation({
+    workDir,
+    args,
+    config,
+    packet: lastRun,
   });
-  if (!doctor.ok) {
-    const loopContract = doctor.resolvedDecision?.loopContract || doctor.loopContract || {};
-    const blockingAction = blockingLoopAction(
-      loopContract,
-      doctor.resolvedDecision?.canonicalNextAction || doctor.canonicalNextAction,
-    );
-    if (
-      shouldRefuseBeforeRun({
-        blockingAction,
-        loopContract,
-        capsule: currentState(doctor.workDir).sessionDecisionCapsule || null,
-        args,
-      })
-    ) {
-      const state = currentState(doctor.workDir);
-      const capsule = state.sessionDecisionCapsule || null;
-      return {
-        ok: false,
-        workDir: doctor.workDir,
-        refused: true,
-        code: "next_blocked_by_loop_contract",
-        doctor,
-        run: null as LooseObject | null,
-        decision: null as LooseObject | null,
-        blockingAction,
-        loopContract,
-        sessionDecisionCapsule: capsule,
-        decisionEnvelope: {
-          loopContract,
-          canonicalNextAction: blockingAction,
-          finalizationReadiness: doctor.resolvedDecision?.finalizationPressure || null,
-        },
-        nextAction:
-          blockingAction.reason ||
-          capsule?.nextExperiment ||
-          "Resolve loop-governance blockers before running another packet.",
-        clearingCondition:
-          capsule?.enforcement?.clearingCondition ||
-          "Resolve the loop-governance blocker or warning, then retry next.",
-        commandHint:
-          blockingAction.command ||
-          capsule?.enforcement?.commandHint ||
-          continuationCommands(doctor.workDir).state,
-        continuation: loopContinuation(doctor.workDir, state, config, "blocked", {
-          stopReason:
-            blockingAction.reason ||
-            capsule?.nextExperiment ||
-            "Loop contract blocked the next packet.",
-        }),
-      };
-    }
+  const acceptedEvaluatorCommand = executionCommandText(
+    contractAuthority.contract.evaluator.execution.command,
+  );
+  const acceptedChecksCommand = contractAuthority.contract.checks
+    .map((check) => executionCommandText(check.execution.command))
+    .join(" && ");
+  const authorityArgs = acceptedContractAuthorityArgs(
+    args,
+    acceptedEvaluatorCommand,
+    acceptedChecksCommand,
+  );
+  const doctor = acceptedContractDoctorView(
+    await doctorSession({
+      ...authorityArgs,
+      check_benchmark: false,
+      checkBenchmark: false,
+      jsonFull: true,
+      acceptedContractDigest: contractAuthority.contract.contractDigest,
+    }),
+  );
+  const preflightPlan = doctor.decisionPlan as DecisionPlan | undefined;
+  if (!preflightPlan) {
+    return {
+      ok: false,
+      workDir: doctor.workDir || workDir,
+      refused: true,
+      code: "canonical_decision_unavailable",
+      doctor,
+      run: null as LooseObject | null,
+      decision: null as LooseObject | null,
+    };
+  }
+  if (preflightPlan.capabilities["run-packet"] === "blocked") {
+    const resolvedDecision = projectResolvedDecision(preflightPlan);
     return {
       ok: false,
       workDir: doctor.workDir,
+      refused: true,
+      code: "next_blocked_by_decision_plan",
       doctor,
       run: null as LooseObject | null,
       decision: null as LooseObject | null,
-      nextAction: doctor.nextAction,
-      continuation: loopContinuation(
-        doctor.workDir,
-        currentState(doctor.workDir),
-        config,
-        "blocked",
-        {
-          stopReason: doctor.nextAction,
-        },
-      ),
-    };
-  }
-  const stateBeforeRun = currentState(workDir);
-  const lastRun = await readLastRunPacket(workDir).catch((): null => null);
-  const lastRunFreshness = lastRun ? await lastRunPacketFreshness(workDir, lastRun, config) : null;
-  const preflightEnvelope = withCanonicalActionCommand(
-    buildDecisionEnvelope({
-      state: stateBeforeRun,
-      nextAction: "Run the next measured packet.",
-      lastRunFreshness,
-      finalization: doctor.resolvedDecision?.finalizationPressure || null,
-    }),
-    continuationCommands(workDir),
-  );
-  const loopContract = compactRecord(preflightEnvelope.loopContract) || {};
-  const blockingAction = blockingLoopAction(
-    loopContract,
-    compactRecord(preflightEnvelope.canonicalNextAction),
-  );
-  const capsule = stateBeforeRun.sessionDecisionCapsule || null;
-  const boundedNextAllowed =
-    blockingAction?.kind === "decision-capsule" && isBoundedNextAllowedByCapsule(capsule, args);
-  const loopBlockers = Array.isArray(loopContract.blockers) ? loopContract.blockers : [];
-  const stalePacketReplacementAllowed =
-    blockingAction?.kind === "stale-packet" &&
-    loopBlockers.length > 0 &&
-    loopBlockers.every((blocker: LooseObject) => blocker?.kind === "stale-packet");
-  if (
-    loopContract.canRunNextPacket === false &&
-    !boundedNextAllowed &&
-    !stalePacketReplacementAllowed
-  ) {
-    return {
-      ok: false,
-      workDir,
-      refused: true,
-      code: "next_blocked_by_loop_contract",
-      doctor,
-      run: null as LooseObject | null,
-      decision: null as LooseObject | null,
-      blockingAction,
-      loopContract,
-      sessionDecisionCapsule: capsule,
-      decisionEnvelope: preflightEnvelope,
-      nextAction:
-        blockingAction?.reason ||
-        capsule?.nextExperiment ||
-        "Resolve loop-governance blockers before running another packet.",
+      blockingAction: resolvedDecision.canonicalNextAction,
+      decisionPlanProjection: projectCompactDecisionPlan(preflightPlan),
+      resolvedDecision,
+      nextAction: preflightPlan.action.reason,
       clearingCondition:
-        capsule?.enforcement?.clearingCondition ||
-        "Resolve the loop-governance blocker or warning, then retry next.",
-      commandHint:
-        blockingAction?.command ||
-        capsule?.enforcement?.commandHint ||
-        continuationCommands(workDir).state,
-      continuation: loopContinuation(workDir, stateBeforeRun, config, "blocked", {
-        stopReason:
-          blockingAction?.reason ||
-          capsule?.nextExperiment ||
-          "Loop contract blocked the next packet.",
-      }),
+        "Resolve the capability diagnostic recorded by the canonical decision, then retry next.",
+      commandHint: preflightPlan.action.command || continuationCommands(doctor.workDir).state,
+      continuation: projectLoopContinuation(preflightPlan),
     };
   }
-  const fixedControlCommandSource = await resolveBenchmarkCommandSource(args, workDir, {
-    fallbackToDefault: true,
-    requireCommand: true,
-    config,
-  });
-  const fixedControlBlock = fixedControlBlockForCommand(
-    fixedControlCommandSource.command,
-    config,
-    args,
-  );
-  if (fixedControlBlock) {
-    const nextAction =
-      fixedControlBlock.message ||
-      "A fixed control artifact is active; reuse it instead of rerunning the control command.";
-    return {
-      ok: false,
-      workDir,
-      refused: true,
-      code: fixedControlBlock.code,
-      doctor: fixedControlBlockedDoctorSummary(doctor),
-      run: null as LooseObject | null,
-      decision: null as LooseObject | null,
-      fixedControlViolation: fixedControlBlock.fixedControlViolation,
-      nextAction,
-      clearingCondition:
-        "Reuse the fixed control artifact, update the fixedControl config when an invalidator changes, or pass --allow-fixed-control-rerun explicitly.",
-      commandHint: fixedControlBlock.commandHint || continuationCommands(workDir).state,
-      continuation: loopContinuation(workDir, stateBeforeRun, config, "blocked", {
-        stopReason: nextAction,
-      }),
-    };
-  }
+  const fixedControlBlock = fixedControlBlockForCommand(acceptedEvaluatorCommand, config, args);
+  if (fixedControlBlock) throw fixedControlRerunError(fixedControlBlock);
   const preRunGit = await lastRunGitSnapshot(workDir, config).catch((error: any) => ({
     inside: null as boolean | null,
     error: error.message || String(error),
   }));
   if (gitSnapshotContainsDirtyFingerprintTruncation(preRunGit)) {
-    const nextAction =
-      "Clean or narrow the dirty tree before running next; dirty file fingerprints were truncated before packet freshness could be proven.";
+    const dirtySourceDiagnostic = decisionDiagnostic("dirty-source", {
+      message:
+        "Clean or narrow the dirty tree before running next; dirty file fingerprints were truncated before packet freshness could be proven.",
+    });
     return {
       ok: false,
       workDir,
@@ -5538,15 +4742,18 @@ async function nextExperimentWithActiveProgress(args: any) {
       run: null as LooseObject | null,
       decision: null as LooseObject | null,
       git: preRunGit,
-      nextAction,
+      diagnostics: [dirtySourceDiagnostic],
+      decisionPlanProjection: projectCompactDecisionPlan(preflightPlan),
+      resolvedDecision: projectResolvedDecision(preflightPlan),
+      nextAction: preflightPlan.action.reason,
       clearingCondition:
         "Commit, stash, remove, or scope the dirty files so Autoresearch can fingerprint the packet inputs, then retry next.",
       commandHint: continuationCommands(workDir).state,
-      continuation: loopContinuation(workDir, stateBeforeRun, config, "blocked", {
-        stopReason: nextAction,
-      }),
+      continuation: projectLoopContinuation(preflightPlan),
     };
   }
+  markProgressOwned();
+  await writeNextPreflightProgressSnapshot(workDir, authorityArgs, config);
   const run = await runExperiment(args);
   const stateBeforeLog = currentState(run.workDir);
   const memory = buildExperimentMemory({
@@ -5629,12 +4836,55 @@ async function nextExperimentWithActiveProgress(args: any) {
       : run.ok
         ? `Log this run as ${decision.safeSuggestedStatus || "keep/discard"} unless review evidence says otherwise, include ASI, then continue with the next ${memory.diversityGuidance?.label || "diversity"} lane.`
         : `Log this run as ${run.logHint.status} with rollback ASI before trying another change.`,
-    continuation: loopContinuation(workDir, currentState(workDir), config, "needs-log-decision", {
-      requiredStatus: run.logHint.status,
-    }),
   };
   await writeLastRunPacket(run.workDir, packet);
   return boolOption(args.compact, false) ? compactNextExperimentPacket(packet) : packet;
+}
+
+function acceptedContractAuthorityArgs(
+  args: LooseObject,
+  evaluatorCommand: string,
+  checksCommand: string,
+): LooseObject {
+  const {
+    command_file: _commandFileSnake,
+    commandFile: _commandFileCamel,
+    benchmark_command: _benchmarkCommandSnake,
+    benchmarkCommand: _benchmarkCommandCamel,
+    ...rest
+  } = args;
+  return {
+    ...rest,
+    _: [String(Array.isArray(args._) ? args._[0] || "next" : "next")],
+    command: evaluatorCommand,
+    checks_command: checksCommand,
+    checksCommand,
+  };
+}
+
+function acceptedContractDoctorView(doctor: LooseObject): LooseObject {
+  const legacyMessages = new Set(
+    (Array.isArray(doctor.warningDetails) ? doctor.warningDetails : [])
+      .filter((detail: LooseObject) => detail?.code === "benchmark_contract_changed")
+      .map((detail: LooseObject) => String(detail.message || ""))
+      .filter(Boolean),
+  );
+  const issues = (Array.isArray(doctor.issues) ? doctor.issues : []).filter(
+    (issue: unknown) => !legacyMessages.has(String(issue)),
+  );
+  const warnings = (Array.isArray(doctor.warnings) ? doctor.warnings : []).filter(
+    (warning: unknown) => !legacyMessages.has(String(warning)),
+  );
+  const warningDetails = (Array.isArray(doctor.warningDetails) ? doctor.warningDetails : []).filter(
+    (detail: LooseObject) => detail?.code !== "benchmark_contract_changed",
+  );
+  return {
+    ...doctor,
+    ok: issues.length === 0,
+    issues,
+    warnings,
+    warningDetails,
+  };
 }
 
 async function writeNextPreflightProgressSnapshot(
@@ -5669,37 +4919,6 @@ async function writeNextPreflightProgressSnapshot(
     () => progressWriter.close(),
     "Failed to close active progress writer",
   );
-}
-
-function blockingLoopAction(loopContract: LooseObject, canonicalNextAction: LooseObject | null) {
-  const strongestAction = loopContract?.strongestAction || null;
-  if (
-    strongestAction &&
-    canonicalNextAction &&
-    strongestAction.kind === canonicalNextAction.kind &&
-    canonicalNextAction.command &&
-    !strongestAction.command
-  ) {
-    return { ...strongestAction, command: canonicalNextAction.command };
-  }
-  return strongestAction || canonicalNextAction || null;
-}
-
-function shouldRefuseBeforeRun({
-  blockingAction,
-  loopContract,
-  capsule,
-  args,
-}: {
-  blockingAction: LooseObject | null;
-  loopContract: LooseObject;
-  capsule: LooseObject | null;
-  args: LooseObject;
-}) {
-  if (!blockingAction || loopContract.canRunNextPacket !== false) return false;
-  if (blockingAction.kind === "current-tree-finalization") return true;
-  if (blockingAction.kind !== "decision-capsule") return false;
-  return !isBoundedNextAllowedByCapsule(capsule as any, args);
 }
 
 function compactNextExperimentPacket(packet: LooseObject) {
@@ -5792,6 +5011,10 @@ export async function runAutoresearchCli(
     await executeAutoresearchCli(argv, writeStdout);
     return 0;
   } catch (error: any) {
+    if (error instanceof CommandDecisionProtocolError) {
+      writeStderr(JSON.stringify(commandDecisionProtocolFailureEnvelope(error)));
+      return 1;
+    }
     const message = error?.code
       ? `${error.code}: ${error.message || String(error)}`
       : error?.message || String(error);
@@ -5856,6 +5079,8 @@ async function executeAutoresearchCli(
       promoteGate,
       promptPlan,
       publicState,
+      recoverProcessIntegrity: async (args: LooseObject) =>
+        await recoverTerminationFailedProgress(resolveWorkDir(args.cwd).workDir),
       recordQualityGapDecision,
       recommendNext,
       sessionForensics,
@@ -5868,34 +5093,82 @@ async function executeAutoresearchCli(
       setupResearchSession,
       setupSession,
     });
-    const execute = async () => {
+    const requestedCwd = args.workingDir || args.working_dir || args.cwd;
+    const execute = async (lockedWorkDir = "", commandArgs: LooseObject = args) => {
       try {
-        const outcome = (await runCliCommand(command, args, handlers)) as LooseObject;
+        const outcome = (await runCliCommand(command, commandArgs, handlers)) as LooseObject;
         if (command !== "next") {
           const evidence = terminationFailureEvidence(outcome.result);
           if (evidence) {
-            const resolution = resolveWorkDir(args.workingDir || args.working_dir || args.cwd);
-            await persistTerminationFailure(resolution.workDir, command, evidence);
+            const workDir = lockedWorkDir || resolveWorkDir(requestedCwd).workDir;
+            await persistTerminationFailure(workDir, command, evidence);
           }
         }
         return outcome;
       } catch (error: any) {
         const evidence = terminationFailureEvidence(error);
         if (evidence) {
-          const resolution = resolveWorkDir(args.workingDir || args.working_dir || args.cwd);
-          await persistTerminationFailure(resolution.workDir, command, evidence);
+          const workDir = lockedWorkDir || resolveWorkDir(requestedCwd).workDir;
+          await persistTerminationFailure(workDir, command, evidence);
         }
         throw error;
       }
     };
     let outcome: LooseObject;
-    if (commandRequiresSessionMutationLock(command, args)) {
-      const resolution = resolveWorkDir(args.workingDir || args.cwd);
+    const requiresMutationLock = commandRequiresSessionMutationLock(command, args);
+    if (requiresMutationLock && !commandUsesSessionDecisionProtocol(command, args)) {
+      throw new Error(
+        `Command-table error: ${command} requires the session lock but does not declare the session decision protocol.`,
+      );
+    }
+    if (requiresMutationLock) {
+      // This first resolution selects the existing lock only. The protocol re-captures the
+      // routing config from requestedCwd while holding that lock and rejects any drift before
+      // the handler can mutate the session.
+      const resolution = await resolveInitialSessionMutationRoute({
+        requestedCwd: String(requestedCwd || process.cwd()),
+        allowOutsideWorkdir: boolOption(args.allowOutsideWorkdir, false),
+      });
       const lock = await sessionMutationLockLocation(resolution.workDir);
-      outcome = await withSessionMutationLock(lock.root, command, execute, lock.path);
+      const protocol = await withSessionMutationLock(
+        lock.root,
+        command,
+        async () => {
+          return await runCommandDecisionProtocol({
+            command,
+            commandArgs: args,
+            requestedCwd: String(requestedCwd || process.cwd()),
+            expectedWorkDir: resolution.workDir,
+            allowOutsideWorkdir: boolOption(args.allowOutsideWorkdir, false),
+            mutate: async (accepted) => {
+              const acceptedArgs: LooseObject = { ...args, cwd: accepted.sessionCwd };
+              delete acceptedArgs.workingDir;
+              delete acceptedArgs.working_dir;
+              return await withAcceptedWorkdirResolution(
+                {
+                  sessionCwd: accepted.sessionCwd,
+                  workDir: accepted.workDir,
+                  config: accepted.config,
+                  coherentSnapshot: accepted.snapshot,
+                  canonicalDecisionPlan: accepted.preconditionDecision,
+                  canonicalDecisionFacts: accepted.factCollection,
+                  sessionPaths: resolveSessionPaths({
+                    sessionCwd: accepted.sessionCwd,
+                    workDir: accepted.workDir,
+                  }),
+                },
+                async () => await execute(accepted.workDir, acceptedArgs),
+              );
+            },
+          });
+        },
+        lock.path,
+      );
+      outcome = attachCommandDecisionProtocol(protocol);
     } else {
       outcome = await execute();
     }
+    assertNoCanonicalReadFailure(outcome.result);
     if (outcome.text != null) {
       writeStdout(outcome.text);
       return;
@@ -5903,6 +5176,56 @@ async function executeAutoresearchCli(
     writeStdout(JSON.stringify(redactCliResponseForOutput(outcome.result), null, 2));
     if (outcome.keepAlive) return await new Promise(() => {});
   });
+}
+
+function assertNoCanonicalReadFailure(result: unknown): void {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return;
+  const failure = result as LooseObject;
+  if (
+    failure.ok !== false ||
+    !["coherent-snapshot-source-invalid", "coherent-snapshot-unavailable"].includes(
+      String(failure.code || ""),
+    )
+  ) {
+    return;
+  }
+  const diagnostic =
+    failure.diagnostic &&
+    typeof failure.diagnostic === "object" &&
+    !Array.isArray(failure.diagnostic)
+      ? (failure.diagnostic as LooseObject)
+      : {};
+  const error = new Error(String(diagnostic.message || failure.message || failure.code));
+  Object.assign(error, { code: failure.code });
+  throw error;
+}
+
+function attachCommandDecisionProtocol(
+  protocol: CommandDecisionProtocolResult<LooseObject>,
+): LooseObject {
+  const outcome = protocol.result;
+  const result =
+    outcome.result && typeof outcome.result === "object" && !Array.isArray(outcome.result)
+      ? outcome.result
+      : outcome.text != null
+        ? { output: outcome.text }
+        : { value: outcome.result ?? null };
+  const {
+    decisionPlanProjection: _decisionPlanProjection,
+    resolvedDecision: _resolvedDecision,
+    continuation: _continuation,
+    ...commandResult
+  } = result;
+  return {
+    ...outcome,
+    text: undefined,
+    result: {
+      ...commandResult,
+      preconditionDecision: protocol.preconditionDecision,
+      mutation: protocol.mutation,
+      resultingDecision: protocol.resultingDecision,
+    },
+  };
 }
 
 async function main() {

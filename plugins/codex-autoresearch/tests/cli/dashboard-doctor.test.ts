@@ -1,20 +1,50 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { redactCommandDisplay } from "../../lib/evidence-redaction.js";
 import { dashboardCommandSafety } from "../../lib/dashboard-command-safety.js";
 import { PLUGIN_VERSION } from "../../lib/plugin-version.js";
+import type { UnknownRecord } from "../../lib/types/json.js";
 import { isolatedRuntimeEnv, writeInstalledRuntimeFixture } from "../helpers/cli-session.js";
-import { quoteForShell } from "../helpers/process.js";
+import { quoteForAcceptedShell } from "../helpers/process.js";
 
 import { pluginRoot, runCli, withTempDir, setupFixture } from "../helpers/cli-test-context.js";
 
+function projectedPlan(payload: UnknownRecord): UnknownRecord {
+  return (payload.decisionPlanProjection || payload.decisionPlan) as UnknownRecord;
+}
+
+function capabilityStatus(plan: UnknownRecord, capability: string): string {
+  const capabilities = plan.capabilities as UnknownRecord;
+  const value = capabilities[capability];
+  return typeof value === "string" ? value : String((value as UnknownRecord).status || "");
+}
+
+function requiredEvidenceCodes(plan: UnknownRecord): string[] {
+  const requiredEvidence = plan.requiredEvidence as UnknownRecord;
+  return Array.isArray(requiredEvidence.diagnosticCodes)
+    ? requiredEvidence.diagnosticCodes.map(String)
+    : [];
+}
+
+function acceptedCheckIdentities(plan: UnknownRecord): string[] {
+  const requiredEvidence = plan.requiredEvidence as UnknownRecord;
+  return Array.isArray(requiredEvidence.acceptedCheckIdentities)
+    ? requiredEvidence.acceptedCheckIdentities.map(String)
+    : [];
+}
+
 test("next command suggests measure for a first baseline decision packet", async () => {
   await withTempDir("next-command", async (dir) => {
-    await setupFixture(dir, { name: "next command" });
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
-    const result = await runCli(["next", "--cwd", dir, "--command", command]);
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=2')"`;
+    const setup = await setupFixture(dir, {
+      name: "next command",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
+    assert.equal(setup.code, 0, setup.stderr);
+    const result = await runCli(["next", "--cwd", dir]);
     assert.equal(result.code, 0, result.stderr);
 
     const payload = JSON.parse(result.stdout);
@@ -28,7 +58,7 @@ test("next command suggests measure for a first baseline decision packet", async
     assert.equal(payload.run.progress.stages[0].stage, "benchmark");
     assert.equal(payload.run.progress.stages[0].status, "completed");
     assert.match(payload.run.progress.latestOutputTail, /METRIC seconds=2/);
-    assert.deepEqual(payload.decision.allowedStatuses, ["keep", "discard", "measure"]);
+    assert.deepEqual(payload.decision.allowedStatuses, ["discard", "measure"]);
     assert.equal(payload.decision.rawSuggestedStatus, "measure");
     assert.equal(payload.decision.suggestedStatus, "measure");
     assert.equal(payload.decision.safeSuggestedStatus, "measure");
@@ -41,15 +71,37 @@ test("next command suggests measure for a first baseline decision packet", async
 
 test("dashboard renders an operator readout from ASI and failures", async () => {
   await withTempDir("dashboard-readout", async (dir) => {
-    await setupFixture(dir, { name: "dashboard readout", metricUnit: "s" });
-    await runCli([
+    const sourceDir = path.join(dir, "src");
+    const metricPath = path.join(sourceDir, "metric.txt");
+    const evaluatorPath = path.join(dir, "dashboard-evaluator.mjs");
+    await mkdir(sourceDir, { recursive: true });
+    await writeFile(metricPath, "10\n");
+    await writeFile(
+      evaluatorPath,
+      [
+        'import { readFileSync } from "node:fs";',
+        'const metric = readFileSync("src/metric.txt", "utf8").trim();',
+        "console.log(`METRIC seconds=${metric}`);",
+      ].join("\n"),
+    );
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} ${quoteForAcceptedShell(evaluatorPath)}`;
+    const setup = await setupFixture(dir, {
+      name: "dashboard readout",
+      metricUnit: "s",
+      acceptedContract: true,
+      benchmarkCommand,
+    });
+    assert.equal(setup.code, 0, setup.stderr);
+
+    const baselinePacket = await runCli(["next", "--cwd", dir]);
+    assert.equal(baselinePacket.code, 0, baselinePacket.stderr);
+    const baseline = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "10",
+      "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Baseline",
       "--asi",
@@ -60,14 +112,18 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
         next_action_hint: "try caching",
       }),
     ]);
-    await runCli([
+    assert.equal(baseline.code, 0, baseline.stderr);
+
+    await writeFile(metricPath, "7\n");
+    const measuredPacket = await runCli(["next", "--cwd", dir]);
+    assert.equal(measuredPacket.code, 0, measuredPacket.stderr);
+    const measured = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "7",
+      "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
       "Cache package metadata",
       "--asi",
@@ -79,12 +135,16 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
         next_action_hint: "measure memory impact next",
       }),
     ]);
-    await runCli([
+    assert.equal(measured.code, 0, measured.stderr);
+
+    await writeFile(metricPath, "12\n");
+    const discardedPacket = await runCli(["next", "--cwd", dir]);
+    assert.equal(discardedPacket.code, 0, discardedPacket.stderr);
+    const discarded = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "12",
+      "--from-last",
       "--status",
       "discard",
       "--description",
@@ -97,25 +157,32 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
         next_action_hint: "avoid parser inlining",
       }),
     ]);
+    assert.equal(discarded.code, 0, discarded.stderr);
 
     const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
+    const statePlan = projectedPlan(statePayload);
     assert.ok(statePayload.memory.families.length >= 2);
     assert.equal(typeof statePayload.memory.plateau.detected, "boolean");
     assert.equal(typeof statePayload.memory.novelty.score, "number");
     assert.ok(statePayload.memory.lanePortfolio.some((lane) => lane.id === "measurement-quality"));
     assert.ok(statePayload.memory.diversityGuidance);
-    const generatedCommands = statePayload.commands.map((item) => item.command).join("\n");
-    assert.ok(statePayload.commands.some((item) => item.label === "State"));
-    assert.ok(statePayload.commands.some((item) => item.label === "Quality gap"));
+    const commandItems = Object.values(statePayload.commands).filter(
+      (item): item is UnknownRecord =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item),
+    );
+    const commandStrings = commandItems.map((item) => String(item.command || "")).filter(Boolean);
+    const generatedCommands = commandStrings.join("\n");
+    assert.ok(commandItems.some((item) => item.label === "State"));
+    assert.ok(commandItems.some((item) => item.label === "Quality gap"));
     assert.doesNotMatch(
       generatedCommands.replace(/\\/g, "/"),
       /autoresearch\.mjs\s+(?:serve|export|benchmark-lint)\b/i,
     );
     assert.doesNotMatch(generatedCommands, /--check-benchmark\b/i);
-    for (const item of statePayload.commands) {
-      assert.equal(dashboardCommandSafety(item.command).safe, true, item.command);
+    for (const commandText of commandStrings) {
+      assert.equal(dashboardCommandSafety(commandText).safe, true, commandText);
     }
 
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
@@ -133,14 +200,41 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
     assert.ok(payload.viewModel.nextBestAction.explanation.why);
     assert.ok(payload.viewModel.nextBestAction.explanation.avoids);
     assert.ok(payload.viewModel.nextBestAction.explanation.proof);
-    assert.ok(
-      payload.viewModel.nextBestAction.command || payload.viewModel.nextBestAction.safeAction,
+    const dashboardPlan = projectedPlan(payload.viewModel);
+    const dashboardAction = dashboardPlan.action as UnknownRecord;
+    assert.equal(dashboardPlan.kind, "dashboard-decision-plan-projection");
+    assert.equal(dashboardPlan.decisionId, statePlan.decisionId);
+    assert.equal(dashboardPlan.phase, statePlan.phase);
+    assert.equal(dashboardPlan.primaryBlockerCode, statePlan.primaryBlockerCode);
+    assert.equal(
+      (dashboardPlan.parentDisposition as UnknownRecord).kind,
+      (statePlan.parentDisposition as UnknownRecord).kind,
     );
+    assert.equal(dashboardPlan.contractDigest, statePlan.contractDigest);
+    assert.equal(dashboardPlan.evaluatorIdentity, statePlan.evaluatorIdentity);
+    assert.match(String(dashboardPlan.contractDigest), /^[a-f0-9]{64}$/);
+    assert.match(String(dashboardPlan.evaluatorIdentity), /^primary@[a-f0-9]{64}$/);
+    assert.ok(acceptedCheckIdentities(dashboardPlan).length > 0);
+    assert.equal((dashboardAction as UnknownRecord).kind, "pause-packets");
+    assert.equal(dashboardPlan.primaryBlockerCode, "no-learning-pause");
+    assert.equal(capabilityStatus(dashboardPlan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(dashboardPlan, "authorize-keep"), "allowed");
+    assert.equal(capabilityStatus(dashboardPlan, "transition-segment"), "allowed");
+    assert.equal(capabilityStatus(dashboardPlan, "finalize"), "blocked");
+    assert.equal((dashboardPlan.loopDisposition as UnknownRecord).kind, "pause");
+    assert.equal((dashboardPlan.parentDisposition as UnknownRecord).kind, "hand-back");
+    assert.ok(requiredEvidenceCodes(dashboardPlan).includes("no-learning-pause"));
+    assert.ok(requiredEvidenceCodes(dashboardPlan).includes("finalization-blocked"));
+    assert.equal(dashboardPlan.outcome, "regressed");
+    assert.equal((dashboardPlan.learning as UnknownRecord).kind, "none");
+    assert.equal((dashboardPlan.learning as UnknownRecord).consecutiveNoLearningCandidates, 2);
+    assert.equal(dashboardAction.command, "");
+    assert.equal(dashboardAction.commandDigest, (statePlan.action as UnknownRecord).commandDigest);
+    assert.equal(payload.viewModel.nextBestAction.command || "", "");
+    assert.equal(payload.viewModel.nextBestAction.safeAction || "", "");
     assert.match(payload.viewModel.aiSummary.happened.join(" "), /runs/);
-    assert.match(
-      payload.viewModel.aiSummary.plan.join(" "),
-      /avoid parser inlining|comparison anchor/i,
-    );
+    assert.match(payload.viewModel.aiSummary.plan.join(" "), /slower and harder to read/i);
+    assert.match(payload.viewModel.aiSummary.plan.join(" "), /no learning pause/i);
     assert.equal(payload.viewModel.experimentMemory.latestNextAction, "avoid parser inlining");
     assert.equal(payload.viewModel.portfolio.families.length > 0, true);
     assert.equal(
@@ -154,10 +248,10 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
   });
 });
 
-test("dashboard does not recommend next when manual metrics have no benchmark command", async () => {
+test("dashboard routes an incomplete manual session to accepted-contract setup", async () => {
   await withTempDir("dashboard-manual-no-command", async (dir) => {
     await setupFixture(dir, { name: "manual metrics" });
-    const log = await runCli([
+    const rejectedKeep = await runCli([
       "log",
       "--cwd",
       dir,
@@ -168,80 +262,95 @@ test("dashboard does not recommend next when manual metrics have no benchmark co
       "--description",
       "Manual baseline",
     ]);
-    assert.equal(log.code, 0, log.stderr);
+    assert.notEqual(rejectedKeep.code, 0);
+    const rejection = JSON.parse(rejectedKeep.stderr);
+    assert.equal(rejection.code, "mutation-precondition-blocked");
+    assert.equal(rejection.preconditionDecision.primaryBlockerCode, "setup-required");
+    assert.equal(rejection.preconditionDecision.capabilities["authorize-keep"], "blocked");
 
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const payload = JSON.parse(exportResult.stdout);
+    const plan = projectedPlan(payload.viewModel);
 
-    assert.equal(payload.viewModel.guidedSetup.stage, "needs-benchmark-command");
+    assert.equal(plan.kind, "dashboard-decision-plan-projection");
+    assert.equal((plan.action as UnknownRecord).kind, "setup");
+    assert.equal(plan.primaryBlockerCode, "setup-required");
+    assert.equal(capabilityStatus(plan, "mutate-session"), "allowed");
+    assert.equal(capabilityStatus(plan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(plan, "authorize-keep"), "blocked");
+    assert.equal((plan.parentDisposition as UnknownRecord).kind, "hand-back");
+    assert.ok(requiredEvidenceCodes(plan).includes("setup-required"));
     assert.equal(payload.viewModel.setup.defaultBenchmarkCommandReady, false);
-    assert.equal(payload.viewModel.nextBestAction.kind, "benchmark-command");
-    assert.match(payload.viewModel.nextBestAction.title, /benchmark command/i);
+    assert.equal(payload.viewModel.nextBestAction.kind, "setup");
+    assert.match(payload.viewModel.nextBestAction.title, /setup/i);
     assert.doesNotMatch(payload.viewModel.nextBestAction.title, /next measured/i);
   });
 });
 
 test("dashboard surfaces stale last-run packets before normal next guidance", async () => {
   await withTempDir("dashboard-stale-last-run", async (dir) => {
-    await setupFixture(dir, { name: "stale dashboard" });
-    const command = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
-    const next = await runCli([
-      "next",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--checks-policy",
-      "manual",
-    ]);
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=3')"`;
+    const setup = await setupFixture(dir, {
+      name: "stale dashboard",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
+    assert.equal(setup.code, 0, setup.stderr);
+    const next = await runCli(["next", "--cwd", dir]);
     assert.equal(next.code, 0, next.stderr);
-    const directLog = await runCli([
+    const packetPath = path.join(dir, "autoresearch.last-run.json");
+    const capturedPacket = await readFile(packetPath);
+    const acceptedLog = await runCli([
       "log",
       "--cwd",
       dir,
-      "--metric",
-      "2",
+      "--from-last",
       "--status",
-      "keep",
+      "measure",
       "--description",
-      "Manual run",
+      "Accepted later run",
     ]);
-    assert.equal(directLog.code, 0, directLog.stderr);
+    assert.equal(acceptedLog.code, 0, acceptedLog.stderr);
+    await writeFile(packetPath, capturedPacket);
 
     const exportResult = await runCli(["export", "--cwd", dir, "--json-full"]);
     assert.equal(exportResult.code, 0, exportResult.stderr);
     const payload = JSON.parse(exportResult.stdout);
+    const plan = projectedPlan(payload.viewModel);
 
-    assert.equal(payload.viewModel.guidedSetup.stage, "stale-last-run");
+    assert.equal(plan.kind, "dashboard-decision-plan-projection");
+    assert.equal((plan.action as UnknownRecord).kind, "replace-packet");
+    assert.equal(plan.primaryBlockerCode, "stale-packet");
+    assert.equal(capabilityStatus(plan, "run-packet"), "recovery-only");
+    assert.equal(capabilityStatus(plan, "authorize-keep"), "allowed");
+    assert.ok(requiredEvidenceCodes(plan).includes("stale-packet"));
+    assert.ok(acceptedCheckIdentities(plan).length > 0);
+    assert.match(String(plan.contractDigest), /^[a-f0-9]{64}$/);
+    assert.match(String(plan.evaluatorIdentity), /^primary@[a-f0-9]{64}$/);
     assert.equal(payload.viewModel.lastRun.freshness.fresh, false);
-    assert.equal(payload.viewModel.nextBestAction.kind, "stale-packet");
+    assert.equal(payload.viewModel.nextBestAction.kind, "replace-packet");
     assert.equal(payload.viewModel.guidedSetup.commands, undefined);
-    assert.doesNotMatch(
-      String(payload.viewModel.nextBestAction.command || ""),
-      /(?:^|\s)next(?:\s|$)/,
-    );
+    assert.equal((plan.action as UnknownRecord).command, "");
+    assert.match(String((plan.action as UnknownRecord).commandDigest), /^[a-f0-9]{64}$/);
     assert.equal(payload.viewModel.missionControl.logDecision.commandsByStatus, undefined);
     assert.equal(payload.viewModel.missionControl.logDecision.liveAction, undefined);
-    assert.match(payload.viewModel.nextBestAction.detail, /Last-run packet is stale/);
-    assert.match(payload.viewModel.readout.nextAction, /Last-run packet is stale/);
+    assert.match(payload.viewModel.nextBestAction.detail, /stale/i);
   });
 });
 
 test("doctor summarizes readiness and detects missing benchmark metrics", async () => {
   await withTempDir("doctor", async (dir) => {
-    await setupFixture(dir, { name: "doctor" });
-
-    const command = `${quoteForShell(process.execPath)} -e "console.log('no metric')"`;
-    const result = await runCli([
-      "doctor",
-      "--cwd",
-      dir,
-      "--command",
-      command,
-      "--check-benchmark",
-      "--json-full",
-    ]);
+    const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('no metric')"`;
+    await setupFixture(dir, {
+      name: "doctor",
+      acceptedContract: true,
+      benchmarkCommand: command,
+    });
+    const ordinaryState = await runCli(["state", "--cwd", dir, "--json-full"]);
+    assert.equal(ordinaryState.code, 0, ordinaryState.stderr);
+    const ordinaryPlan = projectedPlan(JSON.parse(ordinaryState.stdout));
+    const result = await runCli(["doctor", "--cwd", dir, "--check-benchmark", "--json-full"]);
     assert.equal(result.code, 0, result.stderr);
 
     const payload = JSON.parse(result.stdout);
@@ -254,14 +363,62 @@ test("doctor summarizes readiness and detects missing benchmark metrics", async 
     assert.equal(payload.benchmark.progress.stages[0].stage, "benchmark");
     assert.doesNotMatch(payload.preflight.blockers.join("\n"), /No benchmark command/i);
     assert.match(payload.issues.join("\n"), /primary metric/);
-    assert.match(payload.nextAction, /benchmark/i);
+    const plan = projectedPlan(payload);
+    assert.deepEqual(plan, ordinaryPlan);
+    assert.equal((plan.action as UnknownRecord).kind, "run-baseline");
   });
 });
 
-test("doctor and next report missing future benchmark commands for manual sessions", async () => {
+test("doctor check-benchmark rejects a command outside the accepted evaluator", async () => {
+  await withTempDir("doctor-accepted-evaluator-only", async (dir) => {
+    const accepted = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const overrideSentinel = path.join(dir, "override-ran.txt");
+    const override = `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC seconds=999')" ${quoteForAcceptedShell(overrideSentinel)}`;
+    await setupFixture(dir, {
+      name: "doctor accepted evaluator",
+      acceptedContract: true,
+      benchmarkCommand: accepted,
+    });
+
+    const result = await runCli([
+      "doctor",
+      "--cwd",
+      dir,
+      "--command",
+      override,
+      "--check-benchmark",
+      "--json-full",
+    ]);
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.benchmark.checked, true);
+    assert.equal(payload.benchmark.exitCode, null);
+    assert.deepEqual(payload.benchmark.parsedMetrics, {});
+    assert.match(
+      `${payload.benchmark.metricError}\n${payload.issues.join("\n")}`,
+      /accepted.*evaluator|experiment contract|start a new segment/i,
+    );
+    await assert.rejects(readFile(overrideSentinel), /ENOENT/);
+
+    const acceptedResult = await runCli([
+      "doctor",
+      "--cwd",
+      dir,
+      "--check-benchmark",
+      "--json-full",
+    ]);
+    assert.equal(acceptedResult.code, 0, acceptedResult.stderr);
+    const acceptedPayload = JSON.parse(acceptedResult.stdout);
+    assert.equal(acceptedPayload.benchmark.parsedMetrics.seconds, 1);
+    assert.equal(acceptedPayload.benchmark.emitsPrimary, true);
+  });
+});
+
+test("doctor and recommend-next preserve setup authority for incomplete manual sessions", async () => {
   await withTempDir("manual-metric-missing-benchmark-command", async (dir) => {
     await setupFixture(dir, { name: "manual doctor" });
-    const log = await runCli([
+    const rejectedKeep = await runCli([
       "log",
       "--cwd",
       dir,
@@ -272,7 +429,11 @@ test("doctor and next report missing future benchmark commands for manual sessio
       "--description",
       "Manual baseline",
     ]);
-    assert.equal(log.code, 0, log.stderr);
+    assert.notEqual(rejectedKeep.code, 0);
+    const rejection = JSON.parse(rejectedKeep.stderr);
+    assert.equal(rejection.code, "mutation-precondition-blocked");
+    assert.equal(rejection.preconditionDecision.primaryBlockerCode, "setup-required");
+    assert.equal(rejection.preconditionDecision.capabilities["authorize-keep"], "blocked");
 
     const doctor = await runCli([
       "doctor",
@@ -290,17 +451,31 @@ test("doctor and next report missing future benchmark commands for manual sessio
     assert.match(doctorPayload.benchmark.metricError, /No benchmark command/i);
     assert.match(doctorPayload.issues.join("\n"), /No benchmark command/i);
     assert.equal(doctorPayload.preflight.status, "blocked");
-    assert.match(doctorPayload.preflight.blockers.join("\n"), /future packets/i);
     assert.equal(doctorPayload.explanation.preflight.status, "blocked");
+    const doctorPlan = projectedPlan(doctorPayload);
+    assert.equal((doctorPlan.action as UnknownRecord).kind, "setup");
+    assert.equal(doctorPlan.primaryBlockerCode, "setup-required");
+    assert.equal(capabilityStatus(doctorPlan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(doctorPlan, "authorize-keep"), "blocked");
+    assert.ok(requiredEvidenceCodes(doctorPlan).includes("setup-required"));
+    assert.equal(doctorPlan.generationId, doctorPayload.preconditionDecision.generationId);
+    assert.equal(doctorPlan.decisionId, doctorPayload.preconditionDecision.decisionId);
+    assert.equal(doctorPlan.generationId, doctorPayload.resultingDecision.generationId);
+    assert.equal(doctorPlan.decisionId, doctorPayload.resultingDecision.decisionId);
 
-    const next = await runCli(["next", "--cwd", dir, "--compact"]);
-    assert.equal(next.code, 0, next.stderr);
-    const nextPayload = JSON.parse(next.stdout);
-    assert.equal(nextPayload.ok, false);
-    assert.equal(nextPayload.run, null);
-    assert.equal(nextPayload.decision, null);
-    assert.match(nextPayload.doctor.issues.join("\n"), /No benchmark command/i);
-    assert.match(nextPayload.nextAction, /benchmark/i);
+    const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
+    assert.equal(recommend.code, 0, recommend.stderr);
+    const recommendPayload = JSON.parse(recommend.stdout);
+    const recommendPlan = projectedPlan(recommendPayload);
+    assert.equal((recommendPlan.action as UnknownRecord).kind, "setup");
+    assert.equal(recommendPlan.primaryBlockerCode, "setup-required");
+    assert.equal(capabilityStatus(recommendPlan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(recommendPlan, "authorize-keep"), "blocked");
+    assert.equal((recommendPlan.parentDisposition as UnknownRecord).kind, "hand-back");
+    assert.ok(requiredEvidenceCodes(recommendPlan).includes("setup-required"));
+    assert.match(recommendPayload.nextAction, /accepted experiment contract/i);
+    assert.equal(recommendPlan.generationId, doctorPlan.generationId);
+    assert.equal(recommendPlan.decisionId, doctorPlan.decisionId);
   });
 });
 
@@ -327,7 +502,14 @@ test("doctor explain exposes runtime drift summary and next diagnostic command",
 
 test("doctor --check-installed blocks non-fresh installed runtime before packet guidance", async () => {
   await withTempDir("doctor-check-installed-runtime-authority", async (dir) => {
-    await setupFixture(dir, { name: "installed doctor" });
+    const setup = await setupFixture(dir, {
+      name: "installed doctor",
+      acceptedContract: true,
+    });
+    assert.equal(setup.code, 0, setup.stderr);
+    const ordinaryState = await runCli(["state", "--cwd", dir, "--json-full"]);
+    assert.equal(ordinaryState.code, 0, ordinaryState.stderr);
+    const ordinaryPlan = projectedPlan(JSON.parse(ordinaryState.stdout));
 
     for (const status of ["stale", "missing", "unavailable"]) {
       await withTempDir(`runtime-cache-${status}`, async (homeDir) => {
@@ -346,20 +528,25 @@ test("doctor --check-installed blocks non-fresh installed runtime before packet 
         assert.equal(payload.runtimeAuthority.trustScope, "installed-plugin", status);
         assert.equal(payload.runtimeAuthority.blocking, true, status);
         assert.equal(payload.runtimeAuthority.installedRuntime.status, status);
-        const canonicalAction = payload.resolvedDecision.canonicalNextAction;
-        assert.equal(canonicalAction.kind, "runtime-authority", status);
-        assert.equal(canonicalAction.safeAction, "doctor", status);
-        assert.match(canonicalAction.command || "", /\bdoctor\b/, status);
-        assert.match(canonicalAction.command || "", /--explain\b/, status);
-        assert.doesNotMatch(canonicalAction.command || "", /(?:^|\s)next(?:\s|$)/, status);
+        const plan = projectedPlan(payload);
+        assert.deepEqual(plan, ordinaryPlan, status);
+        const action = plan.action as UnknownRecord;
+        assert.equal(action.kind, "run-baseline", status);
+        assert.deepEqual(requiredEvidenceCodes(plan), requiredEvidenceCodes(ordinaryPlan), status);
+        assert.ok(acceptedCheckIdentities(plan).length > 0, status);
         assert.match(
           payload.issues.join("\n"),
           new RegExp(`${status} installed plugin runtime`, "i"),
         );
-        assert.match(payload.nextAction, /installed.*runtime/i);
-        assert.match(payload.nextAction, /inspect|refresh/i);
-        assert.doesNotMatch(payload.nextAction, /Run the next experiment|next measured packet/i);
-        assert.match(payload.explanation.nextSafeAction, /installed.*runtime/i);
+        assert.match(payload.runtimeAuthority.blocker, /installed.*runtime/i);
+        assert.match(payload.runtimeAuthority.blocker, /inspect|refresh/i);
+        assert.match(payload.runtimeDriftSummary.nextActionHint, /runtime/i);
+        assert.equal(payload.nextAction, payload.decisionPlan.action.reason, status);
+        assert.equal(
+          payload.explanation.nextSafeAction,
+          payload.decisionPlan.action.reason,
+          status,
+        );
       });
     }
   });
@@ -367,7 +554,7 @@ test("doctor --check-installed blocks non-fresh installed runtime before packet 
 
 test("state and doctor use checksCommand from config for gate quality", async () => {
   await withTempDir("config-checks-gate-quality", async (dir) => {
-    const checksCommand = `${quoteForShell(process.execPath)} -e "process.exit(0)" check`;
+    const checksCommand = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)" check`;
     const displayedChecksCommand = redactCommandDisplay(checksCommand);
     await writeFile(
       path.join(dir, "autoresearch.config.json"),
@@ -378,7 +565,7 @@ test("state and doctor use checksCommand from config for gate quality", async ()
           metricName: "seconds",
           metricUnit: "seconds",
           bestDirection: "lower",
-          benchmarkCommand: `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
+          benchmarkCommand: `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`,
           checksCommand,
         },
         null,
@@ -404,7 +591,7 @@ test("state and doctor use checksCommand from config for gate quality", async ()
 
 test("setup state and doctor expose gate quality and preflight readiness", async () => {
   await withTempDir("gate-quality-preflight", async (dir) => {
-    const benchmarkCommand = `${quoteForShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
+    const benchmarkCommand = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1')"`;
     const setupPlanResult = await runCli([
       "setup-plan",
       "--cwd",
@@ -430,34 +617,57 @@ test("setup state and doctor expose gate quality and preflight readiness", async
     const state = await runCli(["state", "--cwd", dir, "--json-full"]);
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
+    const statePlan = projectedPlan(statePayload);
     assert.equal(statePayload.gateQuality.posture, "advisory-missing");
     assert.equal(statePayload.preflight.status, "blocked");
     assert.match(statePayload.preflight.blockers.join("\n"), /benchmark command/i);
+    assert.equal((statePlan.action as UnknownRecord).kind, "setup");
+    assert.equal(statePlan.primaryBlockerCode, "setup-required");
+    assert.equal(capabilityStatus(statePlan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(statePlan, "authorize-keep"), "blocked");
+    assert.equal((statePlan.parentDisposition as UnknownRecord).kind, "hand-back");
+    assert.ok(requiredEvidenceCodes(statePlan).includes("setup-required"));
 
     const compact = await runCli(["state", "--cwd", dir, "--compact"]);
     assert.equal(compact.code, 0, compact.stderr);
     const compactPayload = JSON.parse(compact.stdout);
+    const compactPlan = projectedPlan(compactPayload);
     assert.equal(compactPayload.gateQuality.posture, "advisory-missing");
     assert.equal(compactPayload.preflight.status, "blocked");
     assert.match(compactPayload.preflight.blockers.join("\n"), /benchmark command/i);
+    assert.equal(compactPlan.kind, "decision-plan-projection");
+    assert.equal(compactPlan.decisionId, statePlan.decisionId);
+    assert.equal((compactPlan.action as UnknownRecord).kind, "setup");
+    assert.equal(capabilityStatus(compactPlan, "run-packet"), "blocked");
+    assert.ok(requiredEvidenceCodes(compactPlan).includes("setup-required"));
 
     const doctor = await runCli(["doctor", "--cwd", dir, "--explain", "--json-full"]);
     assert.equal(doctor.code, 0, doctor.stderr);
     const doctorPayload = JSON.parse(doctor.stdout);
+    const doctorPlan = projectedPlan(doctorPayload);
     assert.equal(doctorPayload.ok, false);
     assert.equal(doctorPayload.gateQuality.posture, "advisory-missing");
     assert.equal(doctorPayload.preflight.status, "blocked");
     assert.match(doctorPayload.preflight.blockers.join("\n"), /benchmark command/i);
     assert.match(doctorPayload.issues.join("\n"), /benchmark command/i);
-    assert.match(doctorPayload.nextAction, /benchmark/i);
+    assert.equal((doctorPlan.action as UnknownRecord).kind, "setup");
+    assert.equal(doctorPlan.primaryBlockerCode, "setup-required");
+    assert.equal(capabilityStatus(doctorPlan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(doctorPlan, "authorize-keep"), "blocked");
+    assert.match(doctorPayload.nextAction, /accepted experiment contract/i);
     assert.doesNotMatch(doctorPayload.explanation.verdict, /no blocking/i);
     assert.equal(doctorPayload.explanation.preflight.status, "blocked");
   });
 });
 
-test("guide, dashboard, and recommend-next share canonical preflight blocker", async () => {
+test("guide, dashboard, and recommend-next share the canonical setup decision", async () => {
   await withTempDir("canonical-preflight-guide", async (dir) => {
     await setupFixture(dir, { name: "canonical preflight" });
+
+    const state = await runCli(["state", "--cwd", dir, "--compact"]);
+    assert.equal(state.code, 0, state.stderr);
+    const statePayload = JSON.parse(state.stdout);
+    const statePlan = projectedPlan(statePayload);
 
     const guide = await runCli(["guide", "--cwd", dir]);
     assert.equal(guide.code, 0, guide.stderr);
@@ -471,18 +681,27 @@ test("guide, dashboard, and recommend-next share canonical preflight blocker", a
     const recommend = await runCli(["recommend-next", "--cwd", dir]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
+    const dashboardPlan = projectedPlan(dashboardPayload.viewModel);
+    const recommendPlan = projectedPlan(recommendPayload);
 
-    assert.equal(guidePayload.stage, "preflight");
-    assert.equal(dashboardAction.kind, "preflight");
-    assert.equal(recommendPayload.action.kind, "preflight");
-    assert.equal(guidePayload.nextStep.nextAction.title, "Resolve preflight");
-    assert.equal(
-      recommendPayload.nextStep.nextAction.title,
-      guidePayload.nextStep.nextAction.title,
+    assert.equal(guidePayload.stage, "setup");
+    assert.equal(dashboardAction.kind, "setup");
+    assert.equal(recommendPayload.action.kind, "setup");
+    for (const plan of [statePlan, dashboardPlan, recommendPlan]) {
+      assert.equal((plan.action as UnknownRecord).kind, "setup");
+      assert.equal(plan.primaryBlockerCode, "setup-required");
+      assert.equal(capabilityStatus(plan, "run-packet"), "blocked");
+      assert.equal(capabilityStatus(plan, "authorize-keep"), "blocked");
+      assert.equal((plan.parentDisposition as UnknownRecord).kind, "hand-back");
+      assert.ok(requiredEvidenceCodes(plan).includes("setup-required"));
+    }
+    assert.deepEqual(
+      [statePlan.decisionId, dashboardPlan.decisionId, recommendPlan.decisionId],
+      Array(3).fill(statePlan.decisionId),
     );
-    assert.match(guidePayload.nextAction, /benchmark command/i);
-    assert.match(dashboardAction.detail, /benchmark command/i);
-    assert.match(recommendPayload.nextAction, /benchmark command/i);
+    assert.match(guidePayload.nextAction, /accepted experiment contract/i);
+    assert.match(dashboardAction.detail, /accepted experiment contract/i);
+    assert.match(recommendPayload.nextAction, /accepted experiment contract/i);
   });
 });
 
@@ -498,13 +717,21 @@ test("recommend-next compact operator checklist uses bounded recovery for empty 
     assert.equal(recommend.code, 0, recommend.stderr);
     const payload = JSON.parse(recommend.stdout);
     const command = payload.operatorChecklist.command || "";
+    const plan = projectedPlan(payload);
 
     assert.equal(payload.action.kind, "setup");
-    assert.equal(payload.resolvedDecision.canonicalNextAction.kind, "setup");
-    assert.match(payload.resolvedDecision.loopContract.blockers[0], /setup/i);
-    assert.equal(payload.resolvedDecision.loopContract.canRunNextPacket, false);
-    assert.match(payload.nextAction, /setup/i);
-    assert.match(payload.operatorChecklist.blocker, /setup/i);
+    assert.equal(plan.kind, "decision-plan-projection");
+    assert.equal((plan.action as UnknownRecord).kind, "setup");
+    assert.equal(plan.primaryBlockerCode, "setup-required");
+    assert.equal(capabilityStatus(plan, "mutate-session"), "allowed");
+    assert.equal(capabilityStatus(plan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(plan, "authorize-keep"), "blocked");
+    assert.equal((plan.loopDisposition as UnknownRecord).kind, "blocked");
+    assert.equal((plan.loopDisposition as UnknownRecord).canRunPacket, false);
+    assert.equal((plan.parentDisposition as UnknownRecord).kind, "hand-back");
+    assert.ok(requiredEvidenceCodes(plan).includes("setup-required"));
+    assert.match(payload.nextAction, /accepted experiment contract/i);
+    assert.equal(payload.operatorChecklist.blocker, "setup-required");
     assert.match(command, /autoresearch\.mjs\b.*\b(setup-plan|state)\b/);
     assert.match(command, /--cwd\b/);
     assert.doesNotMatch(command, /\bdoctor\b.*--explain\b/);
@@ -520,16 +747,25 @@ test("state and recommend-next suppress portfolio guidance while benchmark setup
     assert.equal(state.code, 0, state.stderr);
     const statePayload = JSON.parse(state.stdout);
     assert.equal(Object.hasOwn(statePayload, "portfolioRecommendation"), false);
-    assert.equal(statePayload.resolvedDecision.canonicalNextAction.kind, "preflight");
-    assert.match(statePayload.resolvedDecision.loopContract.blockers[0], /benchmark command/i);
-    assert.equal(statePayload.resolvedDecision.loopContract.canRunNextPacket, false);
+    const statePlan = projectedPlan(statePayload);
+    assert.equal((statePlan.action as UnknownRecord).kind, "setup");
+    assert.equal(statePlan.primaryBlockerCode, "setup-required");
+    assert.equal(capabilityStatus(statePlan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(statePlan, "authorize-keep"), "blocked");
+    assert.equal((statePlan.loopDisposition as UnknownRecord).canRunPacket, false);
+    assert.ok(requiredEvidenceCodes(statePlan).includes("setup-required"));
 
     const recommend = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
     assert.equal(recommend.code, 0, recommend.stderr);
     const recommendPayload = JSON.parse(recommend.stdout);
     assert.equal(Object.hasOwn(recommendPayload, "portfolioRecommendation"), false);
-    assert.equal(recommendPayload.resolvedDecision.canonicalNextAction.kind, "preflight");
-    assert.match(recommendPayload.resolvedDecision.loopContract.blockers[0], /benchmark command/i);
+    const recommendPlan = projectedPlan(recommendPayload);
+    assert.equal(recommendPlan.decisionId, statePlan.decisionId);
+    assert.equal((recommendPlan.action as UnknownRecord).kind, "setup");
+    assert.equal(recommendPlan.primaryBlockerCode, "setup-required");
+    assert.equal(capabilityStatus(recommendPlan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(recommendPlan, "authorize-keep"), "blocked");
+    assert.ok(requiredEvidenceCodes(recommendPlan).includes("setup-required"));
   });
 });
 

@@ -3,17 +3,29 @@ import {
   UNSAFE_COMMAND_PROPERTY,
   toolArgumentsContainUnsafeCommand,
 } from "./tool-unsafe-command-gate.js";
+import {
+  failureLayerPreconditions,
+  type DecisionCapability,
+  type DecisionDiagnosticCode,
+} from "./decision-compiler.js";
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type ToolArgs = Record<string, JsonValue | undefined>;
 export type JsonSchema = {
   type?: string | string[];
   description?: string;
-  enum?: string[];
+  enum?: JsonPrimitive[];
   properties?: Record<string, JsonSchema | undefined>;
   required?: string[];
   items?: JsonSchema;
   additionalProperties?: boolean | JsonSchema;
+  anyOf?: JsonSchema[];
+  maxItems?: number;
+  minItems?: number;
+  minLength?: number;
+  minimum?: number;
+  not?: JsonSchema;
+  oneOf?: JsonSchema[];
 };
 
 export type ActionPolicy =
@@ -35,6 +47,7 @@ export type CommandCategory =
 export type CommandAudience = "default" | "advanced" | "maintainer";
 export type CliOptionKind = "boolean" | "list" | "string";
 export type SessionLockPolicy = "action" | "always" | "none";
+export type DecisionProtocolPolicy = "session-mutation";
 export interface CommandCliOption {
   aliases?: readonly string[];
   key: string;
@@ -60,6 +73,14 @@ export interface CommandDefinition {
   dashboardRequiresDryRun?: boolean;
   defaultHelp?: boolean;
   description: string;
+  decisionProtocol?: DecisionProtocolPolicy;
+  decisionCapability?: DecisionCapability;
+  requiredDecisionDiagnostics?: readonly DecisionDiagnosticCode[];
+  recoveryForDiagnostics?: readonly DecisionDiagnosticCode[];
+  resolveDecisionCapability?: (
+    args: Readonly<Record<string, unknown>>,
+    context: Readonly<{ config: Readonly<Record<string, unknown>> }>,
+  ) => DecisionCapability | null;
   handler: string;
   help: readonly string[];
   inputSchema: JsonSchema;
@@ -73,6 +94,40 @@ export interface CommandDefinition {
 const defineOutputSchemaOverrides = (
   schemas: Readonly<Record<string, JsonSchema>>,
 ): Readonly<Record<string, JsonSchema>> => schemas;
+const closedInputObject = (
+  properties: Record<string, JsonSchema>,
+  required = Object.keys(properties),
+): JsonSchema => ({
+  type: "object",
+  properties,
+  required,
+  additionalProperties: false,
+});
+const LEARNING_INPUT_SCHEMA: JsonSchema = {
+  oneOf: [
+    closedInputObject({ kind: { type: "string", enum: ["none"] } }),
+    closedInputObject({
+      kind: { type: "string", enum: ["causal", "discriminating"] },
+      changedBelief: { type: "string", minLength: 1 },
+      evidence: {
+        type: "array",
+        minItems: 1,
+        items: { type: "string", minLength: 1 },
+      },
+    }),
+  ],
+};
+const FAILURE_INPUT_SCHEMA: JsonSchema = {
+  oneOf: Object.entries(failureLayerPreconditions).map(([layer, preconditions]) =>
+    closedInputObject({
+      layer: { type: "string", enum: [layer] },
+      code: { type: "string" },
+      preconditions: closedInputObject(
+        Object.fromEntries(preconditions.map((name) => [name, { type: "string" }])),
+      ),
+    }),
+  ),
+};
 const LOOP_INTENT_PROPERTIES = {
   name: { type: "string" },
   goal: { type: "string" },
@@ -246,15 +301,7 @@ export const commandTable = [
     category: "setup",
     audience: "default",
     handler: "promptPlan",
-    outputFields: [
-      "ok",
-      "workDir",
-      "intent",
-      "setup",
-      "missingEssentials",
-      "nextAction",
-      "nextStep",
-    ],
+    outputFields: ["ok", "workDir", "fit", "directEvidence", "contractCandidate", "nextAction"],
     defaultHelp: true,
     help: ["node scripts/autoresearch.mjs prompt-plan --cwd <project> --prompt <text>"],
     cliOptions: [
@@ -262,7 +309,7 @@ export const commandTable = [
       { name: "compact", key: "compact", kind: "boolean" },
     ],
     description:
-      "Convert a natural-language Autoresearch request into inferred loop intent, missing essentials, setup defaults, and first safe commands.",
+      "Classify a natural-language request before discovery, then return direct evidence, clarification, or an in-memory loop candidate.",
     inputSchema: {
       type: "object",
       properties: {
@@ -314,6 +361,7 @@ export const commandTable = [
       "nextStep",
       "commands",
       "operatorChecklist",
+      "decisionPlanProjection",
       "resolvedDecision",
       "sessionDecisionCapsule",
       "runtimeProvenance",
@@ -400,6 +448,7 @@ export const commandTable = [
     name: "session_forensics",
     cliCommand: "session-forensics",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "diagnostic",
     audience: "advanced",
     handler: "sessionForensics",
@@ -478,6 +527,7 @@ export const commandTable = [
     name: "setup_session",
     cliCommand: "setup",
     actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
     category: "happy_path",
     audience: "default",
     handler: "setupSession",
@@ -492,7 +542,7 @@ export const commandTable = [
       { name: "scope", key: "filesInScope", kind: "list" },
     ],
     description:
-      "Create autoresearch session files from templates and append an initial config header.",
+      "Accept a complete loop contract, then create session files and the initial config record.",
     inputSchema: {
       type: "object",
       properties: {
@@ -538,6 +588,7 @@ export const commandTable = [
     name: "setup_research_session",
     cliCommand: "research-setup",
     actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
     category: "advanced",
     audience: "advanced",
     handler: "setupResearchSession",
@@ -546,7 +597,7 @@ export const commandTable = [
       "node scripts/autoresearch.mjs research-setup --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--max-iterations <n>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>]",
     ],
     description:
-      "Create a deep-research scratchpad and initialize a quality_gap autoresearch session.",
+      "Create an explicitly selected qualitative-loop scratchpad and initialize quality_gap evidence.",
     inputSchema: {
       type: "object",
       properties: {
@@ -559,6 +610,20 @@ export const commandTable = [
     name: "start_research_loop",
     cliCommand: "research-start",
     actionPolicy: "process_start",
+    decisionProtocol: "session-mutation",
+    resolveDecisionCapability: (args, { config }) => {
+      const dryRun = enabledArg(args.dry_run ?? args.dryRun);
+      const skipInit = enabledArg(args.skip_init ?? args.skipInit);
+      const noBaseline = enabledArg(args.no_baseline_log ?? args.noBaselineLog);
+      const baselineEnabled = defaultBoolOption(args.baseline_log ?? args.baselineLog, true);
+      const configuredMetric = String(config.metricName || "").trim();
+      const preservesExecutableMetric =
+        Boolean(configuredMetric && config.benchmarkCommand) && configuredMetric !== "quality_gap";
+      return !dryRun && !skipInit && !noBaseline && baselineEnabled && !preservesExecutableMetric
+        ? "run-packet"
+        : null;
+    },
+    recoveryForDiagnostics: ["setup-required"],
     category: "happy_path",
     audience: "default",
     handler: "researchStart",
@@ -573,8 +638,10 @@ export const commandTable = [
     help: [
       "node scripts/autoresearch.mjs research-start --cwd <project> --slug <slug> --goal <goal> [--checks-command <cmd>] [--commit-paths <paths>] [--protected-benchmark-paths <paths>] [--packet-budget <n>] [--wall-clock-budget-seconds <n>] [--dry-run] [--skip-init] [--no-baseline-log] [--json-full]",
     ],
+    conditionallyMutating: true,
     cliOptions: [{ name: "json-full", key: "jsonFull", kind: "boolean" }],
-    description: "Start a quality_gap scratchpad with validation and optional baseline.",
+    description:
+      "Start an explicitly selected quality_gap loop with contract validation and an optional baseline.",
     inputSchema: {
       type: "object",
       properties: {
@@ -591,6 +658,7 @@ export const commandTable = [
     name: "research_fanout",
     cliCommand: "research-fanout",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "advanced",
     audience: "advanced",
     handler: "researchFanout",
@@ -619,6 +687,7 @@ export const commandTable = [
     name: "lane_runner",
     cliCommand: "lane-runner",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "advanced",
     audience: "advanced",
     handler: "laneRunner",
@@ -669,6 +738,7 @@ export const commandTable = [
     name: "configure_session",
     cliCommand: "config",
     actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
     category: "advanced",
     audience: "advanced",
     handler: "configureSession",
@@ -769,6 +839,14 @@ export const commandTable = [
     name: "next_experiment",
     cliCommand: "next",
     actionPolicy: "process_start",
+    decisionProtocol: "session-mutation",
+    decisionCapability: "run-packet",
+    recoveryForDiagnostics: [
+      "stale-packet",
+      "packet-status-authority-invalid",
+      "legacy-contract-acceptance-required",
+      "legacy-contract-conflict",
+    ],
     category: "happy_path",
     audience: "default",
     handler: "nextExperiment",
@@ -786,9 +864,9 @@ export const commandTable = [
       "refused",
       "code",
       "blockingAction",
-      "decisionEnvelope",
+      "decisionPlanProjection",
+      "resolvedDecision",
       "sessionDecisionCapsule",
-      "loopContract",
       "nextAction",
       "clearingCondition",
       "commandHint",
@@ -813,6 +891,9 @@ export const commandTable = [
     name: "partial_results",
     cliCommand: "partial-results",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
+    resolveDecisionCapability: (args) => (enabledArg(args.record) ? "run-packet" : null),
+    recoveryForDiagnostics: ["pending-packet"],
     category: "diagnostic",
     audience: "advanced",
     handler: "partialResultsCommand",
@@ -849,13 +930,16 @@ export const commandTable = [
     name: "log_experiment",
     cliCommand: "log",
     actionPolicy: "git_mutation",
+    decisionProtocol: "session-mutation",
+    resolveDecisionCapability: (args) => (args.status === "keep" ? "authorize-keep" : null),
+    recoveryForDiagnostics: ["pending-log-transaction", "pending-log-transaction-inconsistent"],
     category: "happy_path",
     audience: "default",
     handler: "logExperiment",
     outputFields: ["ok", "workDir", "experiment", "continuation"],
     defaultHelp: true,
     help: [
-      "node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>|--metrics-file <path>] [--asi <json>|--asi-json-file <path>] [--evidence-status accepted|rejected|provisional|superseded] [--commit <hash>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]",
+      "node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>|--metrics-file <path>] [--asi <json>|--asi-json-file <path>] [--learning <json>|--learning-json-file <path>] [--failure <json>|--failure-json-file <path>] [--evidence-status accepted|rejected|provisional|superseded] [--commit <hash>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]",
     ],
     description:
       "Append an experiment result, keep/commit or discard/revert changes, then return whether the active loop should immediately continue.",
@@ -875,6 +959,10 @@ export const commandTable = [
         asi: { type: "object" },
         asi_json_file: { type: "string" },
         asi_file: { type: "string" },
+        learning: LEARNING_INPUT_SCHEMA,
+        learning_json_file: { type: "string" },
+        failure: FAILURE_INPUT_SCHEMA,
+        failure_json_file: { type: "string" },
         evidence_status: {
           type: "string",
           enum: ["accepted", "rejected", "provisional", "superseded"],
@@ -902,6 +990,8 @@ export const commandTable = [
       "best",
       "warnings",
       "memory",
+      "decisionPlan",
+      "decisionPlanProjection",
       "resolvedDecision",
       "sessionDecisionCapsule",
       "runtimeProvenance",
@@ -938,6 +1028,8 @@ export const commandTable = [
     name: "ledger_doctor",
     cliCommand: "ledger-doctor",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
+    recoveryForDiagnostics: ["ledger-integrity"],
     category: "diagnostic",
     audience: "default",
     handler: "ledgerDoctor",
@@ -999,6 +1091,7 @@ export const commandTable = [
     name: "gap_candidates",
     cliCommand: "gap-candidates",
     actionPolicy: "preview",
+    decisionProtocol: "session-mutation",
     category: "diagnostic",
     audience: "advanced",
     handler: "gapCandidates",
@@ -1033,6 +1126,7 @@ export const commandTable = [
     name: "decide_quality_gap",
     cliCommand: "gap-decide",
     actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
     category: "happy_path",
     audience: "default",
     handler: "recordQualityGapDecision",
@@ -1082,6 +1176,10 @@ export const commandTable = [
     name: "finalize_current_tree",
     cliCommand: "finalize-current-tree",
     actionPolicy: "artifact_write",
+    decisionProtocol: "session-mutation",
+    decisionCapability: "finalize",
+    requiredDecisionDiagnostics: ["current-tree-finalization"],
+    recoveryForDiagnostics: ["current-tree-finalization"],
     category: "dangerous",
     audience: "advanced",
     handler: "finalizeCurrentTree",
@@ -1135,6 +1233,7 @@ export const commandTable = [
     name: "benchmark_inspect",
     cliCommand: "benchmark-inspect",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "diagnostic",
     audience: "advanced",
     handler: "benchmarkInspect",
@@ -1163,6 +1262,7 @@ export const commandTable = [
     name: "benchmark_lint",
     cliCommand: "benchmark-lint",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "diagnostic",
     audience: "default",
     handler: "benchmarkLint",
@@ -1194,6 +1294,7 @@ export const commandTable = [
     name: "checks_inspect",
     cliCommand: "checks-inspect",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "diagnostic",
     audience: "advanced",
     handler: "checksInspect",
@@ -1223,12 +1324,14 @@ export const commandTable = [
     name: "new_segment",
     cliCommand: "new-segment",
     actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
+    decisionCapability: "transition-segment",
     category: "advanced",
     audience: "advanced",
     handler: "newSegment",
     outputFields: ["ok", "workDir", "dryRun", "entry"],
     help: [
-      "node scripts/autoresearch.mjs new-segment --cwd <project> [--reason <text>] [--metric-name <name>] [--metric-unit <unit>] [--direction lower|higher] [--benchmark-command <cmd>] [--checks-command <cmd>] [--dry-run|--yes]",
+      "node scripts/autoresearch.mjs new-segment --cwd <project> [--reason <text>] [--metric-name <name>] [--metric-unit <unit>] [--direction lower|higher] [--benchmark-command <cmd>] [--checks-command <cmd>] [--packet-env-file <path>] [--packet-env-mode minimal|inherit] [--dry-run|--yes]",
     ],
     cliOptions: [
       {
@@ -1239,6 +1342,7 @@ export const commandTable = [
       },
     ],
     actionAliases: { newSegmentDryRun: "new segment" },
+    conditionallyMutating: true,
     dashboardRequiresDryRun: true,
     resolveActionPolicy: (args) =>
       enabledArg(args.dry_run ?? args.dryRun) ? "preview" : "state_mutation",
@@ -1254,6 +1358,8 @@ export const commandTable = [
         direction: { type: "string", enum: ["lower", "higher"] },
         benchmark_command: { type: "string" },
         checks_command: { type: "string" },
+        packet_env_file: { type: "string" },
+        packet_env_mode: { type: "string", enum: ["inherit", "minimal"] },
         dry_run: { type: "boolean" },
         confirm: { type: "boolean" },
         allow_unsafe_command: { type: "boolean" },
@@ -1265,6 +1371,8 @@ export const commandTable = [
     name: "promote_gate",
     cliCommand: "promote-gate",
     actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
+    decisionCapability: "transition-segment",
     category: "advanced",
     audience: "advanced",
     handler: "promoteGate",
@@ -1273,6 +1381,7 @@ export const commandTable = [
       "node scripts/autoresearch.mjs promote-gate --cwd <project> --reason <text> [--gate-name <name>] [--query-count <n>] [--benchmark-command <cmd>] [--checks-command <cmd>] [--dry-run|--yes]",
     ],
     actionAliases: { promoteGateDryRun: "promote gate" },
+    conditionallyMutating: true,
     dashboardRequiresDryRun: true,
     resolveActionPolicy: (args) =>
       enabledArg(args.dry_run ?? args.dryRun) ? "preview" : "state_mutation",
@@ -1377,6 +1486,7 @@ export const commandTable = [
     name: "doctor_session",
     cliCommand: "doctor",
     actionPolicy: "read",
+    decisionProtocol: "session-mutation",
     category: "happy_path",
     audience: "default",
     handler: "doctorSession",
@@ -1397,6 +1507,7 @@ export const commandTable = [
       "runtimeAuthority",
       "gateQuality",
       "preflight",
+      "decisionPlan",
       "resolvedDecision",
       "commandExecutionBoundary",
       "commandAuthority",
@@ -1440,14 +1551,35 @@ export const commandTable = [
     },
   },
   {
+    name: "recover_process_integrity",
+    cliCommand: "process-recover",
+    actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
+    recoveryForDiagnostics: ["process-integrity", "termination-unproven"],
+    category: "diagnostic",
+    audience: "advanced",
+    handler: "recoverProcessIntegrity",
+    outputFields: ["ok", "workDir", "recovered", "markerPath", "provenDeadPids", "proof"],
+    help: ["node scripts/autoresearch.mjs process-recover --cwd <project>"],
+    description:
+      "Prove every PID in a retained termination-failed process tree is absent, then remove only that progress marker.",
+    inputSchema: {
+      type: "object",
+      properties: { working_dir: { type: "string" } },
+      required: ["working_dir"],
+    },
+  },
+  {
     name: "clear_session",
     cliCommand: "clear",
     actionPolicy: "destructive",
+    decisionProtocol: "session-mutation",
     category: "dangerous",
     audience: "maintainer",
     handler: "clearSession",
     outputFields: ["ok", "workDir", "dryRun", "wouldDelete", "deleted", "missing"],
     help: ["node scripts/autoresearch.mjs clear --cwd <project> [--dry-run|--yes]"],
+    conditionallyMutating: true,
     description: "Delete autoresearch runtime artifacts after explicit confirmation.",
     inputSchema: {
       type: "object",
@@ -1489,6 +1621,42 @@ export function commandRequiresSessionMutationLock(
   if (definition.sessionLock === "always") return true;
   const policy = definition.resolveActionPolicy?.(args) || definition.actionPolicy;
   return actionPolicyRequiresSessionLock(policy);
+}
+
+export function commandUsesSessionDecisionProtocol(
+  command: string,
+  args: Readonly<Record<string, unknown>> = {},
+): boolean {
+  return (
+    commandDefinitionForCli(command)?.decisionProtocol === "session-mutation" &&
+    commandRequiresSessionMutationLock(command, args)
+  );
+}
+
+export function decisionCapabilityForCommand(
+  command: string,
+  args: Readonly<Record<string, unknown>> = {},
+  context: Readonly<{ config: Readonly<Record<string, unknown>> }> = { config: {} },
+): DecisionCapability | null {
+  if (command === "finalize-autoresearch:apply" || command === "finalize-autoresearch:plan") {
+    return "finalize";
+  }
+  const definition = commandDefinitionForCli(command);
+  return (
+    definition?.resolveDecisionCapability?.(args, context) ?? definition?.decisionCapability ?? null
+  );
+}
+
+export function recoveryDiagnosticsForCommand(command: string): readonly DecisionDiagnosticCode[] {
+  if (command === "finalize-autoresearch:apply") return ["current-tree-finalization"];
+  if (command === "finalize-autoresearch:plan") return [];
+  return commandDefinitionForCli(command)?.recoveryForDiagnostics || [];
+}
+
+export function requiredDecisionDiagnosticsForCommand(
+  command: string,
+): readonly DecisionDiagnosticCode[] {
+  return commandDefinitionForCli(command)?.requiredDecisionDiagnostics || [];
 }
 
 export function actionPolicyRequiresSessionLock(policy: ActionPolicy): boolean {
@@ -1618,24 +1786,93 @@ function missingArgumentValue(value: unknown) {
 }
 
 function assertSchemaArgument(key: string, value: unknown, property: Record<string, any>) {
-  if (property.type === "array" && !Array.isArray(value))
-    throw new Error(`Argument ${key} must be an array.`);
-  if (property.type === "object" && !isObjectArgument(value))
-    throw new Error(`Argument ${key} must be an object.`);
-  if (property.type === "number" && typeof value !== "number")
-    throw new Error(`Argument ${key} must be a number.`);
-  if (property.type === "integer" && (typeof value !== "number" || !Number.isInteger(value)))
-    throw new Error(`Argument ${key} must be an integer.`);
-  if (property.type === "boolean" && typeof value !== "boolean")
-    throw new Error(`Argument ${key} must be a boolean.`);
-  if (property.type === "string" && typeof value !== "string")
-    throw new Error(`Argument ${key} must be a string.`);
-  if (property.enum && !property.enum.includes(value))
-    throw new Error(`Argument ${key} must be one of ${property.enum.join(", ")}.`);
+  assertSchemaValue(`Argument ${key}`, value, property as JsonSchema);
 }
 
-function isObjectArgument(value: unknown) {
-  return typeof value === "object" && !Array.isArray(value);
+function assertSchemaValue(label: string, value: unknown, schema: JsonSchema): void {
+  if (schema.oneOf) {
+    const matches = schema.oneOf.filter((branch) => schemaValueMatches(value, branch)).length;
+    if (matches !== 1) throw new Error(`${label} does not match exactly one allowed schema.`);
+  }
+  if (schema.anyOf && !schema.anyOf.some((branch) => schemaValueMatches(value, branch))) {
+    throw new Error(`${label} does not match any allowed schema.`);
+  }
+  if (schema.not && schemaValueMatches(value, schema.not)) {
+    throw new Error(`${label} matches a forbidden schema.`);
+  }
+  if (schema.type && !schemaTypeMatches(value, schema.type)) {
+    const expected = Array.isArray(schema.type) ? schema.type.join(" or ") : schema.type;
+    throw new Error(`${label} must be ${article(expected)} ${expected}.`);
+  }
+  if (schema.enum && !schema.enum.includes(value as JsonPrimitive)) {
+    throw new Error(`${label} must be one of ${schema.enum.join(", ")}.`);
+  }
+  if (typeof value === "number" && schema.minimum != null && value < schema.minimum) {
+    throw new Error(`${label} must be at least ${schema.minimum}.`);
+  }
+  if (typeof value === "string" && schema.minLength != null && value.length < schema.minLength) {
+    throw new Error(`${label} must contain at least ${schema.minLength} character(s).`);
+  }
+  if (Array.isArray(value)) {
+    if (schema.minItems != null && value.length < schema.minItems) {
+      throw new Error(`${label} must contain at least ${schema.minItems} item(s).`);
+    }
+    if (schema.maxItems != null && value.length > schema.maxItems) {
+      throw new Error(`${label} must contain at most ${schema.maxItems} item(s).`);
+    }
+    if (schema.items) {
+      value.forEach((item, index) => assertSchemaValue(`${label}[${index}]`, item, schema.items!));
+    }
+  }
+  if (isObjectArgument(value)) {
+    for (const required of schema.required || []) {
+      if (!Object.hasOwn(value, required) || missingArgumentValue(value[required])) {
+        throw new Error(`${label}.${required} is required.`);
+      }
+    }
+    for (const [key, item] of Object.entries(value)) {
+      const property = schema.properties?.[key];
+      if (property) {
+        assertSchemaValue(`${label}.${key}`, item, property);
+        continue;
+      }
+      if (schema.additionalProperties === false) {
+        throw new Error(`${label}.${key} is not allowed.`);
+      }
+      if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+        assertSchemaValue(`${label}.${key}`, item, schema.additionalProperties);
+      }
+    }
+  }
+}
+
+function schemaValueMatches(value: unknown, schema: JsonSchema): boolean {
+  try {
+    assertSchemaValue("Value", value, schema);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function schemaTypeMatches(value: unknown, type: string | string[]): boolean {
+  const types = Array.isArray(type) ? type : [type];
+  return types.some((candidate) => {
+    if (candidate === "null") return value === null;
+    if (candidate === "array") return Array.isArray(value);
+    if (candidate === "object") return isObjectArgument(value);
+    if (candidate === "integer") return typeof value === "number" && Number.isInteger(value);
+    if (candidate === "number") return typeof value === "number" && Number.isFinite(value);
+    return typeof value === candidate;
+  });
+}
+
+function isObjectArgument(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function article(value: string): "a" | "an" {
+  return /^[aeiou]/i.test(value) ? "an" : "a";
 }
 
 function toCamel(value: string) {

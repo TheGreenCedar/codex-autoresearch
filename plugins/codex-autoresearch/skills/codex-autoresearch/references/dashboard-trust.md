@@ -10,7 +10,7 @@ Keep the dashboard read-only. Run setup, packets, logging, gap work, export, and
 
 Treat a payload-unavailable screen as a trust blocker. Follow its safe `export` or `serve` recovery guidance; do not describe the missing readout as evidence. Demo data is valid only when an explicit showcase marker is visible. If live refresh fails, report that the dashboard is showing its last validated readout rather than current state.
 
-Read the focused operate view first: status, blocker, action, and safe command come from the canonical decision. Use audit for deeper evidence, not a different answer. A static export is a file artifact, so share the HTML itself; never copy or present its local `file://` location as a usable readout URL.
+Read the focused operate view first: status, blocker, and action come from the canonical `DecisionPlan`. The terminal and dashboard must agree on decision ID, phase, action kind, blocker code, parent disposition, contract digest, and evaluator identity. The dashboard may omit or redact executable commands. Use audit for deeper evidence, not a different answer. A static export is a file artifact, so share the HTML itself; never copy or present its local `file://` location as a usable readout URL.
 
 ## Check the proof before the claim
 
@@ -27,8 +27,10 @@ Keep `review_required` results provisional until review is recorded. Treat bench
 
 ## Protect the control and the command boundary
 
-Keep `protectedBenchmarkPaths` small enough to fingerprint and review. Move an intentional change to benchmark meaning into a new segment.
+Keep evaluator, check, fixture, parser, dataset, environment-file, and runner inputs outside editable scope and small enough to fingerprint and review. Move an intentional change to their meaning or identity into a complete replacement contract and new segment.
 
 When config contains `fixedControl`, reuse its artifact. Do not run a matching forbidden command unless the user explicitly approves `--allow-fixed-control-rerun`.
 
 Benchmark and checks commands are not sandboxed. Review them, keep secrets out of command lines and output, and treat persisted redaction as best-effort only.
+
+If the dashboard and terminal disagree, preserve both readouts and stop session mutation. Compare their decision and generation IDs before diagnosing runtime or source drift; never choose the more convenient projection.

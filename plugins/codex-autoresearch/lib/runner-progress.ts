@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { ProcessTreeTermination } from "./runner.js";
+import type { ProcessSpawnState, ProcessTreeTermination } from "./runner.js";
 
 type LooseObject = Record<string, any>;
 
@@ -18,6 +18,8 @@ export interface RunnerProgressSnapshot {
   elapsedSeconds: number;
   staleProgressReason: string;
   finalArtifactSummary: string;
+  spawnError: string | null;
+  spawnState: ProcessSpawnState;
   termination: ProcessTreeTermination | null;
   terminationFailed: boolean;
 }
@@ -75,6 +77,8 @@ export function createProgressSnapshot({
     elapsedSeconds: 0,
     staleProgressReason: "",
     finalArtifactSummary: "",
+    spawnError: null,
+    spawnState: "unknown",
     termination: null,
     terminationFailed: false,
   };
@@ -101,6 +105,8 @@ export function finishProgressSnapshot(
     crashed = false,
     terminationFailed = false,
     termination = null,
+    spawnState,
+    spawnError,
     timeoutPhase = "",
     completedAt = new Date().toISOString(),
     artifacts = [],
@@ -127,6 +133,12 @@ export function finishProgressSnapshot(
       artifactCount > 0
         ? `${artifactCount} artifact${artifactCount === 1 ? "" : "s"} linked`
         : "No linked artifacts",
+    spawnError:
+      spawnError == null ? snapshot.spawnError : String(spawnError).trim() || snapshot.spawnError,
+    spawnState:
+      spawnState === "spawned" || spawnState === "failed-before-spawn"
+        ? spawnState
+        : snapshot.spawnState,
     termination: termination || snapshot.termination || null,
     terminationFailed: Boolean(terminationFailed),
   };
@@ -180,6 +192,8 @@ export function progressSnapshotFromRun({
     timeoutPhase: run.timeoutPhase || (run.timedOut ? "benchmark" : "none"),
     terminationFailed: run.terminationFailed,
     termination: run.termination || null,
+    spawnState: run.spawnState,
+    spawnError: run.spawnError,
     completedAt: finishedAt,
     artifacts,
   });

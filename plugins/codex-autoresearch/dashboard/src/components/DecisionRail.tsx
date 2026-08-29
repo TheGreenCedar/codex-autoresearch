@@ -16,8 +16,8 @@ export function DecisionRail({
 }) {
   const action = (viewModel.nextBestAction || {}) as NextBestAction;
   const summary = recordFrom(viewModel.decisionEnvelopeSummary);
-  const envelope = recordFrom(viewModel.decisionEnvelope);
-  const operatorDecision = operatorDecisionFor({ action, envelope, readout, summary });
+  const decisionPlan = recordFrom(viewModel.decisionPlanProjection);
+  const operatorDecision = operatorDecisionFor({ action, decisionPlan, readout, summary });
   const chips = evidenceChipsFor(viewModel, action, readout);
   const reportCopy = useCopyText();
   const handoffCopy = useCopyText();
@@ -68,7 +68,7 @@ export function DecisionRail({
                 {operatorDecision.command ? (
                   <code translate="no">{operatorDecision.command}</code>
                 ) : (
-                  "Continue in the CLI; this readout exposes no safe command."
+                  "Redacted here. Continue in the CLI."
                 )}
               </dd>
             </div>
@@ -81,6 +81,19 @@ export function DecisionRail({
             <strong>{String(summary.title || action.title || "Next action")}</strong>
             <em>{canonicalDecisionMeta(summary)}</em>
           </div>
+          <dl
+            className="operator-decision-summary decision-plan-audit"
+            aria-label="Decision identity"
+          >
+            {decisionPlanAuditFields(decisionPlan).map((field) => (
+              <div data-decision-plan-field={field.key} key={field.key}>
+                <dt>{field.label}</dt>
+                <dd id={`decision-plan-${field.key}`}>
+                  {field.code ? <code translate="no">{field.value}</code> : field.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
           <div
             className="evidence-chips"
             id="decision-evidence-chips"
@@ -145,44 +158,79 @@ export function DecisionRail({
 
 function operatorDecisionFor({
   action,
-  envelope,
+  decisionPlan,
   readout,
   summary,
 }: {
   action: NextBestAction;
-  envelope: Record<string, unknown>;
+  decisionPlan: Record<string, unknown>;
   readout: DashboardReadout;
   summary: Record<string, unknown>;
 }) {
-  const actionRecord = action as Record<string, unknown>;
-  const primaryCommand = recordFrom(actionRecord.primaryCommand);
-  const blocker = cleanText(envelope.strongestBlocker);
+  const planAction = recordFrom(decisionPlan.action);
+  const display = recordFrom(decisionPlan.display);
+  const blocker = cleanText(decisionPlan.primaryBlockerCode);
   return {
     title: String(summary.title || action.title || "Review the next safe step"),
-    status: operatorStatus(envelope.resolvedStatus, blocker),
-    blocker:
-      blocker ||
-      (String(envelope.resolvedStatus || "").toLowerCase() === "blocked"
-        ? "Review the blocking evidence before continuing."
-        : "No blocker reported."),
+    status: operatorStatus(decisionPlan),
+    blocker: blocker || "No blocker reported.",
     action:
+      cleanText(display.actionReason) ||
       cleanText(summary.detail) ||
       cleanText(action.detail) ||
       cleanText(readout.nextAction) ||
       "Run a packet to generate the next measured step.",
-    command:
-      cleanText(summary.command) ||
-      cleanText(actionRecord.command) ||
-      cleanText(primaryCommand.command),
+    command: cleanText(planAction.command),
   };
 }
 
-function operatorStatus(value: unknown, blocker: string) {
-  const status = cleanText(value).toLowerCase();
-  if (status === "blocked" || blocker) return "Blocked";
-  if (status === "ready") return "Ready to continue";
-  if (status === "complete") return "Ready for review";
+function operatorStatus(decisionPlan: Record<string, unknown>) {
+  const loop = recordFrom(decisionPlan.loopDisposition);
+  const parent = recordFrom(decisionPlan.parentDisposition);
+  if (loop.kind === "blocked" || parent.kind === "block-final-answer") return "Blocked";
+  if (loop.kind === "complete") return "Ready for review";
+  if (loop.kind === "pause") return "Direct work only";
+  if (loop.kind === "continue") return "Ready to continue";
   return "Needs review";
+}
+
+function decisionPlanAuditFields(decisionPlan: Record<string, unknown>) {
+  const action = recordFrom(decisionPlan.action);
+  const parent = recordFrom(decisionPlan.parentDisposition);
+  return [
+    {
+      key: "decision-id",
+      label: "Decision ID",
+      value: cleanText(decisionPlan.decisionId),
+      code: true,
+    },
+    { key: "phase", label: "Phase", value: cleanText(decisionPlan.phase), code: false },
+    { key: "action-kind", label: "Action kind", value: cleanText(action.kind), code: false },
+    {
+      key: "blocker-code",
+      label: "Blocker code",
+      value: cleanText(decisionPlan.primaryBlockerCode) || "None",
+      code: false,
+    },
+    {
+      key: "parent-disposition",
+      label: "Parent disposition",
+      value: cleanText(parent.kind),
+      code: false,
+    },
+    {
+      key: "contract-digest",
+      label: "Contract digest",
+      value: cleanText(decisionPlan.contractDigest),
+      code: true,
+    },
+    {
+      key: "evaluator-identity",
+      label: "Evaluator identity",
+      value: cleanText(decisionPlan.evaluatorIdentity),
+      code: true,
+    },
+  ].map((field) => ({ ...field, value: field.value || "Unavailable" }));
 }
 
 function canonicalDecisionMeta(summary: Record<string, unknown>) {

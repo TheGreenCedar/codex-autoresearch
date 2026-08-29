@@ -8,17 +8,123 @@ export interface ActionMetadata {
   label: string;
   commandLabel: string;
   safeAction: string;
-  packetBrake: boolean;
   fallbackKeys: string[];
 }
 
 export const ACTION_METADATA: Record<string, ActionMetadata> = {
+  "recover-session": actionMetadata({
+    label: "Recover session integrity",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["ledgerDoctor", "doctorExplain", "state"],
+  }),
+  "repair-goal": actionMetadata({
+    label: "Repair the goal contract",
+    commandLabel: "Goal",
+    safeAction: "codex-goal-brief",
+    fallbackKeys: ["codexGoalBrief", "state"],
+  }),
+  "request-approval": actionMetadata({
+    label: "Request scoped approval",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["state", "doctor"],
+  }),
+  "pause-packets": actionMetadata({
+    label: "Pause packet execution",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["state", "recommendNext"],
+  }),
+  "repair-scaffold": actionMetadata({
+    label: "Repair the session scaffold",
+    commandLabel: "Setup",
+    safeAction: "setup-plan",
+    fallbackKeys: ["setupPlan", "state"],
+  }),
+  "review-dirty-source": actionMetadata({
+    label: "Review the dirty source tree",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["state", "doctor"],
+  }),
+  "transition-segment": actionMetadata({
+    label: "Transition the accepted segment",
+    commandLabel: "Segment",
+    safeAction: "new-segment",
+    fallbackKeys: ["newSegmentDryRun", "state"],
+  }),
+  "inspect-process": actionMetadata({
+    label: "Inspect the active process",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["stateCompact", "state", "doctor"],
+  }),
+  "replace-packet": actionMetadata({
+    label: "Replace the stale packet",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["stateCompact", "state"],
+  }),
+  "inspect-packet": actionMetadata({
+    label: "Inspect packet diagnostics",
+    commandLabel: "Partial",
+    safeAction: "partial-results",
+    fallbackKeys: ["partialResults", "state"],
+  }),
+  "configure-benchmark": actionMetadata({
+    label: "Configure the benchmark",
+    commandLabel: "Setup",
+    safeAction: "setup-plan",
+    fallbackKeys: ["setupPlan", "state"],
+  }),
+  "configure-checks": actionMetadata({
+    label: "Configure accepted checks",
+    commandLabel: "Doctor",
+    safeAction: "doctor",
+    fallbackKeys: ["doctor", "setupPlan", "state"],
+  }),
+  "collect-evidence": actionMetadata({
+    label: "Collect accepted evidence",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["state", "recommendNext"],
+  }),
+  "run-baseline": actionMetadata({
+    label: "Run the accepted baseline",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["state"],
+  }),
+  "distill-context": actionMetadata({
+    label: "Distill session context",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["onboardingPacket", "state"],
+  }),
+  "direct-work": actionMetadata({
+    label: "Continue unrelated direct work",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["state", "recommendNext"],
+  }),
+  finalize: actionMetadata({
+    label: "Preview finalization",
+    commandLabel: "Preview",
+    safeAction: "finalize-preview",
+    fallbackKeys: ["finalizePreview", "state"],
+  }),
+  "run-packet": actionMetadata({
+    label: "Run the next accepted packet",
+    commandLabel: "State",
+    safeAction: "state",
+    fallbackKeys: ["state"],
+  }),
   "termination-failed": actionMetadata({
     label: "Verify process termination",
     commandLabel: "State",
     safeAction: "state",
     fallbackKeys: ["state", "doctor"],
-    packetBrake: true,
   }),
   "gate-quality": actionMetadata({
     label: "Repair gate quality",
@@ -55,14 +161,12 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     label: "Run baseline",
     commandLabel: "Next",
     safeAction: "next",
-    packetBrake: false,
     fallbackKeys: ["next", "nextRun", "baseline"],
   }),
   "needs-evidence": actionMetadata({
     label: "Record gap evidence",
     commandLabel: "Gap decision",
     safeAction: "gap-decide",
-    packetBrake: true,
     fallbackKeys: ["gapDecide", "gapCandidates", "state"],
   }),
   "current-tree-finalization": actionMetadata({
@@ -70,7 +174,6 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     commandLabel: "Preview current-tree finalization",
     safeAction: "finalize-current-tree",
     fallbackKeys: ["finalizeCurrentTree", "finalizePreview", "state"],
-    packetBrake: true,
   }),
   "finalization-runway": actionMetadata({
     label: "Inspect finalization runway",
@@ -232,28 +335,24 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     label: "Run next packet",
     commandLabel: "Next",
     safeAction: "next",
-    packetBrake: false,
     fallbackKeys: ["next", "nextRun"],
   }),
   baseline: actionMetadata({
     label: "Run baseline",
     commandLabel: "Next",
     safeAction: "next",
-    packetBrake: false,
     fallbackKeys: ["baseline", "next", "nextRun"],
   }),
   plateau: actionMetadata({
     label: "Pivot plateau",
     commandLabel: "Next",
     safeAction: "next",
-    packetBrake: false,
     fallbackKeys: ["next", "nextRun"],
   }),
   "plateau-pivot": actionMetadata({
     label: "Pivot plateau",
     commandLabel: "Scout",
     safeAction: "lane-runner",
-    packetBrake: true,
     fallbackKeys: [
       "laneRunner",
       "newSegmentDryRun",
@@ -266,7 +365,6 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     label: "Close quality gaps",
     commandLabel: "Gaps",
     safeAction: "gap-candidates",
-    packetBrake: false,
     fallbackKeys: ["gapCandidates"],
   }),
 };
@@ -319,15 +417,13 @@ export function withCanonicalActionCommand(
     ...envelope,
     canonicalNextAction: {
       ...action,
-      command: resolveActionCommand(kind, commands, { explicitCommand: action.command }),
+      command: resolveActionCommand(kind, commands, {
+        explicitCommand: action.command,
+      }),
       safeAction: action.safeAction || actionSafeActionForKind(kind, kind),
       toolName: action.toolName || actionToolNameForKind(kind),
     },
   };
-}
-
-export function isPacketBrakeKind(kind: unknown): boolean {
-  return actionMetadataForKind(kind)?.packetBrake === true;
 }
 
 export function resolveActionCommand(
@@ -387,12 +483,9 @@ function actionMetadata({
   label,
   commandLabel,
   safeAction,
-  packetBrake = true,
   fallbackKeys,
-}: Omit<ActionMetadata, "packetBrake"> & {
-  packetBrake?: boolean;
-}): ActionMetadata {
-  return { label, commandLabel, safeAction, packetBrake, fallbackKeys };
+}: ActionMetadata): ActionMetadata {
+  return { label, commandLabel, safeAction, fallbackKeys };
 }
 
 export { normalizeActionCommandKey } from "./safe-command-resolver.js";

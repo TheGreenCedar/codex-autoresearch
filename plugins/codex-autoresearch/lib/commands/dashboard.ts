@@ -197,6 +197,7 @@ export async function exportDashboard(args: UnknownRecord, runtime: DashboardRun
   const dashboardContext = {
     deliveryMode,
     generatedAt,
+    requestedCwd: String(args.working_dir || args.cwd || workDir),
     sourceCwd,
     pluginVersion: PLUGIN_VERSION,
     runtimeDrift,

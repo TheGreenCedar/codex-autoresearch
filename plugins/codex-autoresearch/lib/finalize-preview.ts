@@ -6,6 +6,11 @@ import { StringDecoder } from "node:string_decoder";
 import { renderShellCommand } from "./command-rendering.js";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { productGradeFinalizationIssue } from "./finalization-acceptance.js";
+import {
+  blockedFinalizationDecisionFact,
+  buildFinalizationDecisionFact,
+  type FinalizationDecisionFact,
+} from "./finalization-decision-fact.js";
 import { classifyFinalizationRunwayFromFacts } from "./finalization-runway.js";
 import { parseNameStatusZ } from "./git-paths.js";
 import {
@@ -18,7 +23,8 @@ import { buildFinalizationProductClaimCoverageFromLedger } from "./product-claim
 import { resolvePackageRoot } from "./runtime-paths.js";
 import { isAutoresearchSessionArtifact } from "./session-artifacts.js";
 import { readActiveSessionDecisionCapsule } from "./session-decision-capsule.js";
-import { resolveFinalizationDecision } from "./session-read-model.js";
+import { loadCanonicalSessionDecision } from "./session-decision.js";
+import { projectCompactDecisionPlan, projectResolvedDecision } from "./decision-projection.js";
 
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 const FINALIZATION_GIT_PROBE_CONCURRENCY = 4;
@@ -70,7 +76,8 @@ export async function finalizePreview(args: LooseObject) {
   emitProgress(args, "finalize-preview", `checking Git state in ${workDir}`);
   const inside = await gitOk(["rev-parse", "--is-inside-work-tree"], workDir);
   if (!inside.ok || inside.stdout.trim() !== "true") {
-    return withProgress(
+    captureFinalizationDecisionFact(args, blockedFinalizationDecisionFact());
+    return await withProgress(
       {
         ok: true,
         workDir,
@@ -81,13 +88,17 @@ export async function finalizePreview(args: LooseObject) {
       },
       startedAt,
       "blocked",
+      "finalize-preview",
+      args.canonicalDecisionProjection !== false,
     );
   }
 
   const branch = (await git(["branch", "--show-current"], workDir)).stdout.trim();
   const dirty = (await git(["status", "--porcelain=v1", "-z"], workDir)).stdout;
   emitProgress(args, "finalize-preview", "reading autoresearch ledger and kept commits");
-  const ledgerEntries = await readLedgerEntries(workDir);
+  const ledgerEntries = Array.isArray(args.capturedRecords)
+    ? args.capturedRecords
+    : await readLedgerEntries(workDir);
   const ledgerRuns = ledgerEntries.filter((entry: LooseObject) => entry.run != null) as KeptRun[];
   const keptRuns = ledgerEntries.filter(isAcceptedCurrentRun) as KeptRun[];
   const productClaimCoverage = buildFinalizationProductClaimCoverageFromLedger(ledgerEntries);
@@ -99,15 +110,6 @@ export async function finalizePreview(args: LooseObject) {
     sourceBranch: branch,
     groups,
   });
-  const capsuleFinalizationBlocked =
-    sessionDecisionCapsule?.enforcement?.blocksFinalization === true;
-  if (capsuleFinalizationBlocked) {
-    warnings.push(
-      sessionDecisionCapsule.nextExperiment ||
-        sessionDecisionCapsule.enforcement.clearingCondition ||
-        "Resolve the active decision capsule before finalization.",
-    );
-  }
   const overlaps = findGroupFileOverlaps(groups);
   emitProgress(args, "finalize-preview", "checking current final tree coverage");
   const finalTreePlan = await buildFinalTreePlan(workDir, trunk, groups);
@@ -124,18 +126,16 @@ export async function finalizePreview(args: LooseObject) {
   if (productGradeIssue) warnings.push(productGradeIssue);
   appendSourceBranchWarnings(warnings, { dirty, branch, trunk, overlaps });
 
-  const ready =
-    !capsuleFinalizationBlocked &&
-    isFinalizePreviewReady({
-      groups,
-      dirty,
-      branch,
-      trunk,
-      baseOk: finalTreePlan.baseOk,
-      finalTreeCoverage: finalTreePlan.finalTreeCoverage,
-      excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
-      semanticSafety,
-    });
+  const ready = isFinalizePreviewReady({
+    groups,
+    dirty,
+    branch,
+    trunk,
+    baseOk: finalTreePlan.baseOk,
+    finalTreeCoverage: finalTreePlan.finalTreeCoverage,
+    excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
+    semanticSafety,
+  });
   const planOutput = await defaultPlanOutput(workDir, branch || "autoresearch");
   const planArgv = [
     process.execPath,
@@ -150,34 +150,36 @@ export async function finalizePreview(args: LooseObject) {
     "--trunk",
     trunk,
   ];
-  const nextAction = capsuleFinalizationBlocked
-    ? sessionDecisionCapsule?.nextExperiment ||
-      sessionDecisionCapsule?.enforcement?.clearingCondition ||
-      "Resolve the active decision capsule before finalization."
-    : finalizePreviewNextAction({
-        ready,
-        productGradeIssue,
-        semanticSafety,
-        excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
-        finalTreeCoverage: finalTreePlan.finalTreeCoverage,
-        excludedCommits: finalTreePlan.excludedCommits,
-        groups,
-        keptRuns,
-        missingCommitCount,
-      });
-  const actionCode = capsuleFinalizationBlocked
-    ? "decision-capsule"
-    : finalizePreviewActionCode({
-        ready,
-        semanticSafety,
-        excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
-        finalTreeCoverage: finalTreePlan.finalTreeCoverage,
-        excludedCommits: finalTreePlan.excludedCommits,
-        groups,
-        keptRuns,
-        missingCommitCount,
-      });
-  return withProgress(
+  const nextAction = finalizePreviewNextAction({
+    ready,
+    productGradeIssue,
+    semanticSafety,
+    excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
+    finalTreeCoverage: finalTreePlan.finalTreeCoverage,
+    excludedCommits: finalTreePlan.excludedCommits,
+    groups,
+    keptRuns,
+    missingCommitCount,
+  });
+  const actionCode = finalizePreviewActionCode({
+    ready,
+    semanticSafety,
+    excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
+    finalTreeCoverage: finalTreePlan.finalTreeCoverage,
+    excludedCommits: finalTreePlan.excludedCommits,
+    groups,
+    keptRuns,
+    missingCommitCount,
+  });
+  captureFinalizationDecisionFact(
+    args,
+    buildFinalizationDecisionFact({
+      ready,
+      currentTreeRecovery: actionCode === "current-tree-finalization",
+      acceptedEvidenceCount: groups.length,
+    }),
+  );
+  return await withProgress(
     {
       ok: true,
       workDir,
@@ -188,7 +190,6 @@ export async function finalizePreview(args: LooseObject) {
       groups,
       missingCommitCount,
       excludedCommits: finalTreePlan.excludedCommits,
-      excludedHistoryCommits: finalTreePlan.excludedCommits,
       excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
       finalTreeCoverage: finalTreePlan.finalTreeCoverage,
       semanticSafety,
@@ -224,7 +225,14 @@ export async function finalizePreview(args: LooseObject) {
     },
     startedAt,
     ready ? "completed" : "blocked",
+    "finalize-preview",
+    args.canonicalDecisionProjection !== false,
   );
+}
+
+function captureFinalizationDecisionFact(args: LooseObject, fact: FinalizationDecisionFact): void {
+  const capture = args.captureCanonicalDecisionFact;
+  if (typeof capture === "function") capture(fact);
 }
 
 async function buildFinalizationRunwaySummary({
@@ -527,7 +535,7 @@ export async function finalizeCurrentTree(args: LooseObject) {
     : (args.exclude_session_artifacts ?? args.excludeSessionArtifacts ?? true);
   const inside = await gitOk(["rev-parse", "--is-inside-work-tree"], workDir);
   if (!inside.ok || inside.stdout.trim() !== "true") {
-    return withProgress(
+    return await withProgress(
       {
         ok: true,
         workDir,
@@ -624,7 +632,7 @@ export async function finalizeCurrentTree(args: LooseObject) {
     await fsp.mkdir(path.dirname(planOutput), { recursive: true });
     await fsp.writeFile(planOutput, `${JSON.stringify(planWithFingerprint, null, 2)}\n`, "utf8");
   }
-  return withProgress(
+  return await withProgress(
     {
       ok: true,
       workDir,
@@ -742,20 +750,32 @@ async function defaultCurrentTreePlanOutput(workDir: string, branch: string): Pr
   );
 }
 
-function withProgress(
+async function withProgress(
   result: LooseObject,
   startedAt: number,
   status: string,
   kind: ProgressKind = "finalize-preview",
-): LooseObject {
+  projectDecision = true,
+): Promise<LooseObject> {
   const durationSeconds = Number(((Date.now() - startedAt) / 1000).toFixed(3));
   const label =
     kind === "finalize-current-tree"
       ? "Preview current final tree review unit"
       : "Preview review branch readiness";
+  const decision = projectDecision
+    ? await loadCanonicalSessionDecision({
+        requestedCwd: String(result.workDir || process.cwd()),
+        facts: { finalization: result },
+      })
+    : null;
   return {
     ...result,
-    resolvedDecision: resolveFinalizationDecision(result, kind),
+    ...(decision?.ok
+      ? { decisionPlanProjection: projectCompactDecisionPlan(decision.plan) }
+      : decision
+        ? { snapshotDiagnostic: decision.diagnostic }
+        : {}),
+    ...(decision?.ok ? { resolvedDecision: projectResolvedDecision(decision.plan) } : {}),
     progress: {
       mode: "synchronous",
       status,
