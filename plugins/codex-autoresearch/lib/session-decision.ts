@@ -1,3 +1,5 @@
+import { captureOutcomeInputs } from "./outcome-inputs.js";
+import { assertLegacyUnchanged } from "./outcome-store.js";
 import {
   loadCoherentSessionSnapshot,
   CoherentSnapshotSourceError,
@@ -44,6 +46,7 @@ import {
 } from "./finalization-decision-fact.js";
 
 export interface SessionDecisionFacts {
+  outcomeFacts?: CoherentSessionSnapshot["outcomeFacts"];
   finalization?: UnknownRecord | null;
   finalizationDecisionFact?: FinalizationDecisionFact | null;
   finalizationClaimRequired?: boolean;
@@ -59,6 +62,7 @@ export class CanonicalSessionSourceError extends CoherentSnapshotSourceError {
 }
 
 export interface SessionDecisionFactCollection {
+  outcomeFacts?: CoherentSessionSnapshot["outcomeFacts"];
   finalization: UnknownRecord | null;
   finalizationDecisionFact: FinalizationDecisionFact | null;
   finalizationClaimRequired: boolean;
@@ -140,6 +144,11 @@ export function compileSessionDecision(
   snapshot: CoherentSessionSnapshot,
   facts: SessionDecisionFacts = {},
 ): DecisionPlan {
+  if (snapshot.outcome)
+    return compileDecisionPlan(
+      { ...snapshot, outcomeFacts: facts.outcomeFacts },
+      facts.diagnostics || [],
+    );
   const packetFreshness = Object.hasOwn(facts, "packetFreshness")
     ? facts.packetFreshness || null
     : packetFreshnessFromSnapshot(snapshot);
@@ -158,6 +167,38 @@ export async function collectSessionDecisionFacts(
   snapshot: CoherentSessionSnapshot,
   overrides: SessionDecisionFacts = {},
 ): Promise<SessionDecisionFactCollection> {
+  if (snapshot.outcome) {
+    let outcomeFacts: NonNullable<CoherentSessionSnapshot["outcomeFacts"]> = {
+      input: null,
+      drift: null,
+    };
+    try {
+      await assertLegacyUnchanged(snapshot.outcome);
+      const environment =
+        snapshot.outcome.executions.at(-1)?.action.environment ??
+        snapshot.outcome.contract.authorization.environments[0];
+      outcomeFacts = {
+        input: await captureOutcomeInputs(snapshot.workDir, environment),
+        drift: null,
+      };
+    } catch (error) {
+      outcomeFacts.drift = error instanceof Error ? error.message : String(error);
+    }
+    return {
+      outcomeFacts,
+      finalization: null,
+      finalizationDecisionFact: null,
+      finalizationClaimRequired: false,
+      diagnostics: [...(overrides.diagnostics ?? [])],
+      scaffoldHealth: {},
+      warningDetails: [],
+      sourceCleanliness: {},
+      packetDiagnostics: {},
+      packetFreshness: null,
+      guidance: {},
+      qualityGap: null,
+    };
+  }
   const state = stateFromSessionRecords(snapshot.workDir, snapshot.records);
   const scaffoldHealth = (await buildScaffoldHealth({
     workDir: snapshot.workDir,

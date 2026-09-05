@@ -13,7 +13,11 @@ import {
   type PrivateStateSpec,
   type PrivateStateTarget,
 } from "./git-private-state.js";
-import { sessionMutationLockLocation, withSessionMutationLock } from "./session-mutation-lock.js";
+import {
+  currentSessionMutationLockContext,
+  sessionMutationLockLocation,
+  withSessionMutationLock,
+} from "./session-mutation-lock.js";
 import { resolveSessionPaths } from "./session-paths.js";
 import { parseJsonlRecords } from "./session-records.js";
 import { pendingLogTransactionStateSpec } from "./pending-log-transaction-store.js";
@@ -77,6 +81,7 @@ export async function withOutcomeMutation<T>(
   operation: (state: OutcomeState, location: PrivateStateTarget) => Promise<T>,
   additionalLegacyWorktrees: string[] = [],
 ): Promise<T> {
+  const ownedLegacyLock = currentSessionMutationLockContext()?.lockPath;
   const location = await outcomeStateLocation(cwd);
   const lock = await sessionMutationLockLocation(location.root);
   return await withSessionMutationLock(
@@ -97,6 +102,7 @@ export async function withOutcomeMutation<T>(
           await saveOutcome(location, state);
           return result;
         },
+        ownedLegacyLock,
       );
     },
     `${lock.path}.outcome`,
@@ -115,6 +121,7 @@ export async function startOutcome(
   input: unknown,
   options: { adopt?: boolean } = {},
 ): Promise<OutcomeState> {
+  const ownedLegacyLock = currentSessionMutationLockContext()?.lockPath;
   const contract = await canonicalContract(input);
   await assertAuthorizedWorktree(contract, cwd);
   const location = await outcomeStateLocation(cwd);
@@ -134,48 +141,56 @@ export async function startOutcome(
           "An outcome already exists. Amend its accepted authority explicitly; starting again cannot reset its budget.",
         );
       }
-      return await withLegacyLocks(contract.authorization.worktrees, async () => {
-        for (const worktree of contract.authorization.worktrees)
-          await assertLegacyQuiescent(worktree);
-        const sources = (
-          await Promise.all(contract.authorization.worktrees.map(captureLegacySources))
-        ).flat();
-        if (!options.adopt && sources.some((item) => item.digest !== "missing"))
-          throw new Error(
-            "Legacy session state exists. Use outcome adopt to preserve its history and establish a remaining allowance.",
-          );
-        const state: OutcomeState = {
-          schemaVersion: 3,
-          revision: 1,
-          contract,
-          history: [
-            {
-              contract,
-              at: new Date().toISOString(),
-              authorization: contract.authorization.reference,
-              reason: options.adopt
-                ? "Adopted with an explicit remaining allowance"
-                : "Outcome accepted",
-            },
-          ],
-          reservations: [],
-          legacySources: sources,
-          lifecycle: { kind: "active" },
-          adoption: options.adopt
-            ? {
-                allowance: "remaining",
-                priorConsumption: {
-                  kind: "unknown",
-                  reason:
-                    "Legacy model, execution, preparation, and review costs are not reconstructible from a complete trusted accounting record.",
-                },
-              }
-            : null,
-        };
-        await assertLegacyUnchanged(state);
-        await saveOutcome(location, state);
-        return state;
-      });
+      return await withLegacyLocks(
+        contract.authorization.worktrees,
+        async () => {
+          for (const worktree of contract.authorization.worktrees)
+            await assertLegacyQuiescent(worktree);
+          const sources = (
+            await Promise.all(contract.authorization.worktrees.map(captureLegacySources))
+          ).flat();
+          if (!options.adopt && sources.some((item) => item.digest !== "missing"))
+            throw new Error(
+              "Legacy session state exists. Use outcome adopt to preserve its history and establish a remaining allowance.",
+            );
+          const state: OutcomeState = {
+            schemaVersion: 3,
+            revision: 1,
+            contract,
+            history: [
+              {
+                contract,
+                at: new Date().toISOString(),
+                authorization: contract.authorization.reference,
+                reason: options.adopt
+                  ? "Adopted with an explicit remaining allowance"
+                  : "Outcome accepted",
+              },
+            ],
+            reservations: [],
+            investigations: [],
+            executions: [],
+            evidence: [],
+            evaluators: [],
+            legacySources: sources,
+            lifecycle: { kind: "active" },
+            adoption: options.adopt
+              ? {
+                  allowance: "remaining",
+                  priorConsumption: {
+                    kind: "unknown",
+                    reason:
+                      "Legacy model, execution, preparation, and review costs are not reconstructible from a complete trusted accounting record.",
+                  },
+                }
+              : null,
+          };
+          await assertLegacyUnchanged(state);
+          await saveOutcome(location, state);
+          return state;
+        },
+        ownedLegacyLock,
+      );
     },
     `${lock.path}.outcome`,
   );
@@ -358,8 +373,14 @@ async function assertAuthorizedWorktree(contract: OutcomeContract, cwd: string):
     throw new Error("This worktree is outside the accepted outcome authorization.");
 }
 
-async function withLegacyLocks<T>(worktrees: string[], operation: () => Promise<T>): Promise<T> {
-  const locks = await Promise.all([...worktrees].sort().map(sessionMutationLockLocation));
+async function withLegacyLocks<T>(
+  worktrees: string[],
+  operation: () => Promise<T>,
+  ownedLegacyLock?: string,
+): Promise<T> {
+  const locks = (await Promise.all([...worktrees].sort().map(sessionMutationLockLocation))).filter(
+    (lock) => lock.path !== ownedLegacyLock,
+  );
   const enter = async (index: number): Promise<T> => {
     const lock = locks[index];
     return lock

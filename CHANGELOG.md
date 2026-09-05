@@ -8,6 +8,8 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased - 3.0 candidate
 
+- Add the outcome command family, bounded action tickets, exact resume identities, and predicate observations without metrics. Linked investigations retain cumulative costs and immutable evaluator versions; ordinary benchmark sessions remain usable.
+
 - Separate valid observations, metric movement, target attainment, and code acceptance. Legacy learning prose no longer controls continuation; repeated failures honor the accepted limit and exact defect identity.
 
 - Outcomes retain their original authorization and cumulative resource accounting across investigations. Governed work requires an explicit budget; linked worktrees share reservations, and uncertain execution retains its resource exposure.

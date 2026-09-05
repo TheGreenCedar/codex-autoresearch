@@ -174,6 +174,20 @@ const observationValidators: Record<
         "First-use routing did not produce an actionable unaccepted contract.",
       );
     }
+    const governed = asRecord(observations.governed, "governed investigation");
+    if (
+      governed.ticketId !== "A1" ||
+      governed.resumedId !== "A1" ||
+      governed.validity !== "valid" ||
+      governed.conclusion !== "refuted" ||
+      governed.remainingActions !== 1 ||
+      governed.status !== "active" ||
+      governed.legacyLedgerExists !== false
+    )
+      failCase(
+        "decision-consistency",
+        "Governed investigation lost its reservation, observation, or legacy isolation.",
+      );
     const terminalPlans = asRecordArray(observations.terminalPlans, "terminal decision plans");
     const dashboardPlan = asRecord(observations.dashboardPlan, "dashboard decision plan");
     const [terminalPlan] = terminalPlans;
@@ -444,8 +458,122 @@ async function decisionConsistency(root: string): Promise<Record<string, unknown
   return {
     terminalPlans,
     dashboardPlan,
+    governed: await governedInvestigation(root, env),
     firstUse,
     dashboardCommandOmitted: !string(nestedRecord(plans[3], "action").command),
+  };
+}
+
+async function governedInvestigation(
+  root: string,
+  env: NodeJS.ProcessEnv,
+): Promise<Record<string, unknown>> {
+  const cwd = path.join(root, "governed-investigation");
+  await fsp.mkdir(cwd);
+  const contractFile = path.join(root, "outcome-contract.json");
+  const actionFile = path.join(root, "outcome-action.json");
+  const observationFile = path.join(root, "outcome-observation.json");
+  await fsp.writeFile(
+    contractFile,
+    JSON.stringify({
+      id: "operator-outcome",
+      objective: "Assess synthetic compatibility",
+      criteria: [
+        {
+          id: "compatibility",
+          description: "Fixture output matches",
+          authority: "internal",
+          subject: "candidate",
+        },
+      ],
+      authorization: {
+        reference: "operator-test-budget",
+        worktrees: [cwd],
+        editable: ["src"],
+        protected: [],
+        effects: ["inspect"],
+        environments: ["local"],
+        delivery: "answer",
+      },
+      budget: { actions: 2 },
+    }),
+  );
+  await fsp.writeFile(
+    actionFile,
+    JSON.stringify({
+      id: "A1",
+      investigation: {
+        id: "H1",
+        question: "Does the synthetic example match?",
+        intervention: "Inspect its output",
+        distinguishingObservations: ["match", "counterexample"],
+        evidenceRefs: [],
+      },
+      purpose: "experiment",
+      effects: ["inspect"],
+      paths: [],
+      environment: "local",
+      seconds: 30,
+      mode: "managed",
+      argv: [],
+      evidenceRefs: [],
+      evaluator: {
+        id: "predicate-v1",
+        criterionIds: ["compatibility"],
+        method: { kind: "predicate" },
+        repeats: 1,
+        argv: [],
+        checkArgv: [],
+        environment: "local",
+      },
+    }),
+  );
+  await fsp.writeFile(
+    observationFile,
+    JSON.stringify({
+      id: "E1",
+      executionId: "A1",
+      criterionId: "compatibility",
+      text: "Synthetic counterexample",
+      completed: true,
+      observation: { observed: "counterexample" },
+      resolution: "refuted",
+    }),
+  );
+  expectJsonSuccess(
+    await runNode(
+      cli,
+      ["outcome", "start", "--cwd", cwd, "--contract-file", contractFile],
+      pluginRoot,
+      env,
+    ),
+  );
+  const next = expectJsonSuccess(
+    await runNode(cli, ["next", "--cwd", cwd, "--action-file", actionFile], pluginRoot, env),
+  );
+  const resumed = expectJsonSuccess(
+    await runNode(cli, ["next", "--cwd", cwd, "--resume", "A1"], pluginRoot, env),
+  );
+  const logged = expectJsonSuccess(
+    await runNode(
+      cli,
+      ["log", "--cwd", cwd, "--observation-file", observationFile],
+      pluginRoot,
+      env,
+    ),
+  );
+  const read = expectJsonSuccess(await runNode(cli, ["state", "--cwd", cwd], pluginRoot, env));
+  return {
+    ticketId: nestedRecord(next, "actionTicket").id,
+    resumedId: nestedRecord(resumed, "execution").id,
+    validity: nestedRecord(logged, "evidence", "result").validity,
+    conclusion: nestedRecord(logged, "evidence", "result").conclusion,
+    remainingActions: nestedRecord(read, "investigation", "remaining").actions,
+    status: nestedRecord(read, "investigation").status,
+    legacyLedgerExists: await fsp.access(path.join(cwd, "autoresearch.jsonl")).then(
+      () => true,
+      () => false,
+    ),
   };
 }
 

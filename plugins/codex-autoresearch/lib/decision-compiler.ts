@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
+import { renderShellCommand } from "./command-rendering.js";
+import { resolvePackageRoot } from "./runtime-paths.js";
+import { hashOutcomeValue, outcomeUsage, type DeliveryEndpoint } from "./outcome-contract.js";
 import {
   classifyResult,
   isResultSemantics,
@@ -36,6 +40,10 @@ export type DecisionCapability = (typeof DECISION_CAPABILITIES)[number];
 export type CapabilityStatus = "allowed" | "blocked" | "recovery-only";
 
 export const DECISION_ACTION_KINDS = [
+  "propose-action",
+  "execute-ticket",
+  "resume-execution",
+  "stopped-unmet",
   "accept-legacy-contract",
   "collect-evidence",
   "complete",
@@ -74,6 +82,12 @@ export const DECISION_OUTCOME_KINDS = [
 export type DecisionOutcomeKind = (typeof DECISION_OUTCOME_KINDS)[number];
 
 export type DecisionDiagnosticCode =
+  | "outcome-active"
+  | "outcome-ticket"
+  | "outcome-outstanding"
+  | "outcome-stopped"
+  | "outcome-budget-exhausted"
+  | "outcome-input-drift"
   | "active-process"
   | "approval-required"
   | "benchmark-required"
@@ -149,6 +163,38 @@ const KEEP_ONLY: readonly DecisionCapability[] = ["authorize-keep"];
 const FINALIZE_ONLY: readonly DecisionCapability[] = ["finalize"];
 
 export const decisionDiagnosticRegistry = {
+  "outcome-active": {
+    ...guidancePolicy(35, "direct-work", "propose-action"),
+    blocked: ["authorize-keep", "finalize"],
+  },
+  "outcome-ticket": {
+    ...guidancePolicy(30, "direct-work", "execute-ticket"),
+    blocked: ["run-packet", "authorize-keep", "finalize"],
+  },
+  "outcome-outstanding": blockedPolicy(5, "recovery", "resume-execution", [
+    "run-packet",
+    "authorize-keep",
+    "finalize",
+  ]),
+  "outcome-stopped": blockedPolicy(
+    24,
+    "paused",
+    "stopped-unmet",
+    ["run-packet", "authorize-keep", "finalize"],
+    "pause",
+  ),
+  "outcome-budget-exhausted": blockedPolicy(
+    24,
+    "paused",
+    "stopped-unmet",
+    ["run-packet", "authorize-keep", "finalize"],
+    "pause",
+  ),
+  "outcome-input-drift": blockedPolicy(4, "recovery", "recover-session", [
+    "run-packet",
+    "authorize-keep",
+    "finalize",
+  ]),
   "coherent-snapshot-unavailable": recoveryPolicy(0, DECISION_CAPABILITIES),
   "coherent-snapshot-source-invalid": recoveryPolicy(0, DECISION_CAPABILITIES),
   "pending-log-transaction-inconsistent": recoveryPolicy(1, ALL_EXCEPT_MUTATE, ["mutate-session"]),
@@ -275,6 +321,23 @@ export const failureLayerPreconditions: Record<FailureLayer, readonly string[]> 
   "external-infrastructure": ["externalDependencyIdentity", "externalObservation"],
 };
 
+export interface OutcomeDecisionProjection {
+  id: string;
+  objective: string;
+  status: "active" | "blocked" | "satisfied" | "stopped-unmet";
+  question: string | null;
+  executionId: string | null;
+  remaining: {
+    actions: number | null;
+    executionSeconds: number | null;
+    deadline: string | null;
+    unknownExecutions: number;
+  };
+  unresolvedCriteria: string[];
+  delivery: { endpoint: DeliveryEndpoint; status: "pending" | "ready" | "delivered" };
+  inputDigest: string | null;
+}
+
 export interface DecisionPlan {
   kind: "decision-plan";
   compilerSchemaVersion: 1;
@@ -310,6 +373,7 @@ export interface DecisionPlan {
     failureLayer: FailureLayer | null;
     failurePreconditions: readonly string[];
   };
+  investigation: OutcomeDecisionProjection | null;
   outcome: ResultSemantics & {
     /** Compatibility alias for metric movement; inspect validity and attainment separately. */
     kind: DecisionOutcomeKind;
@@ -352,6 +416,7 @@ export function isDecisionPlan(value: unknown): value is DecisionPlan {
       "outcome",
       "learning",
       "failures",
+      "investigation",
     ]) ||
     value.kind !== "decision-plan" ||
     value.compilerSchemaVersion !== DECISION_COMPILER_SCHEMA_VERSION ||
@@ -433,6 +498,8 @@ export function isDecisionPlan(value: unknown): value is DecisionPlan {
   ) {
     return false;
   }
+  if (value.investigation !== null && !isOutcomeDecisionProjection(value.investigation))
+    return false;
   const outcome = isUnknownRecord(value.outcome) ? value.outcome : null;
   if (
     !outcome ||
@@ -499,9 +566,17 @@ export function compileDecisionPlan(
   snapshot: CoherentSessionSnapshot,
   diagnostics: readonly DecisionDiagnostic[],
 ): DecisionPlan {
-  const learning = classifyLearning(snapshot);
-  const failures = classifyFailures(snapshot);
-  const automatic: DecisionDiagnostic[] = [];
+  const learning: DecisionPlan["learning"] = snapshot.outcome
+    ? {
+        latest: { kind: "none", changedBelief: null, evidence: [] },
+        consecutiveNoLearningCandidates: 0,
+      }
+    : classifyLearning(snapshot);
+  const failures: DecisionPlan["failures"] = snapshot.outcome
+    ? { layer: null, consecutive: 0 }
+    : classifyFailures(snapshot);
+  const governed = snapshot.outcome ? compileOutcomeInvestigation(snapshot) : null;
+  const automatic: DecisionDiagnostic[] = governed ? governed.diagnostics : [];
   if (snapshot.pendingTransaction) {
     automatic.push(decisionDiagnostic(snapshot.pendingTransaction.diagnosticCode));
   }
@@ -524,7 +599,7 @@ export function compileDecisionPlan(
       }),
     );
   }
-  const completionReady = validatedCompletionEvidence(snapshot);
+  const completionReady = snapshot.outcome ? null : validatedCompletionEvidence(snapshot);
   if (completionReady)
     automatic.push(decisionDiagnostic("completion-ready", { semantic: completionReady }));
   if (
@@ -591,11 +666,19 @@ export function compileDecisionPlan(
     capabilities,
     loopDisposition,
     parentDisposition,
-    contractDigest: snapshot.semanticFacts.contractDigest,
-    evaluatorIdentity: snapshot.semanticFacts.evaluatorIdentity,
+    contractDigest: snapshot.outcome?.contract.digest ?? snapshot.semanticFacts.contractDigest,
+    evaluatorIdentity: snapshot.outcome
+      ? (snapshot.outcome.executions.at(-1)?.action.evaluator?.digest ?? "")
+      : snapshot.semanticFacts.evaluatorIdentity,
     requiredEvidence: {
-      preconditionEpoch: snapshot.semanticFacts.preconditionEpoch,
-      acceptedCheckIdentities: snapshot.semanticFacts.acceptedCheckIdentities,
+      preconditionEpoch: snapshot.outcome
+        ? `${snapshot.outcome.contract.digest}@${snapshot.outcomeFacts?.input?.digest ?? "unknown"}`
+        : snapshot.semanticFacts.preconditionEpoch,
+      acceptedCheckIdentities: snapshot.outcome
+        ? snapshot.outcome.executions.at(-1)?.action.evaluator?.checkArgv.length
+          ? [hashOutcomeValue(snapshot.outcome.executions.at(-1)!.action.evaluator!.checkArgv)]
+          : []
+        : snapshot.semanticFacts.acceptedCheckIdentities,
       diagnosticCodes: normalizedDiagnostics.map((diagnostic) => diagnostic.code),
       capabilityEffectCodes: Object.entries(compiledCapabilities).flatMap(([capability, value]) =>
         value.diagnosticCodes.map((code) => `${code}:${capability}:${value.status}`),
@@ -603,7 +686,13 @@ export function compileDecisionPlan(
       failureLayer: failures.layer,
       failurePreconditions: failures.layer ? failureLayerPreconditions[failures.layer] : [],
     },
-    outcome: classifyOutcome(snapshot),
+    investigation: governed?.projection ?? null,
+    outcome: snapshot.outcome
+      ? resultOutcome(
+          snapshot.outcome.executions.at(-1)?.result ??
+            classifyResult({ kind: "invalid", execution: "unknown" }),
+        )
+      : classifyOutcome(snapshot),
     learning,
     failures,
   };
@@ -1200,8 +1289,8 @@ function isProvenExternalInfrastructureFailure(
   );
 }
 
-function classifyOutcome(snapshot: CoherentSessionSnapshot): DecisionPlan["outcome"] {
-  const project = (result: ResultSemantics): DecisionPlan["outcome"] => ({
+function resultOutcome(result: ResultSemantics): DecisionPlan["outcome"] {
+  return {
     ...result,
     kind:
       result.movement === "unknown"
@@ -1209,8 +1298,11 @@ function classifyOutcome(snapshot: CoherentSessionSnapshot): DecisionPlan["outco
           ? "uncompared"
           : "invalid"
         : result.movement,
-  });
-  const unknown = () => project(classifyResult({ kind: "invalid", execution: "unknown" }));
+  };
+}
+
+function classifyOutcome(snapshot: CoherentSessionSnapshot): DecisionPlan["outcome"] {
+  const unknown = () => resultOutcome(classifyResult({ kind: "invalid", execution: "unknown" }));
   const latest = latestAcceptedCandidateRun(snapshot);
   if (!latest) return unknown();
   const acceptance = isAcceptedCurrentRun(latest)
@@ -1222,10 +1314,10 @@ function classifyOutcome(snapshot: CoherentSessionSnapshot): DecisionPlan["outco
   // Legacy checks_failed includes timeout and harness failure; a predicate
   // observation is required to establish a valid counterexample.
   if (failure || latest.status === "crash" || latest.status === "checks_failed")
-    return project(classifyResult({ kind: "invalid", execution: "failed" }, acceptance));
+    return resultOutcome(classifyResult({ kind: "invalid", execution: "failed" }, acceptance));
   const metric = finiteNumber(latest.metric);
   if (metric === null)
-    return project(classifyResult({ kind: "invalid", execution: "completed" }, acceptance));
+    return resultOutcome(classifyResult({ kind: "invalid", execution: "completed" }, acceptance));
   const contract = acceptedContract(snapshot.records, snapshot.semanticFacts.contractDigest);
   const semantics = isUnknownRecord(contract?.metric) ? contract.metric : null;
   if (!semantics) return unknown();
@@ -1264,7 +1356,7 @@ function classifyOutcome(snapshot: CoherentSessionSnapshot): DecisionPlan["outco
         ? Math.min(...referenceValues)
         : Math.max(...referenceValues);
   const noise = isUnknownRecord(contract?.noise) ? contract.noise : null;
-  return project(
+  return resultOutcome(
     classifyResult(
       {
         kind: "metric",
@@ -1382,6 +1474,7 @@ function decisionIdForPlan(
       contractDigest: plan.contractDigest,
       evaluatorIdentity: plan.evaluatorIdentity,
       requiredEvidence: plan.requiredEvidence,
+      investigation: plan.investigation,
       outcome: plan.outcome,
       learning: plan.learning,
       failures: plan.failures,
@@ -1414,4 +1507,151 @@ function sha256(value: string): string {
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function compileOutcomeInvestigation(snapshot: CoherentSessionSnapshot): {
+  projection: OutcomeDecisionProjection;
+  diagnostics: DecisionDiagnostic[];
+} {
+  const state = snapshot.outcome!;
+  const usage = outcomeUsage(state);
+  const budget = state.contract.budget;
+  const outstanding = state.executions.find(
+    (receipt) => !["completed", "failed", "cancelled"].includes(receipt.status.kind),
+  );
+  const remaining = {
+    actions: budget.actions === null ? null : Math.max(0, budget.actions - usage.actions),
+    executionSeconds:
+      budget.executionSeconds === null
+        ? null
+        : Math.max(0, budget.executionSeconds - usage.measuredSeconds - usage.reservedSeconds),
+    deadline: budget.deadline,
+    unknownExecutions: usage.unknownExecutions,
+  };
+  const exhausted =
+    remaining.actions === 0 ||
+    remaining.executionSeconds === 0 ||
+    (budget.deadline !== null && Date.parse(budget.deadline) <= Date.now());
+  const drift =
+    snapshot.outcomeFacts?.drift ??
+    (!snapshot.outcomeFacts?.input ? "Complete current input provenance is unavailable." : null);
+  let code: DecisionDiagnosticCode = drift
+    ? "outcome-input-drift"
+    : state.lifecycle.kind === "stopped-unmet"
+      ? "outcome-stopped"
+      : outstanding
+        ? outstanding.status.kind === "ticket"
+          ? "outcome-ticket"
+          : "outcome-outstanding"
+        : exhausted
+          ? "outcome-budget-exhausted"
+          : "outcome-active";
+  if (usage.unknownExecutions && !drift) code = "outcome-outstanding";
+  const status = ["outcome-stopped", "outcome-budget-exhausted"].includes(code)
+    ? "stopped-unmet"
+    : ["outcome-input-drift", "outcome-outstanding"].includes(code)
+      ? "blocked"
+      : "active";
+  const question =
+    state.investigations.find((item) => item.id === outstanding?.action.investigation.id)
+      ?.question ??
+    [...state.investigations].reverse().find((item) => item.resolution === "active")?.question ??
+    null;
+  const projection: OutcomeDecisionProjection = {
+    id: state.contract.id,
+    objective: state.contract.objective,
+    status,
+    question,
+    executionId: outstanding?.id ?? null,
+    remaining,
+    unresolvedCriteria: state.contract.criteria.map((criterion) => criterion.id),
+    delivery: { endpoint: state.contract.authorization.delivery, status: "pending" },
+    inputDigest: snapshot.outcomeFacts?.input?.digest ?? null,
+  };
+  const messages: Partial<Record<DecisionDiagnosticCode, string>> = {
+    "outcome-active": "Propose the next bounded action within the accepted outcome grant.",
+    "outcome-ticket": "Complete the authorized action ticket, then log its observation.",
+    "outcome-outstanding": "Resume and reconcile the existing execution; do not relaunch it.",
+    "outcome-stopped":
+      "This outcome stopped unmet. Preserve unresolved criteria and the remaining allowance for a resumable handoff.",
+    "outcome-budget-exhausted":
+      "The accepted cumulative allowance is exhausted. Hand back unresolved criteria; renewed work requires an explicit amendment.",
+    "outcome-input-drift": drift ?? "Input provenance changed.",
+  };
+  const args = outstanding
+    ? ["next", "--cwd", outstanding.worktree, "--resume", outstanding.id]
+    : code === "outcome-active"
+      ? ["next", "--cwd", snapshot.workDir, "--action-file", "<action.json>"]
+      : [
+          "outcome",
+          "amend",
+          "--cwd",
+          snapshot.workDir,
+          "--contract-file",
+          "<contract.json>",
+          "--authorization",
+          "<reference>",
+          "--reason",
+          "<reason>",
+        ];
+  const command = renderShellCommand([
+    process.execPath,
+    path.join(resolvePackageRoot(import.meta.url), "scripts", "autoresearch.mjs"),
+    ...args,
+  ]);
+  return {
+    projection,
+    diagnostics: [
+      decisionDiagnostic(code, {
+        message: messages[code],
+        command,
+        semantic: { outcome: projection },
+      }),
+    ],
+  };
+}
+
+function isOutcomeDecisionProjection(value: unknown): value is OutcomeDecisionProjection {
+  if (
+    !isUnknownRecord(value) ||
+    !hasExactKeys(value, [
+      "id",
+      "objective",
+      "status",
+      "question",
+      "executionId",
+      "remaining",
+      "unresolvedCriteria",
+      "delivery",
+      "inputDigest",
+    ])
+  )
+    return false;
+  const remaining = isUnknownRecord(value.remaining) ? value.remaining : null;
+  const delivery = isUnknownRecord(value.delivery) ? value.delivery : null;
+  return (
+    nonEmptyString(value.id) &&
+    nonEmptyString(value.objective) &&
+    typeof value.status === "string" &&
+    ["active", "blocked", "satisfied", "stopped-unmet"].includes(value.status) &&
+    (value.question === null || nonEmptyString(value.question)) &&
+    (value.executionId === null || nonEmptyString(value.executionId)) &&
+    (value.inputDigest === null || nonEmptyString(value.inputDigest)) &&
+    isStringArray(value.unresolvedCriteria) &&
+    remaining !== null &&
+    hasExactKeys(remaining, ["actions", "executionSeconds", "deadline", "unknownExecutions"]) &&
+    (remaining.actions === null || isNonnegativeInteger(remaining.actions)) &&
+    (remaining.executionSeconds === null ||
+      (typeof remaining.executionSeconds === "number" &&
+        Number.isFinite(remaining.executionSeconds) &&
+        remaining.executionSeconds >= 0)) &&
+    (remaining.deadline === null || nonEmptyString(remaining.deadline)) &&
+    isNonnegativeInteger(remaining.unknownExecutions) &&
+    delivery !== null &&
+    hasExactKeys(delivery, ["endpoint", "status"]) &&
+    typeof delivery.endpoint === "string" &&
+    ["answer", "patch", "integrated", "deployed"].includes(delivery.endpoint) &&
+    typeof delivery.status === "string" &&
+    ["pending", "ready", "delivered"].includes(delivery.status)
+  );
 }

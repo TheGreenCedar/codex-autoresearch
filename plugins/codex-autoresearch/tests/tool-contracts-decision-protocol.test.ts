@@ -36,6 +36,7 @@ const DECISION_PLAN_FIELDS = [
   "evaluatorIdentity",
   "requiredEvidence",
   "outcome",
+  "investigation",
   "learning",
   "failures",
 ] as const;

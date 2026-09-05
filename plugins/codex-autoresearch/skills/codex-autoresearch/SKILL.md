@@ -150,3 +150,12 @@ npm run check
 ```
 
 Dashboard-visible changes also require a served or exported visual inspection and `npm run test:dashboard:browser`. Run `git diff --check` for every change.
+
+
+## Governed investigations
+
+Use an outcome when the user requests an investigation that spans preparation, experiments, repairs, confirmation, and delivery. Require an explicit cumulative action limit, execution-time limit, or deadline before starting governed work. Never invent an allowance. Continue the state-free direct-work path for ordinary work that does not need this governance.
+
+Read [bounded investigations](../../docs/investigations.md) for the outcome and action contracts. Carry accepted scope and effects forward. Propose each substantial action through `next --action-file`; group meaningful work rather than recording every tool call. Execute a managed ticket only within its grant, and log actual observations by execution and criterion identity. References must resolve to recorded observations and receipts. Their existence proves provenance, not a causal interpretation.
+
+A refuted hypothesis closes that investigation, not the outcome. Reuse the outcome for a different method or evaluator version without restoring allowance. Material changes to the objective, criteria, population, effects, or budget need a corresponding authorization reference on `outcome amend`. If execution is unresolved, use `next --resume`; never infer zero consumption or launch a replacement. On exhausted allowance, provide unresolved criteria and a resumable handoff without claiming completion.

@@ -45,6 +45,15 @@ const validObservations: Record<OperatorTaskCase, Record<string, unknown>> = {
     terminalPlans: Array.from({ length: 3 }, () => ({ ...plan })),
     dashboardPlan: { ...plan },
     dashboardCommandOmitted: true,
+    governed: {
+      ticketId: "A1",
+      resumedId: "A1",
+      validity: "valid",
+      conclusion: "refuted",
+      remainingActions: 1,
+      status: "active",
+      legacyLedgerExists: false,
+    },
     firstUse: {
       completeDisposition: "run-loop",
       completeSessionRelation: "none",

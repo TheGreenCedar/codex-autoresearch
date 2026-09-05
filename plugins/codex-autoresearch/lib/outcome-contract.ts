@@ -1,4 +1,14 @@
 import { createHash } from "node:crypto";
+import {
+  parseInvestigation,
+  parseExecutionReceipt,
+  parseInvestigationEvidence,
+  parseOutcomeEvaluator,
+  type InvestigationRecord,
+  type ExecutionReceipt,
+  type InvestigationEvidence,
+  type OutcomeEvaluator,
+} from "./investigation-records.js";
 import path from "node:path";
 
 import { normalizeRelativePaths } from "./literal-paths.js";
@@ -83,6 +93,10 @@ export interface OutcomeState {
   contract: OutcomeContract;
   history: Array<{ contract: OutcomeContract; at: string; authorization: string; reason: string }>;
   reservations: OutcomeReservation[];
+  investigations: InvestigationRecord[];
+  executions: ExecutionReceipt[];
+  evidence: InvestigationEvidence[];
+  evaluators: OutcomeEvaluator[];
   legacySources: LegacySource[];
   lifecycle: { kind: "active" } | { kind: "stopped-unmet"; at: string; reason: string };
   adoption: null | {
@@ -431,10 +445,66 @@ export function parseOutcomeState(value: unknown): OutcomeState {
     contract,
     history,
     reservations,
+    investigations: parseRecords(input.investigations, parseInvestigation, "investigations"),
+    executions: parseRecords(
+      input.executions,
+      (value) =>
+        parseExecutionReceipt(
+          value,
+          history.map((entry) => entry.contract),
+        ),
+      "executions",
+    ),
+    evidence: parseRecords(input.evidence, parseInvestigationEvidence, "evidence"),
+    evaluators: parseRecords(
+      input.evaluators,
+      (value) => {
+        const child = outcomeObject(value, "child evaluator");
+        const parent = history.find(
+          (entry) => entry.contract.digest === child.parentContractDigest,
+        )?.contract;
+        if (!parent) throw new Error("Evaluator's parent authorization is missing.");
+        return parseOutcomeEvaluator(value, parent);
+      },
+      "evaluators",
+    ),
     legacySources,
     lifecycle: parsedLifecycle,
     adoption,
   };
+  for (const execution of state.executions) {
+    const reservation = reservations.find((item) => item.id === execution.reservationId);
+    if (
+      !reservation ||
+      reservation.specificationDigest !== execution.action.digest ||
+      reservation.contractDigest !== execution.authorizationDigest ||
+      reservation.worktree !== execution.worktree
+    )
+      throw new Error("Execution does not match its durable reservation.");
+    if (!state.investigations.some((item) => item.id === execution.action.investigation.id))
+      throw new Error("Execution refers to an unknown investigation.");
+  }
+  for (const evidence of state.evidence) {
+    if (!state.executions.some((execution) => execution.id === evidence.executionId))
+      throw new Error("Evidence has no execution receipt.");
+    if (
+      evidence.dependencies.evidence.some((id) => !state.evidence.some((entry) => entry.id === id))
+    )
+      throw new Error("Evidence dependency is missing.");
+  }
   outcomeUsage(state);
   return state;
+}
+
+function parseRecords<T extends { id: string }>(
+  value: unknown,
+  parser: (value: unknown) => T,
+  label: string,
+): T[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array.`);
+  const records = value.map(parser);
+  if (new Set(records.map((record) => record.id)).size !== records.length)
+    throw new Error(`Duplicate ${label} identities.`);
+  return records;
 }

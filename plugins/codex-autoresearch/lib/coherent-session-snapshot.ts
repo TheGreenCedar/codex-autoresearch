@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { InputFingerprint } from "./investigation-records.js";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
@@ -144,6 +145,7 @@ export interface CoherentSessionSnapshot {
   };
   semanticFacts: SnapshotSemanticFacts;
   outcome?: OutcomeState | null;
+  outcomeFacts?: { input: InputFingerprint | null; drift: string | null };
 }
 
 export type CoherentSnapshotLoadResult =
