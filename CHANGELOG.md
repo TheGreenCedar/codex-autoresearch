@@ -6,6 +6,11 @@ This project uses a root-only changelog because the root README is the public do
 
 Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older entries that mention MCP servers, MCP tools, or MCP resources describe historical release surfaces before the 1.3.3 removal.
 
+## Unreleased - 3.0 candidate
+
+- Outcomes retain their original authorization and cumulative resource accounting across investigations. Governed work requires an explicit budget; linked worktrees share reservations, and uncertain execution retains its resource exposure.
+- Adoption preserves legacy session bytes and referenced artifacts with unknown historical costs. Subsequent legacy changes block dependent work instead of silently replacing imported evidence.
+
 ## 2.9.0 - 2026-09-05
 
 - Bound CI jobs to 15 minutes: run the full suite on Linux and focused native checks on macOS and Windows. Release reuses successful CI for its exact commit, then verifies the packaged artifact and provenance. Local full checks retain separate suite deadlines and report timeout causes.

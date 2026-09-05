@@ -41,6 +41,11 @@ const MEMBERS = [
   ["packet", (vector: SessionSnapshotVersionVector) => (vector.packet.hash = "packet-b")],
   ["receipt", (vector: SessionSnapshotVersionVector) => (vector.receipt.hash = "receipt-b")],
   ["process", (vector: SessionSnapshotVersionVector) => (vector.process.hash = "process-b")],
+  [
+    "outcome",
+    (vector: SessionSnapshotVersionVector) =>
+      (vector.outcome = { storage: "git-private", hash: "outcome-b" }),
+  ],
   ["HEAD", (vector: SessionSnapshotVersionVector) => (vector.git.head = "head-b")],
   ["index", (vector: SessionSnapshotVersionVector) => (vector.git.indexTree = "index-b")],
   ["status", (vector: SessionSnapshotVersionVector) => (vector.git.statusHash = "status-b")],

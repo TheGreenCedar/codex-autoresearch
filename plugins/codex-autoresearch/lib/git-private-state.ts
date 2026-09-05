@@ -17,6 +17,7 @@ export interface PrivateStateSpec {
   fallbackPath: string;
   gitRelativePath: string;
   label: string;
+  scope?: "worktree" | "repository";
 }
 
 export interface PrivateStateTarget {
@@ -101,6 +102,19 @@ export async function gitPrivateRoot(cwd: string): Promise<string> {
   return path.isAbsolute(gitDir) ? path.resolve(gitDir) : path.resolve(cwd, gitDir);
 }
 
+export async function gitCommonRoot(cwd: string): Promise<string> {
+  const result = await runGit(["rev-parse", "--git-common-dir"], cwd);
+  if (result.code !== 0 || result.stdoutTruncated)
+    throw new Error("Cannot establish shared repository state ownership.");
+  return await fsp.realpath(path.resolve(cwd, result.stdout.trim()));
+}
+
+async function privateSpecPath(cwd: string, spec: PrivateStateSpec): Promise<string> {
+  return spec.scope === "repository"
+    ? path.join(await gitCommonRoot(cwd), spec.gitRelativePath)
+    : await gitPrivatePath(cwd, spec.gitRelativePath);
+}
+
 export function privateStateFallbackAllowed(error: unknown): boolean {
   return Boolean(
     error &&
@@ -126,11 +140,16 @@ export async function resolvePrivateStateTarget(
     };
   }
 
-  const resolvedGitPath = await gitPrivatePath(workDir, spec.gitRelativePath);
+  const resolvedGitPath = await privateSpecPath(workDir, spec);
   const gitExists = await privateStatePathExists(resolvedGitPath);
   const fallbackExists = await privateStatePathExists(spec.fallbackPath);
   if (resolvedGitPath !== spec.fallbackPath && gitExists && fallbackExists) {
     throw new PrivateStateConflictError(spec.label, resolvedGitPath, spec.fallbackPath);
+  }
+  if (fallbackExists && spec.scope === "repository") {
+    throw new Error(
+      `Shared ${spec.label} cannot use worktree-local fallback storage. Reconcile ${spec.fallbackPath}.`,
+    );
   }
   if (fallbackExists) return fallbackTarget(workDir, spec, resolvedGitPath);
   return {
@@ -138,7 +157,8 @@ export async function resolvePrivateStateTarget(
     gitPrivatePath: resolvedGitPath,
     label: spec.label,
     path: resolvedGitPath,
-    root: await gitPrivateRoot(workDir),
+    root:
+      spec.scope === "repository" ? await gitCommonRoot(workDir) : await gitPrivateRoot(workDir),
     storageMode: "git-private",
     warning: "",
   };
@@ -150,7 +170,7 @@ export async function privateStateCandidatePaths(
 ): Promise<string[]> {
   const candidates = [spec.fallbackPath];
   if (await verifiedPrivateStateGitRepo(workDir)) {
-    candidates.unshift(await gitPrivatePath(workDir, spec.gitRelativePath));
+    candidates.unshift(await privateSpecPath(workDir, spec));
   }
   return [...new Set(candidates)];
 }
@@ -168,7 +188,12 @@ export async function writePrivateStateFile(
     await write(target.root, target.path, privateStateDataForTarget(data, target), options);
     return target;
   } catch (error) {
-    if (target.storageMode !== "git-private" || !privateStateFallbackAllowed(error)) throw error;
+    if (
+      spec.scope === "repository" ||
+      target.storageMode !== "git-private" ||
+      !privateStateFallbackAllowed(error)
+    )
+      throw error;
     if (await privateStatePathExists(spec.fallbackPath)) {
       throw new PrivateStateConflictError(spec.label, target.path, spec.fallbackPath);
     }
@@ -197,7 +222,12 @@ export async function preflightPrivateStateTarget(
     await probePrivateStateTarget(target, write, remove);
     return target;
   } catch (error) {
-    if (target.storageMode !== "git-private" || !privateStateFallbackAllowed(error)) throw error;
+    if (
+      spec.scope === "repository" ||
+      target.storageMode !== "git-private" ||
+      !privateStateFallbackAllowed(error)
+    )
+      throw error;
     if (await privateStatePathExists(spec.fallbackPath)) {
       throw new PrivateStateConflictError(spec.label, target.path, spec.fallbackPath);
     }

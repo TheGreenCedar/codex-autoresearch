@@ -27,6 +27,8 @@ import { resolveSessionPaths } from "./session-paths.js";
 import { REPORT_DIRNAME } from "./session-artifacts.js";
 import { isPathInside } from "./path-containment.js";
 import { isUnknownRecord, type UnknownRecord } from "./types/json.js";
+import { parseOutcomeState, type OutcomeState } from "./outcome-contract.js";
+import { outcomeStateLocation, readOutcomeLocation } from "./outcome-store.js";
 import {
   buildFinalizationEvidenceState,
   type FinalizationEvidenceFingerprint,
@@ -63,6 +65,7 @@ export interface SessionSnapshotVersionVector {
   process: StoredSourceVersion;
   completionAudit?: StoredSourceVersion;
   git: GitVersion;
+  outcome?: StoredSourceVersion;
 }
 
 export interface CapturedCompletionAudit {
@@ -81,6 +84,7 @@ export interface CapturedSessionSources {
   process: Uint8Array | null;
   gitTrust?: UnknownRecord | null;
   completionAudit?: CapturedCompletionAudit | null;
+  outcome?: Uint8Array | null;
 }
 
 export interface ResolvedSnapshotSource {
@@ -94,6 +98,7 @@ export interface ResolvedSnapshotLocations {
   packet: ResolvedSnapshotSource;
   receipt: ResolvedSnapshotSource;
   process: ResolvedSnapshotSource;
+  outcome?: ResolvedSnapshotSource & { root: string };
 }
 
 export interface CoherentSnapshotIo {
@@ -138,6 +143,7 @@ export interface CoherentSessionSnapshot {
     ledgerIssues: LedgerRecordIssue[];
   };
   semanticFacts: SnapshotSemanticFacts;
+  outcome?: OutcomeState | null;
 }
 
 export type CoherentSnapshotLoadResult =
@@ -377,6 +383,7 @@ export function parseCapturedSnapshot({
   const lastRunPacket = parseObject(captured.packet, "last-run packet");
   const pendingTransaction = parsePendingLogTransactionBytes(captured.receipt, captured.ledger);
   const processProgress = parseObject(captured.process, "active process progress");
+  const outcomeSource = parseObject(captured.outcome ?? null, "outcome state");
   return {
     kind: "coherent-session-snapshot",
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
@@ -384,6 +391,7 @@ export function parseCapturedSnapshot({
     sessionCwd,
     workDir,
     vector,
+    outcome: outcomeSource === null ? null : parseOutcomeState(outcomeSource),
     records,
     config,
     lastRunPacket,
@@ -431,10 +439,11 @@ const nodeSnapshotIo: CoherentSnapshotIo = {
   },
   async resolveLocations({ sessionCwd, workDir }) {
     const paths = resolveSessionPaths({ sessionCwd, workDir });
-    const [packet, receipt, process] = await Promise.all([
+    const [packet, receipt, process, outcome] = await Promise.all([
       resolvePrivateStateTarget(workDir, lastRunStateSpec(workDir)),
       resolvePrivateStateTarget(workDir, pendingLogTransactionStateSpec(workDir)),
       resolvePrivateStateTarget(workDir, progressStateSpec(workDir)),
+      outcomeStateLocation(workDir),
     ]);
     return {
       ledgerPath: paths.ledgerPath,
@@ -442,6 +451,7 @@ const nodeSnapshotIo: CoherentSnapshotIo = {
       packet: { path: packet.path, storage: packet.storageMode },
       receipt: { path: receipt.path, storage: receipt.storageMode },
       process: { path: process.path, storage: process.storageMode },
+      outcome: { path: outcome.path, storage: outcome.storageMode, root: outcome.root },
     };
   },
   async readVersionVector(locations, { workDir }) {
@@ -451,32 +461,51 @@ const nodeSnapshotIo: CoherentSnapshotIo = {
       readOptionalFile(locations.packet.path),
     ]);
     const trustConfig = parseObject(configBytes, "accepted config") || {};
-    const [ledger, config, packet, receipt, process, completionAudit, git] = await Promise.all([
-      ledgerVersion(locations.ledgerPath),
-      storedVersion(locations.configPath, "session"),
-      storedVersion(locations.packet.path, locations.packet.storage),
-      storedVersion(locations.receipt.path, locations.receipt.storage),
-      storedVersion(locations.process.path, locations.process.storage),
-      completionAuditVersion(workDir, ledgerBytes),
-      captureGitVersion(workDir, undefined, packetBytes ? trustConfig : undefined),
-    ]);
-    return { ledger, config, packet, receipt, process, completionAudit, git };
+    const [ledger, config, packet, receipt, process, completionAudit, git, outcome] =
+      await Promise.all([
+        ledgerVersion(locations.ledgerPath),
+        storedVersion(locations.configPath, "session"),
+        storedVersion(locations.packet.path, locations.packet.storage),
+        storedVersion(locations.receipt.path, locations.receipt.storage),
+        storedVersion(locations.process.path, locations.process.storage),
+        completionAuditVersion(workDir, ledgerBytes),
+        captureGitVersion(workDir, undefined, packetBytes ? trustConfig : undefined),
+        locations.outcome ? storedOutcomeVersion(locations.outcome) : Promise.resolve(undefined),
+      ]);
+    return {
+      ledger,
+      config,
+      packet,
+      receipt,
+      process,
+      completionAudit,
+      git,
+      ...(outcome ? { outcome } : {}),
+    };
   },
   async captureSources(locations, { workDir }) {
-    const [ledger, config, packet, receipt, process] = await Promise.all([
+    const [ledger, config, packet, receipt, process, outcome] = await Promise.all([
       readOptionalFile(locations.ledgerPath),
       readOptionalFile(locations.configPath),
       readOptionalFile(locations.packet.path),
       readOptionalFile(locations.receipt.path),
       readOptionalFile(locations.process.path),
+      locations.outcome ? readOutcomeLocation(locations.outcome) : Promise.resolve(null),
     ]);
     const [gitTrust, completionAudit] = await Promise.all([
       packet ? lastRunGitSnapshot(workDir, parseObject(config, "accepted config") || {}) : null,
       captureCompletionAudit(workDir, ledger),
     ]);
-    return { ledger, config, packet, receipt, process, gitTrust, completionAudit };
+    return { ledger, config, packet, receipt, process, gitTrust, completionAudit, outcome };
   },
 };
+
+async function storedOutcomeVersion(
+  location: ResolvedSnapshotSource & { root: string },
+): Promise<StoredSourceVersion> {
+  const bytes = await readOutcomeLocation(location);
+  return { storage: location.storage, hash: bytes === null ? MISSING_HASH : sha256(bytes) };
+}
 
 async function ledgerVersion(filePath: string): Promise<LedgerVersion> {
   try {
