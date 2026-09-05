@@ -1,3 +1,4 @@
+import { metricReference } from "./outcome-evidence.js";
 import { captureCandidateBase, createOwnedCandidatePatch } from "./outcome-artifacts.js";
 import { outcomeEvidenceDependencies, readOutcomeDependencyManifest } from "./evidence-registry.js";
 import { randomUUID } from "node:crypto";
@@ -48,7 +49,11 @@ export async function nominateOutcomeAction(
     }
     if (state.executions.some((receipt) => !terminalExecution(receipt)))
       throw new Error("Resume or reconcile the existing action before nominating another.");
-    assertEvidenceReferences(state, [...action.evidenceRefs, ...action.investigation.evidenceRefs]);
+    assertEvidenceReferences(state, [
+      ...action.evidenceRefs,
+      ...action.referenceEvidenceIds,
+      ...action.investigation.evidenceRefs,
+    ]);
     const investigation = state.investigations.find((item) => item.id === action.investigation.id);
     if (investigation) {
       const { resolution, resolutionEvidence: _evidence, ...proposal } = investigation;
@@ -102,6 +107,7 @@ export async function nominateOutcomeAction(
       input: null,
       reservationId: action.id,
       token: randomUUID(),
+      worker: null,
       status: { kind: "preparing", startedAt: new Date().toISOString() },
       outputs: [],
       result: null,
@@ -375,7 +381,7 @@ export async function logOutcomeObservation(
           receipt.result = classifyResult({
             kind: "metric",
             value: receipt.observation.value,
-            reference: null,
+            reference: metricReference(state, receipt, manifest),
             direction: evaluator.method.direction,
             minimumImprovement: evaluator.method.minimumImprovement,
             tolerance: evaluator.method.tolerance,

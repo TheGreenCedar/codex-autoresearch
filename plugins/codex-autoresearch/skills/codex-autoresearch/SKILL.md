@@ -163,3 +163,6 @@ A refuted hypothesis closes that investigation, not the outcome. Reuse the outco
 Use current criterion coverage when assessing evidence. A retained observation may be historically valid but inapplicable after its dependencies change. Do not count a cached receipt as a new repeat. Finer reuse requires an accepted, pinned dependency manifest; narrative claims about relevance do not replace it.
 
 Before discarding useful owned code, select only the paths to retain in the observation's `retainPatch` request. Retention is not code acceptance. Applying a retained patch requires a new authorized action and fresh scope and correctness assessment. Preserve preexisting dirty work. Reconcile legacy drift only after reviewing the changed sources and recording the corresponding authorization amendment; imported notes remain history.
+
+
+For governed process or GitHub Actions work, reserve through `next --action-file` and reconnect with `next --resume`; never replace an uncertain launch. Use `--cancel` on the existing execution. Distinguish verified execution provenance from externally controlled evaluator independence. Read [bounded investigations](../../docs/investigations.md) for the native observation boundary, confirmation receipt protocol, and cumulative accounting.

@@ -1,3 +1,4 @@
+import { verifiedOutcomeConfirmations } from "./github-confirmation.js";
 import { readOutcomeDependencyManifest } from "./evidence-registry.js";
 import { captureOutcomeInputs } from "./outcome-inputs.js";
 import { assertLegacyUnchanged } from "./outcome-store.js";
@@ -178,7 +179,10 @@ export async function collectSessionDecisionFacts(
       const environment =
         snapshot.outcome.executions.at(-1)?.action.environment ??
         snapshot.outcome.contract.authorization.environments[0];
+      const confirmations = await verifiedOutcomeConfirmations(snapshot.workDir, snapshot.outcome);
       outcomeFacts = {
+        verifiedConfirmationEvidence: [...confirmations.verified],
+        independentConfirmationEvidence: [...confirmations.independent],
         input: await captureOutcomeInputs(snapshot.workDir, environment),
         manifest: await readOutcomeDependencyManifest(snapshot.outcome, snapshot.workDir),
         drift: null,

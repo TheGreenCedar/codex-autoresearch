@@ -1525,7 +1525,13 @@ function compileOutcomeInvestigation(snapshot: CoherentSessionSnapshot): {
     executionSeconds:
       budget.executionSeconds === null
         ? null
-        : Math.max(0, budget.executionSeconds - usage.measuredSeconds - usage.reservedSeconds),
+        : Math.max(
+            0,
+            budget.executionSeconds -
+              usage.measuredSeconds -
+              usage.estimatedSeconds -
+              usage.reservedSeconds,
+          ),
     deadline: budget.deadline,
     unknownExecutions: usage.unknownExecutions,
   };
@@ -1562,6 +1568,8 @@ function compileOutcomeInvestigation(snapshot: CoherentSessionSnapshot): {
     state,
     input: snapshot.outcomeFacts?.input ?? null,
     manifest: snapshot.outcomeFacts?.manifest,
+    verifiedConfirmations: new Set(snapshot.outcomeFacts?.verifiedConfirmationEvidence ?? []),
+    independentConfirmations: new Set(snapshot.outcomeFacts?.independentConfirmationEvidence ?? []),
   });
   const unresolvedCriteria = coverage.criteria
     .filter((criterion) => criterion.status !== "satisfied")

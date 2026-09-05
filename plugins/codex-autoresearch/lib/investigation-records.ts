@@ -1,3 +1,7 @@
+import {
+  parseCandidateArtifactReference,
+  type CandidateArtifactReference,
+} from "./github-confirmation-records.js";
 import type { CriterionDependencyIdentity } from "./outcome-evidence.js";
 import {
   OUTCOME_EFFECTS,
@@ -63,6 +67,8 @@ export interface ActionSpecification {
   argv: string[];
   evaluator: OutcomeEvaluator | null;
   repairOf: string | null;
+  candidateArtifact: CandidateArtifactReference | null;
+  referenceEvidenceIds: string[];
   evidenceRefs: string[];
   digest: string;
 }
@@ -88,6 +94,17 @@ export type ExecutionStatus =
     }
   | { kind: "unknown"; reason: string; lastKnownPid: number | null };
 
+export interface OutcomeWorkerIdentity {
+  launchId: string;
+  observerPid: number;
+  observerIdentity: string | null;
+  attemptedAt: string;
+  pid: number | null;
+  identity: string | null;
+  child: null | { pid: number; identity: string | null };
+  cancelRequestedAt: string | null;
+}
+
 export interface ExecutionReceipt {
   id: string;
   authorizationDigest: string;
@@ -96,6 +113,7 @@ export interface ExecutionReceipt {
   input: InputFingerprint | null;
   reservationId: string;
   token: string;
+  worker: OutcomeWorkerIdentity | null;
   status: ExecutionStatus;
   outputs: Array<{ path: string; digest: string }>;
   result: ResultSemantics | null;
@@ -109,6 +127,7 @@ export interface ExecutionReceipt {
     | "worker-wall-clock"
     | "ticket-wall-clock"
     | "provider"
+    | "estimated"
     | "unknown";
   completedInput: InputFingerprint | null;
 }
@@ -261,6 +280,19 @@ export function parseActionSpecification(
     ["preparation", "experiment", "repair", "confirmation", "delivery"],
     "action purpose",
   );
+  const candidateArtifact =
+    input.candidateArtifact == null
+      ? null
+      : parseCandidateArtifactReference(input.candidateArtifact);
+  if (
+    mode === "github-actions" &&
+    (!parent.confirmation || !candidateArtifact || purpose !== "confirmation" || !evaluator)
+  )
+    throw new Error(
+      "GitHub confirmation requires an accepted evaluator boundary, candidate artifact, and confirmation evaluator.",
+    );
+  if (mode !== "github-actions" && candidateArtifact)
+    throw new Error("Remote candidate artifacts belong only to GitHub confirmation actions.");
   const repairOf = input.repairOf == null ? null : outcomeId(input.repairOf, "repair execution");
   if ((purpose === "repair") !== (repairOf !== null))
     throw new Error("Repair actions must identify the failed execution.");
@@ -282,6 +314,12 @@ export function parseActionSpecification(
       argv,
       evaluator,
       repairOf,
+      candidateArtifact,
+      referenceEvidenceIds: outcomeStrings(
+        input.referenceEvidenceIds ?? [],
+        "metric reference evidence",
+        true,
+      ),
       evidenceRefs: outcomeStrings(input.evidenceRefs ?? [], "action evidence references", true),
     },
     input.digest,
@@ -406,6 +444,7 @@ export function parseExecutionReceipt(
     input: input.input === null ? null : parseInputFingerprint(input.input),
     reservationId: action.id,
     token: outcomeString(input.token, "execution token"),
+    worker: input.worker == null ? null : parseOutcomeWorkerIdentity(input.worker),
     status: parseExecutionStatus(input.status),
     outputs: input.outputs.map((value) => {
       const output = outcomeObject(value, "execution output");
@@ -419,7 +458,7 @@ export function parseExecutionReceipt(
     checksPassed: input.checksPassed,
     consumptionSource: outcomeEnum(
       input.consumptionSource,
-      ["reserved", "worker-wall-clock", "ticket-wall-clock", "provider", "unknown"],
+      ["reserved", "worker-wall-clock", "ticket-wall-clock", "provider", "estimated", "unknown"],
       "consumption source",
     ),
     completedInput:
@@ -506,4 +545,26 @@ function commandArgv(value: unknown): string[] {
   )
     throw new Error("Executable arguments must be strings without NUL bytes.");
   return value.map((item) => String(item));
+}
+
+function parseOutcomeWorkerIdentity(value: unknown): OutcomeWorkerIdentity {
+  const input = outcomeObject(value, "worker launch identity");
+  const optionalString = (value: unknown) =>
+    value == null ? null : outcomeString(value, "process creation identity");
+  const child = input.child == null ? null : outcomeObject(input.child, "worker child identity");
+  return {
+    launchId: outcomeId(input.launchId, "worker launch ID"),
+    observerPid: boundedCount(input.observerPid, "observer PID", 1),
+    observerIdentity: optionalString(input.observerIdentity),
+    attemptedAt: outcomeTimestamp(input.attemptedAt, "launch attempt time"),
+    pid: input.pid == null ? null : boundedCount(input.pid, "worker PID", 1),
+    identity: optionalString(input.identity),
+    child: child
+      ? { pid: boundedCount(child.pid, "child PID", 1), identity: optionalString(child.identity) }
+      : null,
+    cancelRequestedAt:
+      input.cancelRequestedAt == null
+        ? null
+        : outcomeTimestamp(input.cancelRequestedAt, "cancellation time"),
+  };
 }

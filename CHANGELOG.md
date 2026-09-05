@@ -8,6 +8,8 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased - 3.0 candidate
 
+- Run bounded process actions in a durable packaged worker and reconnect without duplicate launches. GitHub Actions confirmation binds immutable candidates and evaluator authority to verified receipts, preserves disclosure history, and distinguishes provider usage from local observation and evaluator independence.
+
 - Track criterion-specific evidence applicability and preserve selected owned changes as immutable patches. Cached results do not add measurements; rejected candidates do not become accepted through artifact retention. Legacy drift reconciliation preserves both snapshots, and product proof requirements use explicit identities instead of goal wording.
 
 - Add the outcome command family, bounded action tickets, exact resume identities, and predicate observations without metrics. Linked investigations retain cumulative costs and immutable evaluator versions; ordinary benchmark sessions remain usable.

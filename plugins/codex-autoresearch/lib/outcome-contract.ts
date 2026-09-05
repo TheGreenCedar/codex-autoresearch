@@ -1,4 +1,10 @@
 import {
+  parseConfirmationAttempt,
+  parseConfirmationExposure,
+  type ConfirmationAttempt,
+  type ConfirmationExposure,
+} from "./github-confirmation-records.js";
+import {
   parseCandidateBase,
   parseRetainedCodePatch,
   type CandidateBase,
@@ -74,7 +80,8 @@ export interface OutcomeContract {
 export type ResourceSettlement =
   | { kind: "reserved" }
   | { kind: "unknown"; reason: string }
-  | { kind: "measured"; seconds: number };
+  | { kind: "measured"; seconds: number }
+  | { kind: "estimated"; seconds: number; reason: string };
 
 export interface OutcomeReservation {
   id: string;
@@ -104,6 +111,8 @@ export interface OutcomeState {
   executions: ExecutionReceipt[];
   evidence: InvestigationEvidence[];
   evaluators: OutcomeEvaluator[];
+  confirmations: ConfirmationAttempt[];
+  confirmationExposures: ConfirmationExposure[];
   candidateBases: CandidateBase[];
   retainedPatches: RetainedCodePatch[];
   legacySources: LegacySource[];
@@ -357,18 +366,25 @@ export function pathsOverlap(left: string, right: string): boolean {
 
 export function outcomeUsage(state: Pick<OutcomeState, "reservations">) {
   let measuredSeconds = 0;
+  let estimatedSeconds = 0;
   let reservedSeconds = 0;
   let unknownExecutions = 0;
   for (const reservation of state.reservations) {
     if (reservation.settlement.kind === "measured")
       measuredSeconds += reservation.settlement.seconds;
+    else if (reservation.settlement.kind === "estimated")
+      estimatedSeconds += reservation.settlement.seconds;
     else reservedSeconds += reservation.seconds;
     if (reservation.settlement.kind === "unknown") unknownExecutions += 1;
   }
-  outcomeNumber(measuredSeconds + reservedSeconds, "cumulative execution exposure");
+  outcomeNumber(
+    measuredSeconds + estimatedSeconds + reservedSeconds,
+    "cumulative execution exposure",
+  );
   return {
     actions: state.reservations.length,
     measuredSeconds,
+    estimatedSeconds,
     reservedSeconds,
     unknownExecutions,
     modelTokens: null,
@@ -383,6 +399,12 @@ export function parseResourceSettlement(value: unknown): ResourceSettlement {
       return { kind: "reserved" };
     case "unknown":
       return { kind: "unknown", reason: outcomeString(input.reason, "unknown consumption reason") };
+    case "estimated":
+      return {
+        kind: "estimated",
+        seconds: outcomeNumber(input.seconds, "estimated exposure seconds", Number.MIN_VALUE),
+        reason: outcomeString(input.reason, "estimation reason"),
+      };
     case "measured":
       return { kind: "measured", seconds: outcomeNumber(input.seconds, "measured seconds") };
     default:
@@ -521,6 +543,14 @@ export function parseOutcomeState(value: unknown): OutcomeState {
       },
       "evaluators",
     ),
+    confirmations: parseRecords(
+      input.confirmations,
+      parseConfirmationAttempt,
+      "confirmation attempts",
+    ),
+    confirmationExposures: Array.isArray(input.confirmationExposures)
+      ? input.confirmationExposures.map(parseConfirmationExposure)
+      : [],
     candidateBases: parseRecords(input.candidateBases, parseCandidateBase, "candidate bases"),
     retainedPatches: parseRecords(
       input.retainedPatches,
@@ -545,6 +575,24 @@ export function parseOutcomeState(value: unknown): OutcomeState {
     if (!state.investigations.some((item) => item.id === execution.action.investigation.id))
       throw new Error("Execution refers to an unknown investigation.");
   }
+  for (const attempt of state.confirmations) {
+    const execution = state.executions.find((entry) => entry.id === attempt.executionId);
+    if (
+      !execution ||
+      execution.action.mode !== "github-actions" ||
+      hashOutcomeValue(execution.action.candidateArtifact) !==
+        hashOutcomeValue(attempt.candidate) ||
+      execution.input?.digest !== attempt.inputDigest
+    )
+      throw new Error("Confirmation does not match its authorized candidate execution.");
+  }
+  for (const exposure of state.confirmationExposures)
+    if (
+      !state.confirmations.some(
+        (attempt) => attempt.id === exposure.attemptId && attempt.datasetId === exposure.datasetId,
+      )
+    )
+      throw new Error("Confirmation exposure has no matching attempt.");
   for (const artifact of [...state.candidateBases, ...state.retainedPatches]) {
     const execution = state.executions.find((entry) => entry.id === artifact.executionId);
     if (

@@ -150,6 +150,8 @@ export interface CoherentSessionSnapshot {
     input: InputFingerprint | null;
     drift: string | null;
     manifest?: OutcomeDependencyManifest | null;
+    verifiedConfirmationEvidence?: string[];
+    independentConfirmationEvidence?: string[];
   };
 }
 

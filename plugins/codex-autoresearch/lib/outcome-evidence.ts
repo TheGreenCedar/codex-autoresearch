@@ -204,7 +204,7 @@ export function buildOutcomeEvidenceRegistry({
       record.historicalValidity !== receipt.result.validity ||
       hashOutcomeValue(record.result) !== hashOutcomeValue(receipt.result) ||
       hashOutcomeValue(receipt.result) !==
-        hashOutcomeValue(resultFromOutcomeObservation(receipt)) ||
+        hashOutcomeValue(resultFromOutcomeObservation(receipt, state, manifest)) ||
       (record.provenance === "worker" && receipt.action.mode !== "process") ||
       (record.provenance === "operator-observation" && receipt.action.mode !== "managed") ||
       (record.provenance === "github-actions" && !verifiedConfirmations.has(record.id))
@@ -356,7 +356,11 @@ export function buildOutcomeEvidenceRegistry({
   return { entries, criteria };
 }
 
-export function resultFromOutcomeObservation(receipt: ExecutionReceipt) {
+export function resultFromOutcomeObservation(
+  receipt: ExecutionReceipt,
+  state?: OutcomeState,
+  manifest: OutcomeDependencyManifest | null = null,
+) {
   if (receipt.status.kind !== "completed" || !receipt.observation || !receipt.action.evaluator)
     return null;
   const evaluator = receipt.action.evaluator;
@@ -368,10 +372,91 @@ export function resultFromOutcomeObservation(receipt: ExecutionReceipt) {
   return classifyResult({
     kind: "metric",
     value: receipt.observation.value,
-    reference: null,
+    reference: state ? metricReference(state, receipt, manifest) : null,
     direction: evaluator.method.direction,
     minimumImprovement: evaluator.method.minimumImprovement,
     tolerance: evaluator.method.tolerance,
     target: evaluator.method.target,
   });
+}
+
+/** Reference measurements are selected explicitly; their non-subject dependencies must match. */
+export function metricReference(
+  state: OutcomeState,
+  receipt: ExecutionReceipt,
+  manifest: OutcomeDependencyManifest | null,
+): number | null {
+  const evaluator = receipt.action.evaluator;
+  const input = receipt.completedInput ?? receipt.input;
+  if (
+    !evaluator ||
+    evaluator.method.kind !== "metric" ||
+    !input ||
+    !receipt.action.referenceEvidenceIds.length
+  )
+    return null;
+  const values = new Map<string, number>();
+  let baselineSubject: string | null = null;
+  for (const id of receipt.action.referenceEvidenceIds) {
+    const evidence = state.evidence.find((entry) => entry.id === id);
+    const reference = state.executions.find((entry) => entry.id === evidence?.executionId);
+    if (
+      !evidence ||
+      !reference ||
+      reference.id === receipt.id ||
+      reference.action.mode !== "process" ||
+      reference.status.kind !== "completed" ||
+      reference.status.exitCode !== 0 ||
+      reference.checksPassed !== true ||
+      reference.observation?.kind !== "metric" ||
+      reference.action.evaluator?.digest !== evaluator.digest ||
+      !reference.completedInput ||
+      evidence.historicalValidity !== "valid" ||
+      evidence.measurementId !== reference.id ||
+      evidence.provenance !== "worker" ||
+      reference.result?.validity !== "valid" ||
+      hashOutcomeValue(evidence.result) !== hashOutcomeValue(reference.result)
+    )
+      return null;
+    if (
+      Date.parse(reference.status.completedAt) >
+      Date.parse(state.reservations.find((entry) => entry.id === receipt.id)!.reservedAt)
+    )
+      return null;
+    const left = outcomeEvidenceDependencies(
+      state,
+      reference.completedInput,
+      evidence.criterionId,
+      manifest,
+      evaluator,
+    );
+    const right = outcomeEvidenceDependencies(
+      state,
+      input,
+      evidence.criterionId,
+      manifest,
+      evaluator,
+    );
+    if (
+      ["evaluator", "fixtures", "environment", "checks", "criterion", "source"].some(
+        (key) =>
+          left[key as keyof CriterionDependencyIdentity] !==
+          right[key as keyof CriterionDependencyIdentity],
+      )
+    )
+      return null;
+    if (baselineSubject !== null && baselineSubject !== left.subject) return null;
+    baselineSubject = left.subject;
+    if (
+      Object.entries(left).some(
+        ([key, value]) => evidence.dependencies[key as keyof CriterionDependencyIdentity] !== value,
+      )
+    )
+      return null;
+    values.set(reference.id, reference.observation.value);
+  }
+  if (values.size < evaluator.repeats) return null;
+  const samples = [...values.values()];
+  if (Math.max(...samples) - Math.min(...samples) > evaluator.method.tolerance) return null;
+  return samples.reduce((total, value) => total + value, 0) / samples.length;
 }

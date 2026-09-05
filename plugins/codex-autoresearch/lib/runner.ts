@@ -69,6 +69,8 @@ export interface MetricParseResult {
 }
 
 export interface ProcessRunOptions {
+  signal?: AbortSignal;
+  onSpawn?: (pid: number) => void;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   envMode?: "inherit" | "minimal";
@@ -457,6 +459,8 @@ export async function runProcess(
     cwd,
     env: extraEnv,
     envMode = "inherit",
+    signal,
+    onSpawn,
     timeoutSeconds = 600,
     maxOutputBytes = PROCESS_OUTPUT_CAPTURE_BYTES,
     onProgress,
@@ -525,6 +529,7 @@ export async function runProcess(
       if (settled) return;
       settled = true;
       if (timeout) clearTimeout(timeout);
+      signal?.removeEventListener("abort", cancel);
       resolve(
         processResult({
           commandDisplay,
@@ -544,6 +549,15 @@ export async function runProcess(
         }),
       );
     };
+    const cancel = () => {
+      if (settled || timedOut) return;
+      timedOut = true;
+      void terminateAfterTimeout(child.pid, terminate, terminationTimeoutMs).then((result) => {
+        termination = result;
+        finish({ exitCode: null, stdout, stderr });
+      });
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
     timeout = setTimeout(
       () => {
         timedOut = true;
@@ -552,7 +566,7 @@ export async function runProcess(
           finish({ exitCode: null, stdout, stderr });
         });
       },
-      Math.max(1, Number(timeoutSeconds) || 1) * 1000,
+      Math.max(1, Number(timeoutSeconds) * 1000 || 1),
     );
     child.stdout.on("data", (chunk) => {
       appendOutput("stdout", stdoutDecoder.write(chunk));
@@ -562,6 +576,8 @@ export async function runProcess(
     });
     child.once("spawn", () => {
       spawnState = "spawned";
+      if (child.pid) onSpawn?.(child.pid);
+      if (signal?.aborted) cancel();
     });
     child.on("error", (error) => {
       if (spawnState !== "spawned") {
@@ -1421,4 +1437,37 @@ function validTerminationResult(value: unknown): value is ProcessTreeTermination
     validPids(result.trackedPids) &&
     (!result.proven || result.remainingPids.length === 0)
   );
+}
+
+/** OS creation identity for durable reconciliation; a PID alone is never authority. */
+export async function inspectProcessIdentity(
+  pid: number,
+): Promise<{ proven: boolean; identity: string | null }> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return { proven: false, identity: null };
+  if (process.platform === "win32") {
+    const result = await windowsProcessIdentities([pid]);
+    return { proven: result.proven, identity: result.identities.get(pid) ?? null };
+  }
+  const result = await posixProcessTreeSnapshot(pid);
+  return {
+    proven: result.proven,
+    identity: result.entries.find((entry) => entry.pid === pid)?.started ?? null,
+  };
+}
+
+/** Read-only process-tree quiescence after a known child closes. */
+export async function inspectProcessTree(
+  pid: number,
+): Promise<{ proven: boolean; livePids: number[] }> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return { proven: false, livePids: [] };
+  const snapshot =
+    process.platform === "win32"
+      ? await windowsProcessTreeSnapshot(pid, [], false)
+      : await posixProcessTreeSnapshot(pid);
+  const livePids = snapshot.entries.map((entry) => entry.pid);
+  const group = process.platform === "win32" ? "gone" : processGroupState(pid);
+  return {
+    proven: snapshot.proven && group !== "unknown",
+    livePids: group === "alive" && !livePids.length ? [pid] : livePids,
+  };
 }

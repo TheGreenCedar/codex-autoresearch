@@ -1,3 +1,12 @@
+import {
+  dispatchOutcomeConfirmation,
+  reconcileOutcomeConfirmation,
+} from "../github-confirmation.js";
+import {
+  launchOutcomeWorker,
+  reconcileOutcomeWorker,
+  requestOutcomeCancellation,
+} from "../outcome-worker.js";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { startOutcome, amendOutcome, stopOutcome, readOutcome } from "../outcome-store.js";
@@ -58,9 +67,23 @@ export async function nextOutcomeAction(args: UnknownRecord): Promise<UnknownRec
   if (args.actionFile && args.resume)
     throw new Error("Choose an action specification or an execution to resume.");
   const cwd = workDir(args);
-  const receipt = args.resume
+  let receipt = args.resume
     ? await resumeOutcomeAction(cwd, outcomeString(args.resume, "execution identity"))
     : await nominateOutcomeAction(cwd, await readStructuredOutcomeFile(args.actionFile));
+  if (args.cancel && !args.resume)
+    throw new Error("Cancellation requires an existing execution identity.");
+  if (args.cancel && receipt.action.mode === "managed")
+    throw new Error("Managed tickets have no worker or provider process to cancel.");
+  if (receipt.action.mode === "github-actions")
+    receipt = args.resume
+      ? await reconcileOutcomeConfirmation(cwd, receipt.id, undefined, Boolean(args.cancel))
+      : await dispatchOutcomeConfirmation(cwd, receipt.id);
+  if (receipt.action.mode === "process") {
+    if (args.cancel) await requestOutcomeCancellation(cwd, receipt.id);
+    receipt = args.resume
+      ? await reconcileOutcomeWorker(cwd, receipt.id)
+      : await launchOutcomeWorker(cwd, receipt.id);
+  }
   return {
     ok: true,
     workDir: cwd,
@@ -110,6 +133,8 @@ export async function maybeOutcomeReadout(args: UnknownRecord): Promise<UnknownR
       ? {
           investigations: loaded.snapshot.outcome!.investigations,
           evidence: loaded.snapshot.outcome!.evidence,
+          confirmations: loaded.snapshot.outcome!.confirmations,
+          confirmationExposures: loaded.snapshot.outcome!.confirmationExposures,
           retainedPatches: loaded.snapshot.outcome!.retainedPatches,
           legacyApplicability: loaded.snapshot.outcome!.legacyApplicability,
           executions: loaded.snapshot.outcome!.executions.map(

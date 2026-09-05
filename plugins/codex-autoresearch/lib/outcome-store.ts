@@ -177,6 +177,8 @@ export async function startOutcome(
             investigations: [],
             executions: [],
             evidence: [],
+            confirmations: [],
+            confirmationExposures: [],
             candidateBases: [],
             retainedPatches: [],
             evaluators: [],
@@ -226,7 +228,9 @@ export async function amendOutcome(
         if ((await outcomeStateLocation(worktree)).path !== location.path)
           throw new Error("An amendment cannot change the outcome storage owner.");
       }
-      if (state.reservations.some((item) => item.settlement.kind !== "measured"))
+      if (
+        state.reservations.some((item) => !["measured", "estimated"].includes(item.settlement.kind))
+      )
         throw new Error("Reconcile outstanding execution before changing its authorization.");
 
       if (!reconciliation) await assertLegacyUnchanged(state);
@@ -327,7 +331,7 @@ export function reserveInOutcome(
   if (budget.actions !== null && usage.actions + 1 > budget.actions)
     throw new Error("Outcome action budget exhausted.");
   const exposure = outcomeNumber(
-    usage.measuredSeconds + usage.reservedSeconds + normalized.seconds,
+    usage.measuredSeconds + usage.estimatedSeconds + usage.reservedSeconds + normalized.seconds,
     "execution budget exposure",
   );
   if (budget.executionSeconds !== null && exposure > budget.executionSeconds)
@@ -367,7 +371,7 @@ export function settleInOutcome(
   if (parsed.kind === "reserved") throw new Error("Settlement cannot restore a reservation.");
   const reservation = state.reservations.find((item) => item.id === id);
   if (!reservation) throw new Error("Unknown execution reservation.");
-  if (reservation.settlement.kind === "measured") {
+  if (["measured", "estimated"].includes(reservation.settlement.kind)) {
     if (hashOutcomeValue(reservation.settlement) !== hashOutcomeValue(parsed))
       throw new Error("Execution is already settled with different consumption.");
     return reservation;
@@ -387,7 +391,9 @@ export async function settleOutcomeAction(
 export async function stopOutcome(cwd: string, reason: string): Promise<OutcomeState> {
   return await withOutcomeMutation(cwd, async (state) => {
     outcomeString(reason, "stop reason");
-    if (state.reservations.some((item) => item.settlement.kind !== "measured"))
+    if (
+      state.reservations.some((item) => !["measured", "estimated"].includes(item.settlement.kind))
+    )
       throw new Error("Reconcile or cancel active execution before stopping this outcome.");
     state.lifecycle = { kind: "stopped-unmet", at: new Date().toISOString(), reason };
     return state;

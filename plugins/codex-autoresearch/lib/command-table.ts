@@ -928,6 +928,7 @@ export const commandTable = [
         compact: { type: "boolean" },
         action_file: { type: "string" },
         resume: { type: "string" },
+        cancel: { type: "boolean" },
       },
       required: ["working_dir"],
     },
