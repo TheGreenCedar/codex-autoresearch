@@ -1579,7 +1579,7 @@ test("cleanup plans structurally exclude session and evidence paths before destr
     const pending = JSON.parse(await readFile(await receiptPath(dir), "utf8"));
     assert.equal(
       pending.cleanup.trackedPaths.includes(
-        path.relative(dir, resolveSessionPaths({ workDir: dir }).notesPath),
+        path.relative(dir, resolveSessionPaths({ workDir: dir }).notesPath).replaceAll("\\", "/"),
       ),
       false,
     );

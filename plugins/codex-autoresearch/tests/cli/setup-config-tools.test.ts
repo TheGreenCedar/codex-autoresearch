@@ -27,7 +27,7 @@ test("setup does not append elapsed metrics to explicit metric-emitting benchmar
     const payload = JSON.parse(result.stdout);
     assert.ok(
       payload.checkpoint.paths.includes(
-        path.relative(dir, resolveSessionPaths({ workDir: dir }).notesPath),
+        path.relative(dir, resolveSessionPaths({ workDir: dir }).notesPath).replaceAll("\\", "/"),
       ),
     );
     assert.ok(payload.checkpoint.paths.includes("autoresearch.config.json"));
