@@ -13,6 +13,7 @@ import {
 } from "../../lib/session-artifacts.js";
 import {
   AUTORESEARCH_DASHBOARD_FILE,
+  AUTORESEARCH_DOCUMENT_DIR,
   AUTORESEARCH_RESEARCH_DIR,
   AUTORESEARCH_SESSION_FILES,
 } from "../../lib/session-paths.js";
@@ -82,7 +83,11 @@ test("documentation links resolve and session artifacts remain excluded from pro
   assert.deepEqual(problems, []);
 
   const canonicalFiles = [...AUTORESEARCH_SESSION_FILES, AUTORESEARCH_DASHBOARD_FILE];
-  const artifactPaths = [...canonicalFiles, `${AUTORESEARCH_RESEARCH_DIR}/study/quality-gaps.md`];
+  const artifactPaths = [
+    ...canonicalFiles,
+    `${AUTORESEARCH_RESEARCH_DIR}/study/quality-gaps.md`,
+    `${AUTORESEARCH_DOCUMENT_DIR}/autoresearch.md`,
+  ];
   const modes: SessionArtifactMode[] = ["finalization", "dirty-tree", "source-checkout"];
   for (const file of artifactPaths) {
     for (const mode of modes) {
@@ -91,7 +96,7 @@ test("documentation links resolve and session artifacts remain excluded from pro
   }
   assert.deepEqual(
     new Set(CLEANUP_SESSION_PATHS),
-    new Set([...canonicalFiles, AUTORESEARCH_RESEARCH_DIR]),
+    new Set([...canonicalFiles, AUTORESEARCH_RESEARCH_DIR, AUTORESEARCH_DOCUMENT_DIR]),
   );
 
   const gitignore = await fsp.readFile(path.join(pluginRoot, ".gitignore"), "utf8");

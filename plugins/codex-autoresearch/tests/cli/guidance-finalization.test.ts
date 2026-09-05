@@ -344,19 +344,21 @@ test("recommend-next pauses packets after two accepted no-learning candidates wi
 
     for (let index = 1; index <= 2; index += 1) {
       await writeFile(path.join(dir, "src", "candidate.txt"), `${index}\n`, "utf8");
-      const packet = await runCli(["next", "--cwd", dir]);
-      assert.equal(packet.code, 0, packet.stderr);
-      const logged = await runCli([
-        "log",
-        "--cwd",
-        dir,
-        "--from-last",
-        "--status",
-        "measure",
-        "--description",
-        `Accepted no-learning candidate ${index}`,
-      ]);
-      assert.equal(logged.code, 0, logged.stderr);
+      for (let repeat = 1; repeat <= 2; repeat += 1) {
+        const packet = await runCli(["next", "--cwd", dir]);
+        assert.equal(packet.code, 0, packet.stderr);
+        const logged = await runCli([
+          "log",
+          "--cwd",
+          dir,
+          "--from-last",
+          "--status",
+          "measure",
+          "--description",
+          `Accepted no-learning candidate ${index}, repeat ${repeat}`,
+        ]);
+        assert.equal(logged.code, 0, logged.stderr);
+      }
     }
 
     const result = await runCli(["recommend-next", "--cwd", dir, "--compact"]);
