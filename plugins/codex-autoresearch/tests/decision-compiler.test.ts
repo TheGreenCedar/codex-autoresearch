@@ -920,3 +920,90 @@ function acceptedContractRecord(overrides: Record<string, unknown> = {}): Record
     },
   };
 }
+
+function qualifiedMeasure(run: number, fingerprint: string, purpose = "candidate") {
+  return candidateRecord({
+    run,
+    status: "measure",
+    runPurpose: purpose,
+    metric: 10,
+    contractEvaluationEvidence: {
+      contractDigest: "contract-a",
+      candidateFingerprint: fingerprint,
+      acceptedEvaluation: true,
+      checksPassed: true,
+      metric: 10,
+    },
+  });
+}
+test("noise qualification repeats do not masquerade as independent no-learning candidates", () => {
+  const contract = acceptedContractRecord({ noise: { kind: "unknown", qualificationRepeats: 2 } });
+  const reference = [
+    qualifiedMeasure(1, "reference", "baseline"),
+    qualifiedMeasure(2, "reference"),
+  ];
+  const first = qualifiedMeasure(3, "candidate");
+  for (const candidates of [
+    [first],
+    [first, qualifiedMeasure(4, "candidate")],
+    [first, { ...qualifiedMeasure(4, "candidate"), status: "keep" }],
+    [first, { ...qualifiedMeasure(4, "candidate"), status: "discard", evidenceStatus: "rejected" }],
+  ]) {
+    const plan = compileDecisionPlan(
+      snapshotFixture({ records: [contract, ...reference, ...candidates] }),
+      [],
+    );
+    assert.equal(plan.capabilities["run-packet"], "allowed");
+    assert.ok(plan.learning.consecutiveNoLearningCandidates <= 1);
+  }
+  const distinct = compileDecisionPlan(
+    snapshotFixture({
+      records: [
+        contract,
+        ...reference,
+        first,
+        qualifiedMeasure(4, "other"),
+        qualifiedMeasure(5, "other"),
+      ],
+    }),
+    [],
+  );
+  assert.equal(distinct.primaryBlockerCode, "no-learning-pause");
+});
+test("surplus repeats and malformed qualification evidence retain no-learning limits", () => {
+  const contract = acceptedContractRecord({ noise: { kind: "bounded", repeats: 2, tolerance: 1 } });
+  const cases = [
+    [
+      qualifiedMeasure(1, "candidate"),
+      { ...qualifiedMeasure(2, "candidate"), status: "keep", evidenceStatus: "rejected" },
+    ],
+    [
+      qualifiedMeasure(1, "candidate"),
+      {
+        ...qualifiedMeasure(2, "candidate"),
+        status: "discard",
+        evidenceStatus: "rejected",
+        quarantined: true,
+      },
+    ],
+    [
+      qualifiedMeasure(1, "candidate"),
+      qualifiedMeasure(2, "candidate"),
+      qualifiedMeasure(3, "candidate"),
+    ],
+    [
+      qualifiedMeasure(1, "candidate"),
+      { ...qualifiedMeasure(2, "candidate"), contractEvaluationEvidence: {} },
+    ],
+    [
+      { ...qualifiedMeasure(1, "candidate"), status: "checks_failed" },
+      { ...qualifiedMeasure(2, "candidate"), status: "checks_failed" },
+    ],
+  ];
+  for (const records of cases)
+    assert.equal(
+      compileDecisionPlan(snapshotFixture({ records: [contract, ...records] }), [])
+        .primaryBlockerCode,
+      "no-learning-pause",
+    );
+});

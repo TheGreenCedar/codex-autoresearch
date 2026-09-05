@@ -84,6 +84,11 @@ test("dashboard restores chart focus after the experiment modal unmounts", async
     () => dom.window.document.activeElement?.classList.contains("modal-close") === true,
     "Modal close button did not receive focus.",
   );
+  const percentValue = dom.window.document.querySelector(
+    ".experiment-metrics > div:last-child strong",
+  )?.textContent;
+  assert.match(percentValue || "", /%$/);
+  assert.doesNotMatch(percentValue || "", /s$/);
   dom.window.document.querySelector<HTMLButtonElement>(".modal-close")?.click();
   await waitFor(
     () => dom.window.document.querySelector('[role="dialog"]') == null,

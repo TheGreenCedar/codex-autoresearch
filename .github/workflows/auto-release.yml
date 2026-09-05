@@ -125,6 +125,7 @@ jobs:
     needs: detect-version
     if: needs.detect-version.outputs.should_release == 'true'
     permissions:
+      actions: read
       attestations: write
       contents: write
       id-token: write

@@ -8,17 +8,14 @@ import {
   formatMemoryValue,
   formatWeightedScoreValue,
   type ChartDatum,
-  type ValueMode,
 } from "./shared";
 
 export function ExperimentModal({
   point,
-  valueMode,
   readout,
   onClose,
 }: {
   point: ChartDatum;
-  valueMode: ValueMode;
   readout: DashboardReadout;
   onClose: () => void;
 }) {
@@ -84,13 +81,7 @@ export function ExperimentModal({
           </div>
           <div>
             <span>{readout.metricDefinition.percentLabel}</span>
-            <strong>
-              {formatChartAxisValue(
-                valueMode === "percent" ? point.chartPercent : point.metric,
-                valueMode,
-                readout,
-              )}
-            </strong>
+            <strong>{formatChartAxisValue(point.chartPercent, "percent", readout)}</strong>
           </div>
         </div>
         <dl className="experiment-detail-list">

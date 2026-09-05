@@ -50,13 +50,26 @@ testWithTempRoot(
     await git(["add", "autoresearch.jsonl"], repo);
     await git(["commit", "-m", "log autoresearch session"], repo);
 
-    const preview = await run(process.execPath, [cli, "finalize-preview", "--cwd", repo], repo);
+    const preview = await run(
+      process.execPath,
+      [cli, "finalize-preview", "--cwd", repo, "--json-full"],
+      repo,
+    );
     const payload = JSON.parse(preview.stdout);
     assert.equal(payload.ready, false);
     assert.equal(payload.finalTreeCoverage.covered, false);
     assert.equal(payload.excludedCommits.length, 1);
     assert.match(payload.warnings.join("\n"), /Excluded 1 unkept non-session commit/);
     assert.deepEqual(payload.excludedCommits[0].files, ["src/guardrails.txt"]);
+    assert.equal(payload.evidenceReceipt.kind, "accepted-change-evidence");
+    assert.equal(payload.evidenceReceipt.previewReady, payload.ready);
+    assert.deepEqual(payload.evidenceReceipt.commits, [kept]);
+    assert.deepEqual(payload.evidenceReceipt.files, ["src/value.txt"]);
+    assert.equal(payload.evidenceReceipt.observations[0].metric, 1);
+    assert.equal(payload.evidenceReceipt.observations[0].checksPassed, null);
+    assert.equal(payload.evidenceReceipt.observations[0].contractDigest, null);
+    assert.equal(payload.evidenceReceipt.truncated, false);
+    assert.equal(payload.evidenceReceipt.limitations.length > 0, true);
   },
 );
 
@@ -110,7 +123,11 @@ testWithTempRoot(
     await git(["add", "autoresearch.jsonl"], repo);
     await git(["commit", "-m", "log ordinary discard"], repo);
 
-    const preview = await run(process.execPath, [cli, "finalize-preview", "--cwd", repo], repo);
+    const preview = await run(
+      process.execPath,
+      [cli, "finalize-preview", "--cwd", repo, "--json-full"],
+      repo,
+    );
     const payload = JSON.parse(preview.stdout);
     assert.equal(payload.ready, true);
     assert.equal(payload.semanticSafety.ok, true);
@@ -161,12 +178,19 @@ testWithTempRoot(
     await git(["add", "autoresearch.jsonl"], repo);
     await git(["commit", "-m", "log reverted keep"], repo);
 
-    const preview = await run(process.execPath, [cli, "finalize-preview", "--cwd", repo], repo);
+    const preview = await run(
+      process.execPath,
+      [cli, "finalize-preview", "--cwd", repo, "--json-full"],
+      repo,
+    );
     const payload = JSON.parse(preview.stdout);
     assert.equal(payload.ready, false);
     assert.equal(payload.semanticSafety.ok, false);
     assert.ok(payload.semanticSafety.blockers.some((blocker) => blocker.code === "reverted_keep"));
     assert.match(payload.warnings.join("\n"), /reverted/i);
+    assert.deepEqual(payload.evidenceReceipt.commits, []);
+    assert.deepEqual(payload.evidenceReceipt.observations, []);
+    assert.deepEqual(payload.evidenceReceipt.files, []);
   },
 );
 
@@ -216,7 +240,11 @@ testWithTempRoot(
     await git(["add", "autoresearch.jsonl"], repo);
     await git(["commit", "-m", "log autoresearch session"], repo);
 
-    const preview = await run(process.execPath, [cli, "finalize-preview", "--cwd", repo], repo);
+    const preview = await run(
+      process.execPath,
+      [cli, "finalize-preview", "--cwd", repo, "--json-full"],
+      repo,
+    );
     const payload = JSON.parse(preview.stdout);
     assert.equal(payload.ready, false);
     assert.equal(payload.finalTreeCoverage.covered, true);
@@ -272,7 +300,11 @@ testWithTempRoot(
     await git(["add", "autoresearch.jsonl"], repo);
     await git(["commit", "-m", "log kept rename"], repo);
 
-    const preview = await run(process.execPath, [cli, "finalize-preview", "--cwd", repo], repo);
+    const preview = await run(
+      process.execPath,
+      [cli, "finalize-preview", "--cwd", repo, "--json-full"],
+      repo,
+    );
     const payload = JSON.parse(preview.stdout);
     assert.deepEqual(payload.groups[0].files, [current, original].sort());
     assert.equal(payload.finalTreeCoverage.covered, true);

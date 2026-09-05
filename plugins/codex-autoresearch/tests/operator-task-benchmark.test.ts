@@ -37,6 +37,15 @@ const validObservations: Record<OperatorTaskCase, Record<string, unknown>> = {
     terminalPlans: Array.from({ length: 3 }, () => ({ ...plan })),
     dashboardPlan: { ...plan },
     dashboardCommandOmitted: true,
+    firstUse: {
+      completeDisposition: "run-loop",
+      completeSessionRelation: "none",
+      incompleteDisposition: "needs-user",
+      discoveryMode: "read-only",
+      discoveryAccepted: false,
+      discoveryFields: ["checks_command", "scope"],
+      createdFiles: false,
+    },
   },
   "invalid-cli": {
     exitCode: 1,
@@ -98,6 +107,30 @@ const validObservations: Record<OperatorTaskCase, Record<string, unknown>> = {
     responseBytes: 3000,
   },
 };
+
+test("decision consistency rejects unusable first-use routing and implicit acceptance", () => {
+  const firstUse = validObservations["decision-consistency"].firstUse as Record<string, unknown>;
+  for (const mutation of [
+    { completeDisposition: "continue-direct" },
+    { completeSessionRelation: "replacement-requested" },
+    { discoveryFields: [] },
+    { discoveryAccepted: true },
+    { createdFiles: true },
+  ]) {
+    assert.throws(
+      () =>
+        validateOperatorTaskEvidence(
+          evidence("decision-consistency", {
+            ...validObservations["decision-consistency"],
+            firstUse: { ...firstUse, ...mutation },
+          }),
+        ),
+      (error: unknown) =>
+        error instanceof Error &&
+        (error as Error & { code?: string }).code === "V27_DECISION_DIVERGENCE",
+    );
+  }
+});
 
 test("every portable case rejects realistic faulty public-output facts with a stable code", () => {
   const faulty: Record<OperatorTaskCase, Record<string, unknown>> = {

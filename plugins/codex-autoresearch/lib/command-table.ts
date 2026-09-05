@@ -1156,12 +1156,21 @@ export const commandTable = [
     category: "happy_path",
     audience: "default",
     handler: "finalizePreview",
-    outputFields: ["ok", "ready", "warnings", "nextAction", "semanticSafety", "finalTreeCoverage"],
+    outputFields: [
+      "ok",
+      "ready",
+      "warnings",
+      "nextAction",
+      "semanticSafety",
+      "finalTreeCoverage",
+      "evidenceReceipt",
+    ],
+    cliOptions: [{ name: "json-full", key: "jsonFull", kind: "boolean" }],
     defaultHelp: true,
     help: [
-      "node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main] [--progress]",
+      "node scripts/autoresearch.mjs finalize-preview --cwd <project> [--trunk main] [--progress] [--json-full]",
     ],
-    description: "Return a read-only finalization readiness preview without creating branches.",
+    description: "Preview the current change; --json-full includes its detailed evidence receipt.",
     inputSchema: {
       type: "object",
       properties: {

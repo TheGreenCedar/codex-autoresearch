@@ -7,11 +7,13 @@
 **[Install](#install)** - **[Try it](#try-it)** - **[How it works](#how-it-works)** - **[Dashboard](#dashboard)** - **[Docs](#docs)**
 </div>
 
-Most improvement requests start out vague: make this faster, make it smaller, stop it from breaking. Codex can usually produce a plausible change. The harder part is knowing whether the change helped, whether it traded away something important, and whether the next session can pick up the work without guessing what happened.
+Codex Autoresearch helps improve local code against a repeatable benchmark. Give it a workload, correctness checks, an edit boundary, and a time budget. It records the baseline, evaluates small changes, and leaves a reviewable patch with the evidence behind it.
 
-Codex Autoresearch gives that work a memory and a measuring stick. It runs small experiments against a benchmark, records what happened, and keeps the useful results separate from the dead ends. You can stop after one baseline or let the loop run through several ideas, but either way you get an evidence trail instead of a confident paragraph about how much better everything is now.
+Use it for bounded performance or resource-use experiments: faster tests, lower build time, less memory, or higher throughput on a defined workload. Reviews, documentation, product research, and one-off fixes stay ordinary Codex work.
 
-![Codex Autoresearch live dashboard showing a demo runtime improvement](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
+![Codex Autoresearch dashboard with synthetic example measurements](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
+
+The screenshot uses synthetic example data.
 
 The loop is inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch) and [pi-autoresearch](https://github.com/davebcn87/pi-autoresearch). This version is built around Codex, local repositories, and ordinary reviewable Git work.
 
@@ -35,19 +37,21 @@ The marketplace lives in `TheGreenCedar/AgentPluginMarketplace`; this repository
 
 ## Try it
 
-After installing the plugin, open Codex in the repository you want to improve and give it a goal, a benchmark, and a boundary. This prompt contains the information Codex needs:
+After installing the plugin, open Codex in the repository you want to improve and give it a goal, a benchmark, and a boundary. Use this as a starting point for the contract:
 
 ```text
-/goal @Codex Autoresearch make the unit tests faster.
-Benchmark: npm test -- --runInBand
-Wrap that raw command so the benchmark prints METRIC seconds=<number>.
-Metric: seconds, lower is better
-Checks: npm test
-Scope: test runner config and test helpers only
-Stop after 5 attempts or 30 minutes.
+/goal @Codex Autoresearch run a measured loop to reduce parser runtime.
+Benchmark: node bench/parser.mjs
+Metric: seconds (s), lower is better
+Checks: node --test tests/parser.test.mjs
+Scope: src/parser.mjs
+Protect bench/parser.mjs and tests/parser.test.mjs.
+Measure two baselines and repeat each candidate before a keep.
+Stop after 5 packets or 30 minutes; repeat measurements count toward that limit.
+Propose the complete contract for approval before setup or execution.
 ```
 
-Autoresearch will measure the current result before Codex changes anything. That baseline matters. Without it, a faster-looking implementation is still just a faster-looking implementation.
+Codex first presents the workload, checks, scope, and budget for review. After you accept the contract, Autoresearch measures the baseline before any candidate change. Commands and paths in the example must match your project.
 
 If you do not know what the benchmark should be, say what outcome you want and ask Codex to propose one:
 
@@ -56,7 +60,7 @@ If you do not know what the benchmark should be, say what outcome you want and a
 Do this as a direct review first. Do not create a session until I approve a complete repeated experiment contract.
 ```
 
-Codex can help build the measurement, but it cannot decide whether the measurement represents your product. That judgment stays with you. An explicit loop request with missing inputs stops for those inputs instead of scanning the repository for plausible defaults.
+Codex can inspect a few relevant project files to propose commands and paths, citing where each came from. Those proposals are unaccepted until you review the complete contract. Missing goals, metric meaning, budgets, and product tradeoffs remain decisions to make before a run.
 
 ## How it works
 
@@ -71,10 +75,10 @@ Architecture reviews, documentation, UX, product study, open-ended research, tas
 When repeated measurement does fit, the loop is short:
 
 ```text
-setup -> state -> next -> log -> state -> finalize-preview
+setup -> accept contract -> state -> next -> log -> state -> finalize-preview
 ```
 
-Setup records one experiment contract: goal, repository and checkout, typed metric semantics, evaluator, independent checks, scope, noise, keep and stop rules, and budgets. `state` compiles the current files and Git state into one decision. `next` may run only the evaluator and checks accepted by that contract. `log` records whether the result was a baseline, a keep, a discard, or a failure, then returns the resulting decision. When there is useful work to review, `finalize-preview` shows what can be turned into review branches without changing branches yet.
+Setup prepares an experiment contract for explicit acceptance: goal, repository and checkout, typed metric semantics, evaluator, independent checks, scope, noise, keep and stop rules, and budgets. `state` compiles the current files and Git state into one decision. `next` may run only the evaluator and checks accepted by that contract. `log` records whether the result was a baseline, a keep, a discard, or a failure, then returns the resulting decision. When there is useful work to review, `finalize-preview` supplies the current accepted changes, exclusions, and blockers for a compact evidence receipt. A single coherent change can be handed off on the existing branch; separating mixed experiment history into new branches is an advanced step.
 
 The benchmark must print at least one line in this form:
 
@@ -94,15 +98,11 @@ Autoresearch is a good fit when you can measure the outcome repeatedly, keep the
 
 It is probably the wrong tool for a one-off edit, a result that is mostly a matter of taste, or a benchmark so slow and noisy that another measurement adds little information.
 
-If you explicitly want repeated qualitative evaluation against a stable checklist, docs, UX, architecture, or product research can use a quality-gap contract. Source-backed findings then become an accepted checklist and the loop measures how many gaps remain. Reaching `quality_gap=0` closes that checklist; it does not prove there is nothing left to discover. Ordinary qualitative work stays direct.
-
 ## Dashboard
 
-The dashboard is optional. It gives you a live view of the metric history, decision ID, current phase, blocker, next action kind, parent-task disposition, accepted contract and evaluator identities, runtime provenance, and finalization state.
+The optional dashboard shows what improved, what passed, what is blocked, and the next action. Audit details are available when you need to trace a result. It is read-only; commands still run through Codex and the CLI.
 
-It is deliberately read-only and may redact executable commands. The CLI still owns setup, experiments, logging, export, and finalization. If the browser and terminal disagree on the semantic decision fields, stop and fix the disagreement rather than choosing the answer you prefer.
-
-Ask Codex to serve the dashboard when a visual readout would help. Use an export when you need a portable snapshot rather than live state.
+Ask Codex to serve it for a live readout or export a snapshot for review.
 
 ## Safety and privacy
 
@@ -117,7 +117,7 @@ Read [Trust](plugins/codex-autoresearch/docs/trust.md), [Privacy](plugins/codex-
 - [Start](plugins/codex-autoresearch/docs/start.md) gets the first baseline measured and logged.
 - [Walkthrough](plugins/codex-autoresearch/docs/walkthrough.md) follows one session from prompt to finalization preview.
 - [Operate](plugins/codex-autoresearch/docs/operate.md) covers running, resuming, and repairing a session.
-- [Finish](plugins/codex-autoresearch/docs/finish.md) explains how kept work becomes review branches.
+- [Finish](plugins/codex-autoresearch/docs/finish.md) explains the patch and evidence handoff, with branch reconstruction when needed.
 - [Troubleshooting](plugins/codex-autoresearch/docs/troubleshooting.md) starts from the symptom when something goes wrong.
 
 The [Docs index](plugins/codex-autoresearch/docs/index.md) has the rest, including [workflow diagrams](plugins/codex-autoresearch/docs/workflows.md) and the [architecture](plugins/codex-autoresearch/docs/architecture.md).

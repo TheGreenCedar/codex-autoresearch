@@ -1,3 +1,4 @@
+import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import { isUnknownRecord, type UnknownRecord } from "./types/json.js";
 
 export interface EvidenceMaturityStatus {
@@ -28,9 +29,6 @@ export function classifyEvidenceMaturity({
   const rowSpecific = accepted.filter(hasRowSpecificMarkers);
   const protectedProbe = accepted.filter(hasProtectedProbeMarkers);
   const holdout = accepted.filter(hasHoldoutMarkers);
-  const repeat = accepted.filter(hasRepeatMarkers);
-  const breadth = accepted.filter(hasBreadthMarkers);
-  const promotion = accepted.filter(hasPromotionMarkers);
   const broadRequested =
     /\b(broad|general|shippable|product[- ]grade|superiority|merge[- ]ready)\b/i.test(
       stringValue(requestedClaim),
@@ -50,25 +48,21 @@ export function classifyEvidenceMaturity({
     };
   }
 
-  const broadReady =
-    holdout.length > 0 && repeat.length > 0 && breadth.length > 0 && promotion.length > 0;
   if (rowSpecific.length > 0 || protectedProbe.length > 0 || diagnostic.length > 0) {
     warnings.push(
       "Accepted evidence includes row-specific detectors, protected probes, static citations, manifests, or answer-key steering.",
     );
   }
-  if (broadRequested && !broadReady) {
+  if (broadRequested) {
     blockers.push(
-      "Broad superiority claim requires holdout, repeat, breadth, and promotion proof.",
+      "Recorded measurements do not establish broad superiority. Report the measured result and leave the broader claim unverified.",
     );
   }
 
   const status =
-    broadReady && blockers.length === 0
-      ? "broad"
-      : rowSpecific.length > 0 || protectedProbe.length > 0 || diagnostic.length > 0
-        ? "diagnostic"
-        : "provisional";
+    rowSpecific.length > 0 || protectedProbe.length > 0 || diagnostic.length > 0
+      ? "diagnostic"
+      : "provisional";
 
   return {
     status,
@@ -77,9 +71,7 @@ export function classifyEvidenceMaturity({
     blockers,
     warnings,
     weakerClaim:
-      status === "broad"
-        ? "Broad improvement is supportable by current accepted evidence."
-        : "Only diagnostic or provisional improvement is supportable until holdout, repeat, breadth, and promotion proof are recorded.",
+      "Recorded measurements support only the evaluated contract; broader product claims remain unverified.",
     counts: {
       accepted: accepted.length,
       diagnostic: diagnostic.length,
@@ -96,7 +88,7 @@ function emptyCounts() {
 
 function isAcceptedRun(value: unknown): boolean {
   if (!isUnknownRecord(value)) return false;
-  return ["keep", "accepted"].includes(stringValue(value.status).toLowerCase());
+  return isAcceptedCurrentRun(value);
 }
 
 function isDiagnosticRun(value: unknown): boolean {
@@ -118,23 +110,7 @@ function hasProtectedProbeMarkers(value: unknown): boolean {
 }
 
 function hasHoldoutMarkers(value: unknown): boolean {
-  return /\b(holdout|blind|unseen|out[- ]of[- ]sample)\b/i.test(runText(value));
-}
-
-function hasRepeatMarkers(value: unknown): boolean {
-  return /\b(repeat|repeated|replicate|rerun|second pass)\b/i.test(runText(value));
-}
-
-function hasBreadthMarkers(value: unknown): boolean {
-  return /\b(breadth|cross[- ]repo|multiple tasks|broad|generalizable|portfolio)\b/i.test(
-    runText(value),
-  );
-}
-
-function hasPromotionMarkers(value: unknown): boolean {
-  return /\b(promotion|promotion[- ]grade|product[- ]grade|merge[- ]ready|ci passed)\b/i.test(
-    runText(value),
-  );
+  return isUnknownRecord(value) && value.runPurpose === "holdout";
 }
 
 function runText(value: unknown): string {

@@ -6,7 +6,19 @@ This project uses a root-only changelog because the root README is the public do
 
 Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older entries that mention MCP servers, MCP tools, or MCP resources describe historical release surfaces before the 1.3.3 removal.
 
-## Unreleased
+## 2.9.0 - 2026-09-05
+
+- Bound CI jobs to 15 minutes: run the full suite on Linux and focused native checks on macOS and Windows. Release reuses successful CI for its exact commit, then verifies the packaged artifact and provenance. Local full checks retain separate suite deadlines and report timeout causes.
+
+Measured loops now have a clearer first run, stricter repeat evidence, and a simpler handoff. Existing sessions keep working with their current note paths; new sessions put notes and ideas in `.autoresearch/`.
+
+- The documented first run now starts a fresh measured session. Missing benchmark, checks, and scope can be proposed from bounded read-only discovery before acceptance.
+- Experiment notes no longer count as product-grade or broad-improvement proof. Goal wording no longer invents retrieval-specific requirements.
+- Repeat qualification retains adverse observations and requires comparable repeated reference measurements. Required repeat samples no longer trigger a premature no-learning pause; paused reports correctly show blocked status. The displayed movement/spread ratio is explicitly not statistical confidence.
+- Bundle-size measurement builds first and rejects missing or empty output. Workload placeholders fail instead of producing unrelated metrics; runtime recipes require independently supplied correctness checks.
+- New session notes and ideas share `.autoresearch/`; existing root documents remain supported. Conflicting copies block rather than silently choosing one. Ledger, configuration, and execution paths retain their existing locations.
+- Finalization preview includes a compact evidence receipt for reviewing the existing change. Branch reconstruction remains available for advanced delivery.
+- The default dashboard reduces administrative signals and corrects the percent display in experiment details.
 
 ## 2.8.0 - 2026-08-29
 
@@ -625,6 +637,7 @@ The result is less ceremony before useful work and far fewer ways for a loop to 
 - Continued the simplification sweep by sharing verification runners and temp cleanup, extracting finalization plan helpers and focused CLI command modules, centralizing evidence status taxonomy, splitting dashboard chart/details/modal surfaces, and rendering weighted metric formulas from configured weights.
 
 ### Fixed
+
 - Refreshed the v2 documentation map, glossary, workflow diagrams, finalization wording, troubleshooting rows, and public README so they describe the current operator checklist, watchdog, lane, runtime-provenance, packet-diagnostic, evidence-status, and audit/operate dashboard behavior.
 - Scrubbed branch-specific finalization warnings from public showcase dashboard exports and added release-gate checks so demo snapshots cannot ship with transient source-branch warnings.
 - Made the documented `scripts/finalize-autoresearch.mjs` launcher hydrate the matching release runtime like the main CLI launcher, and added package smoke coverage for it.

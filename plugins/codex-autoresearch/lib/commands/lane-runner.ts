@@ -46,7 +46,7 @@ export async function laneRunner(args: UnknownRecord, runtime: LaneRunnerRuntime
   const lane =
     lanes.find(
       (candidate: UnknownRecord) => candidate.id === laneId || candidate.label === laneId,
-    ) || normalizeParallelLane({ id: laneId, label: laneId }, lanes.length, config);
+    ) || normalizeParallelLane({ id: laneId, label: laneId }, lanes.length, config, workDir);
   const mode = normalizeLaneMode(args.mode, String(lane.mode || "read_only_scout"));
   const dryRun = boolOption(args.dry_run ?? args.dryRun, !boolOption(args.yes, false));
   const command = String(args.command || "").trim();

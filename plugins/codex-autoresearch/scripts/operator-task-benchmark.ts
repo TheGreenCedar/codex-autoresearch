@@ -158,6 +158,21 @@ const observationValidators: Record<
   (observations: Record<string, unknown>) => void
 > = {
   "decision-consistency": (observations) => {
+    const firstUse = asRecord(observations.firstUse, "first-use routing");
+    if (
+      firstUse.completeDisposition !== "run-loop" ||
+      firstUse.completeSessionRelation !== "none" ||
+      firstUse.incompleteDisposition !== "needs-user" ||
+      firstUse.discoveryMode !== "read-only" ||
+      firstUse.discoveryAccepted !== false ||
+      JSON.stringify(firstUse.discoveryFields) !== JSON.stringify(["checks_command", "scope"]) ||
+      firstUse.createdFiles !== false
+    ) {
+      failCase(
+        "decision-consistency",
+        "First-use routing did not produce an actionable unaccepted contract.",
+      );
+    }
     const terminalPlans = asRecordArray(observations.terminalPlans, "terminal decision plans");
     const dashboardPlan = asRecord(observations.dashboardPlan, "dashboard decision plan");
     const [terminalPlan] = terminalPlans;
@@ -351,6 +366,40 @@ async function decisionConsistency(root: string): Promise<Record<string, unknown
   const cwd = path.join(root, "decision");
   const env = isolatedCodexHome(root, "decision-codex-home");
   await fsp.mkdir(cwd, { recursive: true });
+  const startDoc = await fsp.readFile(path.join(pluginRoot, "docs", "start.md"), "utf8");
+  const completePrompt = [...startDoc.matchAll(/```text\n([\s\S]*?)```/g)]
+    .map((match) => match[1])
+    .find((block) => block.includes("Benchmark:") && block.includes("Scope:"));
+  if (!completePrompt) throw new Error("Start documentation has no complete first-use prompt.");
+  const complete = expectJsonSuccess(
+    await runNode(cli, ["prompt-plan", "--cwd", cwd, "--prompt", completePrompt], pluginRoot, env),
+  );
+  const incomplete = expectJsonSuccess(
+    await runNode(
+      cli,
+      [
+        "prompt-plan",
+        "--cwd",
+        cwd,
+        "--prompt",
+        "Run 5 measured iterations.\nBenchmark: npm test\nMetric: seconds, lower is better",
+      ],
+      pluginRoot,
+      env,
+    ),
+  );
+  const completeFit = asRecord(complete.fit, "complete first-use fit");
+  const incompleteFit = asRecord(incomplete.fit, "incomplete first-use fit");
+  const discovery = nestedRecord(incomplete, "nextAction", "discovery");
+  const firstUse = {
+    completeDisposition: completeFit.disposition,
+    completeSessionRelation: completeFit.sessionRelation,
+    incompleteDisposition: incompleteFit.disposition,
+    discoveryMode: discovery.mode,
+    discoveryAccepted: discovery.accepted,
+    discoveryFields: discovery.fields,
+    createdFiles: (await fsp.readdir(cwd)).length !== 0,
+  };
   expectJsonSuccess(
     await runNode(
       cli,
@@ -393,6 +442,7 @@ async function decisionConsistency(root: string): Promise<Record<string, unknown
   return {
     terminalPlans,
     dashboardPlan,
+    firstUse,
     dashboardCommandOmitted: !string(nestedRecord(plans[3], "action").command),
   };
 }

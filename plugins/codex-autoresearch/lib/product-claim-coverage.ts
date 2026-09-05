@@ -25,79 +25,9 @@ export interface ProductClaimCoverageInput {
   acceptedEvidence?: string[];
 }
 
+// Goal wording can request a claim, but cannot supply evidence or invent domain gates.
 const GENERIC_PRODUCT_CLAIM_PATTERN =
-  /\b(shippable|product-grade|product grade|final deliverable|product deliverable|final)\b/i;
-
-const RETRIEVAL_DOMAIN_PATTERN = /\b(retrieval|search|semantic|ranking|ranker|lazy)\b/i;
-
-const SIDECAR_DOMAIN_PATTERN = /\bsidecar\b/i;
-
-const NEGATION_CUE =
-  /\b(not|no|never|without|untested|unknown|missing|pending|skipped|todo|did not|cannot)\b|\w+n't\b/i;
-
-const RETRIEVAL_REQUIREMENTS: ProductProofRequirement[] = [
-  {
-    id: "retrieval_accuracy",
-    label: "Retrieval accuracy validation",
-    requiredForProductGrade: true,
-  },
-  {
-    id: "sidecar_safety",
-    label: "Sidecar safety",
-    requiredForProductGrade: true,
-  },
-  {
-    id: "lazy_behavior",
-    label: "Lazy/selective behavior",
-    requiredForProductGrade: true,
-  },
-  {
-    id: "ranking_quality",
-    label: "Ranking quality",
-    requiredForProductGrade: true,
-  },
-  {
-    id: "docs_tests",
-    label: "Tests and docs",
-    requiredForProductGrade: true,
-  },
-];
-
-const GENERIC_PRODUCT_REQUIREMENTS: ProductProofRequirement[] = [
-  {
-    id: "correctness_checks",
-    label: "Correctness or quality checks",
-    requiredForProductGrade: true,
-  },
-  {
-    id: "docs_tests",
-    label: "Tests and docs",
-    requiredForProductGrade: true,
-  },
-];
-
-const PROOF_PATTERNS: Record<string, RegExp[]> = {
-  retrieval_accuracy: [
-    /\baccuracy\b/i,
-    /\brecall\b/i,
-    /\bmrr\b/i,
-    /\bhit@/i,
-    /quality validation/i,
-  ],
-  sidecar_safety: [/sidecar safety/i, /fail(?:s|ed)? closed/i, /sidecar fails closed/i],
-  lazy_behavior: [/\blazy\b/i, /query-triggered/i, /\bbackfill\b/i, /\bselective\b/i],
-  ranking_quality: [/\branking\b/i, /rank quality/i, /search quality/i],
-  correctness_checks: [
-    /correctness/i,
-    /quality check/i,
-    /quality gate/i,
-    /checks? passed/i,
-    /validation passed/i,
-    /accuracy/i,
-    /ranking quality/i,
-  ],
-  docs_tests: [/tests? and docs?/i, /docs? updated/i, /tests? updated/i],
-};
+  /\b(shippable|product[- ]grade|broad superiority|general superiority)\b/i;
 
 export function buildFinalizationProductClaimCoverageFromLedger(
   entries: LooseObject[],
@@ -144,35 +74,29 @@ export function buildProductClaimCoverage(
   input: ProductClaimCoverageInput = {},
 ): ProductClaimCoverage {
   const goal = String(input.goal || "");
-  const acceptedEvidence = (input.acceptedEvidence || []).map((item) => String(item || ""));
-  const requirements = requirementsForGoal(goal);
-  const claimDetected = requirements.length > 0;
-  const coveredProof = requirements.filter((requirement) =>
-    evidenceCoversRequirement(requirement, acceptedEvidence),
-  );
-  const coveredIds = new Set(coveredProof.map((proof) => proof.id));
-  const missingRequiredProof = requirements.filter(
-    (requirement) => requirement.requiredForProductGrade && !coveredIds.has(requirement.id),
-  );
-  const blockers = missingRequiredProof.map(
-    (proof) => `Product-grade evidence is missing: ${proof.label}.`,
-  );
-  const productGradeReady = !claimDetected || missingRequiredProof.length === 0;
-
+  const claimDetected = GENERIC_PRODUCT_CLAIM_PATTERN.test(goal);
+  const requirements: ProductProofRequirement[] = claimDetected
+    ? [
+        {
+          id: "independent_product_review",
+          label: "Independent review of the product claim",
+          requiredForProductGrade: true,
+        },
+      ]
+    : [];
+  // Accepted benchmark keeps authorize measured review work. They do not establish
+  // product-wide correctness, representativeness, or release readiness.
   return {
     claimDetected,
-    maturity: !claimDetected
-      ? "experimental"
-      : productGradeReady
-        ? "product_grade"
-        : coveredProof.length > 0
-          ? "development"
-          : "experimental",
-    productGradeReady,
+    maturity: "experimental",
+    productGradeReady: !claimDetected,
     requirements,
-    coveredProof,
-    missingRequiredProof,
-    blockers,
+    coveredProof: [],
+    missingRequiredProof: requirements,
+    blockers: requirements.map(
+      (proof) =>
+        `Product-grade evidence is missing: ${proof.label}. Finalize only the measured result and report the broader claim as unverified.`,
+    ),
   };
 }
 
@@ -207,40 +131,6 @@ function latestSessionGoalFromLedger(entries: LooseObject[]): string {
     }
   }
   return goal;
-}
-
-function requirementsForGoal(goal: string): ProductProofRequirement[] {
-  if (RETRIEVAL_DOMAIN_PATTERN.test(goal) || /\baccuracy\b/i.test(goal)) {
-    return RETRIEVAL_REQUIREMENTS.filter(
-      (requirement) => requirement.id !== "sidecar_safety" || SIDECAR_DOMAIN_PATTERN.test(goal),
-    );
-  }
-  if (GENERIC_PRODUCT_CLAIM_PATTERN.test(goal)) {
-    return GENERIC_PRODUCT_REQUIREMENTS;
-  }
-  return [];
-}
-
-function splitEvidenceClauses(text: string): string[] {
-  return text
-    .split(/[.;]\s+|\n+/)
-    .map((clause) => clause.trim())
-    .filter(Boolean);
-}
-
-function clauseSupportsRequirement(clause: string, patterns: RegExp[]): boolean {
-  if (!patterns.some((pattern) => pattern.test(clause))) return false;
-  return !NEGATION_CUE.test(clause);
-}
-
-function evidenceCoversRequirement(
-  requirement: ProductProofRequirement,
-  acceptedEvidence: string[],
-): boolean {
-  const patterns = PROOF_PATTERNS[requirement.id] || [];
-  return acceptedEvidence.some((evidence) =>
-    splitEvidenceClauses(evidence).some((clause) => clauseSupportsRequirement(clause, patterns)),
-  );
 }
 
 function recordValue(value: unknown): LooseObject {

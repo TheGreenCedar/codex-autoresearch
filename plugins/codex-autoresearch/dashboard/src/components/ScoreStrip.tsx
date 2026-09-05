@@ -36,7 +36,7 @@ export function ScoreStrip({ session, readout, summary, layout = "stack" }: Scor
         value={formatMetricValue(readout.baseline, readout.metricDefinition)}
       />
       <ScoreCell
-        label="Confidence"
+        label="Movement / spread"
         id="confidence-value"
         value={formatConfidence(readout.confidence)}
       />

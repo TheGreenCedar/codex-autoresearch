@@ -348,7 +348,7 @@ function evidenceChipsFor(
       status: "provisional",
     },
     readout.confidenceText && {
-      label: "Confidence",
+      label: "Movement / spread",
       value: readout.confidenceText,
       tone: "neutral",
       status: "provisional",

@@ -59,6 +59,8 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
       "memory-usage",
       "--name",
       "Memory loop",
+      "--benchmark-command",
+      `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC rss_mb=12')"`,
       "--checks-command",
       `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`,
       "--scope",
@@ -77,7 +79,7 @@ test("setup-plan, recipes, and recipe-backed setup are wired through the CLI", a
     const config = JSON.parse(await readFile(path.join(dir, "autoresearch.config.json"), "utf8"));
     assert.equal(config.recipeId, "memory-usage");
     assert.match(
-      await readFile(path.join(dir, "autoresearch.md"), "utf8"),
+      await readFile(path.join(dir, ".autoresearch", "autoresearch.md"), "utf8"),
       /## Resume This Session/,
     );
     const accepted = await runCli([

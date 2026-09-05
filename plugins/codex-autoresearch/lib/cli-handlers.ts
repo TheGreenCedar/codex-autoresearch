@@ -42,6 +42,18 @@ const HANDLER_ADAPTERS: Partial<Record<ActiveHandlerBinding, HandlerAdapter>> = 
   publicState: async (deps, args) => ({
     result: await deps.publicState({ ...args, bounded: args.jsonFull !== true }),
   }),
+  finalizePreview: async (deps, args) => {
+    const result = await deps.finalizePreview(args);
+    if (args.jsonFull || !result.evidenceReceipt) return { result };
+    return {
+      result: {
+        ...result,
+        evidenceReceipt: {
+          summary: `${result.evidenceReceipt.counts.commits} accepted commits, ${result.evidenceReceipt.counts.files} files, ${result.evidenceReceipt.counts.observations} observations. Use --json-full for details.`,
+        },
+      },
+    };
+  },
   doctorSession: async (deps, args) => ({
     result: await (args._?.[1] === "hooks" || args.hooks
       ? deps.doctorHooks(args)

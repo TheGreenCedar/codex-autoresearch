@@ -15,6 +15,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { runCli, withTempDir, git, setupFixture } from "../helpers/cli-test-context.js";
+import { resolveSessionPaths } from "../../lib/session-paths.js";
 import { quoteForAcceptedShell } from "../helpers/process.js";
 
 async function prepareAcceptedKeep(
@@ -81,8 +82,8 @@ async function prepareAcceptedKeep(
     "add",
     "autoresearch.jsonl",
     "autoresearch.config.json",
-    "autoresearch.md",
-    "autoresearch.ideas.md",
+    path.relative(dir, resolveSessionPaths({ workDir: dir }).notesPath),
+    path.relative(dir, resolveSessionPaths({ workDir: dir }).ideasPath),
     ...sessionScripts,
     "contract",
   ]);

@@ -54,6 +54,8 @@ import {
 import { appendJsonl, jsonlPath, ledgerRecordIssue, readJsonl } from "../lib/session-records.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
 import { resolveSessionPaths } from "../lib/session-paths.js";
+import { CLEANUP_SESSION_PATHS } from "../lib/session-artifacts.js";
+import { buildParallelLanes } from "../lib/parallel-orchestration.js";
 import { buildTerminalReport } from "../lib/terminal-report.js";
 import { parseDashboardContext } from "../lib/types/dashboard-wire.js";
 import {
@@ -78,8 +80,8 @@ test("session path resolver preserves repo-local defaults", async () => {
     assert.equal(paths.sessionDir, path.resolve(workDir));
     assert.equal(paths.ledgerPath, path.join(workDir, "autoresearch.jsonl"));
     assert.equal(paths.configPath, path.join(sessionCwd, "autoresearch.config.json"));
-    assert.equal(paths.notesPath, path.join(workDir, "autoresearch.md"));
-    assert.equal(paths.ideasPath, path.join(workDir, "autoresearch.ideas.md"));
+    assert.equal(paths.notesPath, path.join(workDir, ".autoresearch", "autoresearch.md"));
+    assert.equal(paths.ideasPath, path.join(workDir, ".autoresearch", "autoresearch.ideas.md"));
     assert.equal(paths.researchRoot, path.join(workDir, "autoresearch.research"));
     assert.equal(paths.dashboardExportPath, path.join(workDir, "autoresearch-dashboard.html"));
     assert.equal(paths.lastRunFallbackPath, path.join(workDir, "autoresearch.last-run.json"));
@@ -749,7 +751,7 @@ test("evidence maturity downgrades row-specific wins until broad proof exists", 
 
   assert.equal(diagnostic.status, "diagnostic");
   assert.equal(diagnostic.blocksFinalization, true);
-  assert.match(diagnostic.weakerClaim, /diagnostic or provisional/);
+  assert.notEqual(diagnostic.status, "broad");
 
   const broad = classifyEvidenceMaturity({
     requestedClaim: "broad superiority",
@@ -762,8 +764,8 @@ test("evidence maturity downgrades row-specific wins until broad proof exists", 
     ],
   });
 
-  assert.equal(broad.status, "broad");
-  assert.equal(broad.blocksFinalization, false);
+  assert.equal(broad.status, "provisional");
+  assert.equal(broad.blocksFinalization, true);
 });
 
 test("lane orchestration splits broad failures into accountable lanes", () => {
@@ -1325,3 +1327,46 @@ function exactDuplicateSubtrees(value: unknown): string[] {
   visit(value);
   return duplicates;
 }
+
+test("negated broad proof words never promote accepted evidence", () => {
+  const result = classifyEvidenceMaturity({
+    requestedClaim: "broad superiority",
+    runs: [
+      {
+        status: "keep",
+        description:
+          "No holdout, no repeat, no breadth, no promotion. Diagnostic answer-key detector.",
+      },
+    ],
+  });
+  assert.notEqual(result.status, "broad");
+  assert.equal(result.blocksFinalization, true);
+});
+
+test("evidence maturity excludes provisional rejected and quarantined keeps", () => {
+  const result = classifyEvidenceMaturity({
+    runs: [
+      { status: "keep", evidenceStatus: "provisional" },
+      { status: "keep", evidenceStatus: "rejected" },
+      { status: "keep", quarantined: true },
+    ],
+  });
+  assert.equal(result.counts.accepted, 0);
+  assert.equal(result.status, "empty");
+});
+
+test("lane pointers and cleanup follow current and legacy session document paths", async () => {
+  await withTempDir("lane-document-paths", async (dir) => {
+    const ideasPointers = () =>
+      buildParallelLanes({ workDir: dir, memory: {} })
+        .flatMap((lane) => lane.brief.pointers)
+        .filter((pointer: string) => pointer.endsWith("autoresearch.ideas.md"));
+    assert.ok(ideasPointers().length > 0);
+    assert.ok(
+      ideasPointers().every((pointer: string) => pointer === ".autoresearch/autoresearch.ideas.md"),
+    );
+    assert.ok(CLEANUP_SESSION_PATHS.includes(".autoresearch"));
+    await writeFile(path.join(dir, "autoresearch.ideas.md"), "legacy ideas\n");
+    assert.ok(ideasPointers().every((pointer: string) => pointer === "autoresearch.ideas.md"));
+  });
+});
