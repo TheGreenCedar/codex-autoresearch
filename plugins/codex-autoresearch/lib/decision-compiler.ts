@@ -84,6 +84,8 @@ export type DecisionOutcomeKind = (typeof DECISION_OUTCOME_KINDS)[number];
 
 export type DecisionDiagnosticCode =
   | "outcome-active"
+  | "outcome-delivery-ready"
+  | "outcome-satisfied"
   | "outcome-ticket"
   | "outcome-outstanding"
   | "outcome-stopped"
@@ -164,6 +166,14 @@ const KEEP_ONLY: readonly DecisionCapability[] = ["authorize-keep"];
 const FINALIZE_ONLY: readonly DecisionCapability[] = ["finalize"];
 
 export const decisionDiagnosticRegistry = {
+  "outcome-delivery-ready": {
+    ...guidancePolicy(35, "direct-work", "propose-action"),
+    blocked: ["authorize-keep", "finalize"],
+  },
+  "outcome-satisfied": {
+    ...completePolicy(35),
+    blocked: ["run-packet", "authorize-keep", "finalize"],
+  },
   "outcome-active": {
     ...guidancePolicy(35, "direct-work", "propose-action"),
     blocked: ["authorize-keep", "finalize"],
@@ -1554,7 +1564,10 @@ function compileOutcomeInvestigation(snapshot: CoherentSessionSnapshot): {
           ? "outcome-budget-exhausted"
           : "outcome-active";
   if (usage.unknownExecutions && !drift) code = "outcome-outstanding";
-  const status = ["outcome-stopped", "outcome-budget-exhausted"].includes(code)
+  let status: OutcomeDecisionProjection["status"] = [
+    "outcome-stopped",
+    "outcome-budget-exhausted",
+  ].includes(code)
     ? "stopped-unmet"
     : ["outcome-input-drift", "outcome-outstanding"].includes(code)
       ? "blocked"
@@ -1574,6 +1587,21 @@ function compileOutcomeInvestigation(snapshot: CoherentSessionSnapshot): {
   const unresolvedCriteria = coverage.criteria
     .filter((criterion) => criterion.status !== "satisfied")
     .map((criterion) => criterion.id);
+  const delivered =
+    !drift &&
+    !outstanding &&
+    !unresolvedCriteria.length &&
+    state.lifecycle.kind === "active" &&
+    state.deliveries.some(
+      (delivery) =>
+        snapshot.outcomeFacts?.verifiedDeliveryIds?.includes(delivery.id) &&
+        delivery.inputDigest === snapshot.outcomeFacts?.input?.digest,
+    );
+  if (delivered) {
+    code = "outcome-satisfied";
+    status = "satisfied";
+  } else if (code === "outcome-active" && !unresolvedCriteria.length)
+    code = "outcome-delivery-ready";
   const projection: OutcomeDecisionProjection = {
     id: state.contract.id,
     objective: state.contract.objective,
@@ -1584,11 +1612,15 @@ function compileOutcomeInvestigation(snapshot: CoherentSessionSnapshot): {
     unresolvedCriteria,
     delivery: {
       endpoint: state.contract.authorization.delivery,
-      status: !drift && !unresolvedCriteria.length ? "ready" : "pending",
+      status: delivered ? "delivered" : !drift && !unresolvedCriteria.length ? "ready" : "pending",
     },
     inputDigest: snapshot.outcomeFacts?.input?.digest ?? null,
   };
   const messages: Partial<Record<DecisionDiagnosticCode, string>> = {
+    "outcome-satisfied":
+      "Accepted criteria and the requested delivery endpoint are verified. Return the delivered result.",
+    "outcome-delivery-ready":
+      "Criteria are covered. Reserve a delivery action, then log the requested endpoint and its actual proof.",
     "outcome-active": "Propose the next bounded action within the accepted outcome grant.",
     "outcome-ticket": "Complete the authorized action ticket, then log its observation.",
     "outcome-outstanding": "Resume and reconcile the existing execution; do not relaunch it.",
@@ -1600,7 +1632,7 @@ function compileOutcomeInvestigation(snapshot: CoherentSessionSnapshot): {
   };
   const args = outstanding
     ? ["next", "--cwd", outstanding.worktree, "--resume", outstanding.id]
-    : code === "outcome-active"
+    : ["outcome-active", "outcome-delivery-ready"].includes(code)
       ? ["next", "--cwd", snapshot.workDir, "--action-file", "<action.json>"]
       : [
           "outcome",
@@ -1614,11 +1646,14 @@ function compileOutcomeInvestigation(snapshot: CoherentSessionSnapshot): {
           "--reason",
           "<reason>",
         ];
-  const command = renderShellCommand([
-    process.execPath,
-    path.join(resolvePackageRoot(import.meta.url), "scripts", "autoresearch.mjs"),
-    ...args,
-  ]);
+  const command =
+    code === "outcome-satisfied"
+      ? ""
+      : renderShellCommand([
+          process.execPath,
+          path.join(resolvePackageRoot(import.meta.url), "scripts", "autoresearch.mjs"),
+          ...args,
+        ]);
   return {
     projection,
     diagnostics: [

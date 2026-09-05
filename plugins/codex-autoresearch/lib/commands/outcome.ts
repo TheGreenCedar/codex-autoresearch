@@ -1,3 +1,4 @@
+import { logOutcomeDelivery } from "../outcome-delivery.js";
 import {
   dispatchOutcomeConfirmation,
   reconcileOutcomeConfirmation,
@@ -103,10 +104,16 @@ export async function nextOutcomeAction(args: UnknownRecord): Promise<UnknownRec
 
 export async function logInvestigationObservation(args: UnknownRecord): Promise<UnknownRecord> {
   const cwd = workDir(args);
-  const evidence = await logOutcomeObservation(
-    cwd,
-    await readStructuredOutcomeFile(args.observationFile),
-  );
+  const input = await readStructuredOutcomeFile(args.observationFile);
+  if (input && typeof input === "object" && "delivery" in input) {
+    const delivery = await logOutcomeDelivery(cwd, input);
+    const state = await readOutcome(cwd);
+    const artifact = state?.executions
+      .find((receipt) => receipt.id === delivery.executionId)
+      ?.outputs.find((output) => output.digest === delivery.artifactDigest);
+    return { ok: true, workDir: cwd, delivery, artifact: artifact ?? null };
+  }
+  const evidence = await logOutcomeObservation(cwd, input);
   return { ok: true, workDir: cwd, evidence };
 }
 
@@ -131,11 +138,13 @@ export async function maybeOutcomeReadout(args: UnknownRecord): Promise<UnknownR
     evidenceCount: loaded.snapshot.outcome!.evidence.length,
     ...(args.jsonFull
       ? {
+          decisionPlan: loaded.plan,
           investigations: loaded.snapshot.outcome!.investigations,
           evidence: loaded.snapshot.outcome!.evidence,
           confirmations: loaded.snapshot.outcome!.confirmations,
           confirmationExposures: loaded.snapshot.outcome!.confirmationExposures,
           retainedPatches: loaded.snapshot.outcome!.retainedPatches,
+          deliveries: loaded.snapshot.outcome!.deliveries,
           legacyApplicability: loaded.snapshot.outcome!.legacyApplicability,
           executions: loaded.snapshot.outcome!.executions.map(
             ({ token: _token, ...receipt }) => receipt,

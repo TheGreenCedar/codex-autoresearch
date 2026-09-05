@@ -25,8 +25,8 @@ export async function captureOutcomeInputs(
   environment: string,
 ): Promise<InputFingerprint> {
   const root = await fsp.realpath(cwd);
-  const files: Record<string, string> = {};
-  const links: Record<string, string> = {};
+  const files: Record<string, string> = Object.create(null);
+  const links: Record<string, string> = Object.create(null);
   let entries = 0;
   let bytes = 0;
   const collect = async (relative: string): Promise<void> => {

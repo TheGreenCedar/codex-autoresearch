@@ -5,7 +5,17 @@ const NAV_ITEMS = [
   ["#ledger", "4", "Ledger"],
 ] as const;
 
-export function SideRail({ live, showcase }: { live: boolean; showcase: boolean }) {
+export function SideRail({
+  live,
+  showcase,
+  hasOutcome = false,
+  auditView = false,
+}: {
+  live: boolean;
+  showcase: boolean;
+  hasOutcome?: boolean;
+  auditView?: boolean;
+}) {
   const status = showcase ? "Demo" : live ? "Live" : "Static";
   const detail = showcase ? "Showcase Data" : live ? "Readout" : "Snapshot";
   const markerClassName = live ? "live-dot" : "status-dot";
@@ -13,7 +23,9 @@ export function SideRail({ live, showcase }: { live: boolean; showcase: boolean 
     <aside className="side-rail" aria-label="Dashboard sections">
       <div className="rail-mark">AR</div>
       <nav className="side-nav">
-        {NAV_ITEMS.map(([href, index, label]) => (
+        {NAV_ITEMS.filter(
+          ([href]) => !hasOutcome || href === "#decision-rail" || (auditView && href === "#ledger"),
+        ).map(([href, index, label]) => (
           <a href={href} key={href} aria-label={`Dashboard section: ${label}`}>
             <span className="nav-icon" aria-hidden="true">
               {index}

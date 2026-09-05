@@ -9,7 +9,11 @@
 
 Codex Autoresearch helps improve local code against a repeatable benchmark. Give it a workload, correctness checks, an edit boundary, and a time budget. It records the baseline, evaluates small changes, and leaves a reviewable patch with the evidence behind it.
 
-Use it for bounded performance or resource-use experiments: faster tests, lower build time, less memory, or higher throughput on a defined workload. Reviews, documentation, product research, and one-off fixes stay ordinary Codex work.
+Use it for bounded performance or resource-use experiments: faster tests, lower build time, less memory, or higher throughput on a defined workload. Reviews, documentation, product research, and one-off fixes normally stay ordinary Codex work.
+
+The **3.0 prerelease candidate** also supports explicitly governed investigations when the method is uncertain. One accepted outcome and resource allowance survive evaluator preparation, failed hypotheses, repairs, confirmation, and delivery. Nonnumeric goals use predicates and counterexamples. [Bounded investigations](plugins/codex-autoresearch/docs/investigations.md) explains that optional workflow; the short benchmark path below remains available.
+
+Stable 3.0 requires a separate release decision. This candidate includes a disabled [comparison protocol and collection harness](plugins/codex-autoresearch/docs/comparative-evaluation.md). No model-driven comparison has been run and no comparative benefit is established.
 
 ![Codex Autoresearch dashboard with synthetic example measurements](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
 

@@ -181,6 +181,7 @@ export async function startOutcome(
             confirmationExposures: [],
             candidateBases: [],
             retainedPatches: [],
+            deliveries: [],
             evaluators: [],
             legacySources: sources,
             legacyReconciliations: [],

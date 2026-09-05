@@ -152,6 +152,7 @@ export interface CoherentSessionSnapshot {
     manifest?: OutcomeDependencyManifest | null;
     verifiedConfirmationEvidence?: string[];
     independentConfirmationEvidence?: string[];
+    verifiedDeliveryIds?: string[];
   };
 }
 

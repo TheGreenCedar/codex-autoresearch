@@ -1,3 +1,4 @@
+import { verifiedOutcomeDeliveries } from "./outcome-delivery.js";
 import { verifiedOutcomeConfirmations } from "./github-confirmation.js";
 import { readOutcomeDependencyManifest } from "./evidence-registry.js";
 import { captureOutcomeInputs } from "./outcome-inputs.js";
@@ -181,6 +182,9 @@ export async function collectSessionDecisionFacts(
         snapshot.outcome.contract.authorization.environments[0];
       const confirmations = await verifiedOutcomeConfirmations(snapshot.workDir, snapshot.outcome);
       outcomeFacts = {
+        verifiedDeliveryIds: [
+          ...(await verifiedOutcomeDeliveries(snapshot.workDir, snapshot.outcome)),
+        ],
         verifiedConfirmationEvidence: [...confirmations.verified],
         independentConfirmationEvidence: [...confirmations.independent],
         input: await captureOutcomeInputs(snapshot.workDir, environment),

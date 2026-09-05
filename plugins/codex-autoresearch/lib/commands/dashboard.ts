@@ -26,6 +26,8 @@ import { PLUGIN_VERSION } from "../plugin-version.js";
 import { resolvePackageRoot } from "../runtime-paths.js";
 import { activeQualityGapSlugCandidatesSync } from "../research-gaps.js";
 import { createSessionReadCache } from "../session-core.js";
+import { outcomeStateLocation } from "../outcome-store.js";
+import { checkedAtomicWriteFile } from "../checked-write.js";
 
 type DashboardCommandListOptions = {
   researchSlug?: string;
@@ -177,10 +179,6 @@ export async function exportDashboard(args: UnknownRecord, runtime: DashboardRun
   const ledgerFold = foldDashboardLedger(workDir);
   const ledger = await ledgerFold;
   const entries = Array.isArray(ledger.entries) ? ledger.entries : [];
-  if (Number(ledger.summary?.totalEntries || 0) === 0) {
-    throw new Error(`No autoresearch.jsonl found in ${workDir}`);
-  }
-  const output = resolveOutputInside(workDir, args.output);
   const commands = dashboardCommands(workDir);
   const generatedAt = new Date().toISOString();
   const showcaseExport = boolOption(args.showcase ?? args.showcaseMode, false);
@@ -210,6 +208,20 @@ export async function exportDashboard(args: UnknownRecord, runtime: DashboardRun
     ...dashboardContext,
     ledgerFold: ledger,
   });
+  if (
+    Number(ledger.summary?.totalEntries || 0) === 0 &&
+    !recordOrNull(rawViewModel.decisionPlanProjection)?.investigation
+  ) {
+    throw new Error(`No autoresearch.jsonl or governed outcome found in ${workDir}`);
+  }
+  const hasOutcome = Boolean(recordOrNull(rawViewModel.decisionPlanProjection)?.investigation);
+  const outcomeLocation = hasOutcome ? await outcomeStateLocation(workDir) : null;
+  const exportRoot = outcomeLocation
+    ? path.join(path.dirname(outcomeLocation.path), "exports")
+    : workDir;
+  const output = outcomeLocation
+    ? resolveOutcomeExportOutput(exportRoot, args.output)
+    : resolveOutputInside(workDir, args.output);
   const viewModel = compactDashboardTransportViewModel(
     showcaseExport ? sanitizePublicShowcaseViewModel(rawViewModel) : rawViewModel,
   );
@@ -232,7 +244,8 @@ export async function exportDashboard(args: UnknownRecord, runtime: DashboardRun
     showcaseMode: showcaseExport,
   });
   emitProgress(args, "export", `writing dashboard snapshot to ${output}`);
-  await fsp.writeFile(output, html, "utf8");
+  if (outcomeLocation) await checkedAtomicWriteFile(outcomeLocation.root, output, html);
+  else await fsp.writeFile(output, html, "utf8");
   const modeGuidance = {
     staticExport: output,
     difference:
@@ -601,6 +614,18 @@ function resolveOutputInside(workDir: string, output?: unknown): string {
   if (!resolved.inside) {
     throw new Error(`Dashboard output is outside the working directory: ${resolved.absolutePath}`);
   }
+  return resolved.absolutePath;
+}
+
+function resolveOutcomeExportOutput(exportRoot: string, output?: unknown): string {
+  const resolved = resolvePathInsideRootSync(
+    exportRoot,
+    output ? String(output) : AUTORESEARCH_DASHBOARD_FILE,
+  );
+  if (!resolved.inside || !resolved.absolutePath.endsWith(".html"))
+    throw new Error(
+      "Outcome dashboard output must be an HTML file inside its private exports directory.",
+    );
   return resolved.absolutePath;
 }
 

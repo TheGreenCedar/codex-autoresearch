@@ -982,14 +982,22 @@ export const commandTable = [
     category: "happy_path",
     audience: "default",
     handler: "logExperiment",
-    outputFields: ["ok", "workDir", "experiment", "continuation", "evidence"],
+    outputFields: [
+      "ok",
+      "workDir",
+      "experiment",
+      "continuation",
+      "evidence",
+      "delivery",
+      "artifact",
+    ],
     defaultHelp: true,
     help: [
       "node scripts/autoresearch.mjs log --cwd <project> --observation-file <observation.json>",
       "node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>|--metrics-file <path>] [--asi <json>|--asi-json-file <path>] [--learning <json>|--learning-json-file <path>] [--failure <json>|--failure-json-file <path>] [--evidence-status accepted|rejected|provisional|superseded] [--commit <hash>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]",
     ],
     description:
-      "Append an experiment result, keep/commit or discard/revert changes, then return whether the active loop should immediately continue.",
+      "Record a governed observation or delivery from observation_file, or log a benchmark result with keep/discard handling and continuation guidance.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1506,7 +1514,8 @@ export const commandTable = [
         aliases: ["progressStderr", "progress_stderr"],
       },
     ],
-    description: "Write a self-contained fallback HTML snapshot for autoresearch.jsonl.",
+    description:
+      "Write a self-contained read-only dashboard snapshot. Governed outcome exports stay in private artifact storage; output names resolve within that exports directory.",
     inputSchema: {
       type: "object",
       properties: {

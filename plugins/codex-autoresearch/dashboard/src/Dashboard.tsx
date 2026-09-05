@@ -1,3 +1,4 @@
+import { recordFrom } from "./model";
 import { useMemo } from "react";
 import type { DashboardEntry, DashboardMeta } from "./types";
 import { buildReadout, dashboardMode } from "./model";
@@ -58,6 +59,8 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
   const [viewParam, setViewParam] = useUrlParam("view", DASHBOARD_VIEWS, DEFAULT_DASHBOARD_VIEW);
   const view = viewParam as DashboardView;
   const auditView = view === "audit";
+  const hasOutcome =
+    typeof recordFrom(recordFrom(viewModel.decisionPlanProjection).investigation).id === "string";
 
   return (
     <div
@@ -67,15 +70,23 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
     >
       <nav className="skip-links" aria-label="Skip links">
         <a href="#decision-rail">Next action</a>
-        <a href="#trend-panel">Packet trend</a>
-        <a href="#codex-brief">Codex brief</a>
-        {auditView ? <a href="#strategy-memory">Strategy lanes</a> : null}
-        <a href="#ledger">Ledger</a>
+        {!hasOutcome ? <a href="#trend-panel">Packet trend</a> : null}
+        {!hasOutcome ? <a href="#codex-brief">Codex brief</a> : null}
+        {auditView && !hasOutcome ? <a href="#strategy-memory">Strategy lanes</a> : null}
+        {!hasOutcome || (auditView && session.runs.length > 0) ? (
+          <a href="#ledger">Ledger</a>
+        ) : null}
       </nav>
-      <SideRail live={Boolean(mode.liveRefresh)} showcase={Boolean(mode.showcase)} />
+      <SideRail
+        live={Boolean(mode.liveRefresh)}
+        showcase={Boolean(mode.showcase)}
+        hasOutcome={hasOutcome}
+        auditView={auditView}
+      />
 
       <main className="wrap" aria-busy={refreshState === "refreshing"}>
         <Header
+          hasOutcome={hasOutcome}
           session={session}
           normalized={normalized}
           activeSegment={activeSegment}
@@ -99,33 +110,35 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           <DecisionRail readout={readout} viewModel={viewModel} mode={mode} auditView={auditView} />
         </section>
 
-        <section
-          className={`metric-layout${auditView ? "" : " metric-layout--chart-primary"}`}
-          aria-label="Metric evidence"
-        >
-          <div className="metric-primary-column">
-            <TrendPanel
-              session={session}
-              readout={readout}
-              detailsDefaultOpen={false}
-              chartHeight={auditView ? 350 : 420}
-            />
-            <div className="post-chart-runway" aria-label="Readout context">
-              {auditView ? <MissionControl viewModel={viewModel} mode={mode} /> : null}
-              <SignalStrip view={view} viewModel={viewModel} />
+        {!hasOutcome ? (
+          <section
+            className={`metric-layout${auditView ? "" : " metric-layout--chart-primary"}`}
+            aria-label="Metric evidence"
+          >
+            <div className="metric-primary-column">
+              <TrendPanel
+                session={session}
+                readout={readout}
+                detailsDefaultOpen={false}
+                chartHeight={auditView ? 350 : 420}
+              />
+              <div className="post-chart-runway" aria-label="Readout context">
+                {auditView ? <MissionControl viewModel={viewModel} mode={mode} /> : null}
+                <SignalStrip view={view} viewModel={viewModel} />
+              </div>
             </div>
-          </div>
-          {auditView ? (
-            <ScoreStrip
-              session={session}
-              readout={readout}
-              summary={viewModel.summary}
-              layout="stack"
-            />
-          ) : null}
-        </section>
+            {auditView ? (
+              <ScoreStrip
+                session={session}
+                readout={readout}
+                summary={viewModel.summary}
+                layout="stack"
+              />
+            ) : null}
+          </section>
+        ) : null}
 
-        {!auditView ? (
+        {!auditView && !hasOutcome ? (
           <ScoreStrip
             session={session}
             readout={readout}
@@ -134,14 +147,18 @@ export function Dashboard({ initialEntries, initialMeta }: DashboardProps) {
           />
         ) : null}
 
-        <section className="brief-layout" aria-label="Codex session context">
-          <CodexBrief session={session} viewModel={viewModel} />
-          {auditView ? <StrategyMemory viewModel={viewModel} /> : null}
-        </section>
+        {!hasOutcome ? (
+          <section className="brief-layout" aria-label="Codex session context">
+            <CodexBrief session={session} viewModel={viewModel} />
+            {auditView ? <StrategyMemory viewModel={viewModel} /> : null}
+          </section>
+        ) : null}
 
-        <Ledger session={session} readout={readout} ledgerBounds={ledgerBounds} />
+        {!hasOutcome || (auditView && session.runs.length > 0) ? (
+          <Ledger session={session} readout={readout} ledgerBounds={ledgerBounds} />
+        ) : null}
 
-        {auditView ? (
+        {auditView && !hasOutcome ? (
           <section className="workspace-grid" id="workspace-grid" aria-label="Audit context">
             <ResearchTruthMeter viewModel={viewModel} />
             <FinalizationChecklist viewModel={viewModel} />

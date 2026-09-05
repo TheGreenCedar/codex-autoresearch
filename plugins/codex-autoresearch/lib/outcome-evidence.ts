@@ -73,7 +73,7 @@ export async function readOutcomeDependencyManifest(
   const input = outcomeObject(JSON.parse(bytes.toString("utf8")), "dependency manifest");
   if (input.schemaVersion !== 1) throw new Error("Unsupported dependency manifest schema.");
   const criteria = outcomeObject(input.criteria, "dependency criteria");
-  const parsed: Record<string, DependencyPaths> = {};
+  const parsed: Record<string, DependencyPaths> = Object.create(null);
   for (const criterion of state.contract.criteria) {
     const entry = outcomeObject(criteria[criterion.id], `dependencies for ${criterion.id}`);
     const paths = (key: string) =>
@@ -116,7 +116,7 @@ export function outcomeEvidenceDependencies(
     throw new Error("Trusted dependency source has no mapping for this criterion.");
   const slice = (selected: string[]) => {
     const scopes = new Set(selected);
-    const links: Record<string, string> = {};
+    const links: Record<string, string> = Object.create(null);
     let expanded = true;
     while (expanded) {
       expanded = false;

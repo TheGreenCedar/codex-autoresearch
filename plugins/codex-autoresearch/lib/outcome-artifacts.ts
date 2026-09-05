@@ -107,7 +107,7 @@ export async function captureCandidateBase(
   input: InputFingerprint,
 ): Promise<CandidateBase | null> {
   if (!action.effects.includes("edit")) return null;
-  const files: Record<string, StoredCandidateFile> = {};
+  const files: Record<string, StoredCandidateFile> = Object.create(null);
   for (const file of Object.keys(input.files).filter((file) =>
     pathInsideScope(file, action.paths),
   )) {

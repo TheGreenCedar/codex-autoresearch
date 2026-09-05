@@ -12,6 +12,7 @@ import type { DashboardView } from "../constants";
 import { useCopyText } from "../hooks/useCopyText";
 
 interface HeaderProps {
+  hasOutcome?: boolean;
   session: SessionSegment;
   normalized: NormalizedEntries;
   activeSegment: number;
@@ -32,6 +33,7 @@ interface HeaderProps {
 }
 
 export function Header({
+  hasOutcome = false,
   session,
   normalized,
   activeSegment,
@@ -75,13 +77,17 @@ export function Header({
       <div className="toolbar-main">
         <div className="toolbar-session" aria-label="Current session">
           <strong>{session.config.name || "Autoresearch session"}</strong>
-          <div className="metric-line toolbar-metric-line">
-            <span>{metricLabel}</span>
-            <span>{directionLabel(readout.metricDefinition.bestDirection)}</span>
-            <span>
-              {session.runs.length} run{session.runs.length === 1 ? "" : "s"}
-            </span>
-          </div>
+          {hasOutcome ? (
+            <div className="metric-line">Bounded investigation</div>
+          ) : (
+            <div className="metric-line toolbar-metric-line">
+              <span>{metricLabel}</span>
+              <span>{directionLabel(readout.metricDefinition.bestDirection)}</span>
+              <span>
+                {session.runs.length} run{session.runs.length === 1 ? "" : "s"}
+              </span>
+            </div>
+          )}
         </div>
         <div className="toolbar-actions">
           <div className="header-actions">

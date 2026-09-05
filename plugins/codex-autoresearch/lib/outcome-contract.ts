@@ -1,4 +1,10 @@
 import {
+  parseOutcomeDeliveryTarget,
+  parseOutcomeDeliveryRecord,
+  type OutcomeDeliveryTarget,
+  type OutcomeDeliveryRecord,
+} from "./outcome-delivery.js";
+import {
   parseConfirmationAttempt,
   parseConfirmationExposure,
   type ConfirmationAttempt,
@@ -73,6 +79,7 @@ export interface OutcomeContract {
   };
   budget: OutcomeBudget;
   confirmation: ConfirmationAuthority | null;
+  deliveryTarget: OutcomeDeliveryTarget | null;
   dependencySource: { path: string; digest: string; authorityReference: string } | null;
   digest: string;
 }
@@ -115,6 +122,7 @@ export interface OutcomeState {
   confirmationExposures: ConfirmationExposure[];
   candidateBases: CandidateBase[];
   retainedPatches: RetainedCodePatch[];
+  deliveries: OutcomeDeliveryRecord[];
   legacySources: LegacySource[];
   legacyReconciliations: Array<{
     at: string;
@@ -345,6 +353,7 @@ export function parseOutcomeContract(value: unknown): OutcomeContract {
       ),
     },
     budget: parseOutcomeBudget(input.budget),
+    deliveryTarget: parseOutcomeDeliveryTarget(input.deliveryTarget),
     confirmation: parseConfirmationAuthority(input.confirmation),
     dependencySource,
   };
@@ -557,6 +566,7 @@ export function parseOutcomeState(value: unknown): OutcomeState {
       parseRetainedCodePatch,
       "retained patches",
     ),
+    deliveries: parseRecords(input.deliveries, parseOutcomeDeliveryRecord, "deliveries"),
     legacySources,
     legacyReconciliations,
     legacyApplicability,
@@ -585,6 +595,25 @@ export function parseOutcomeState(value: unknown): OutcomeState {
       execution.input?.digest !== attempt.inputDigest
     )
       throw new Error("Confirmation does not match its authorized candidate execution.");
+  }
+  for (const delivery of state.deliveries) {
+    const execution = state.executions.find((entry) => entry.id === delivery.executionId);
+    if (
+      !execution ||
+      execution.action.purpose !== "delivery" ||
+      execution.authorizationDigest !== delivery.authorizationDigest ||
+      !history.some(
+        (entry) =>
+          entry.contract.digest === delivery.authorizationDigest &&
+          entry.contract.authorization.delivery === delivery.endpoint,
+      )
+    )
+      throw new Error("Delivery is not bound to its authorized action and endpoint.");
+    if (
+      delivery.endpoint !== "answer" &&
+      !state.candidateBases.some((base) => base.executionId === delivery.candidateExecutionId)
+    )
+      throw new Error("Delivered code has no owned candidate baseline.");
   }
   for (const exposure of state.confirmationExposures)
     if (

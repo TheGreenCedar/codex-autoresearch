@@ -313,6 +313,8 @@ export interface DashboardViewModel {
   ledgerEntries?: DashboardEntry[];
   ledgerBounds?: LedgerBounds;
   decisionPlanProjection?: Record<string, unknown> | null;
+  investigationAudit?: Record<string, unknown> | null;
+  outcomeRuntime?: Record<string, unknown> | null;
   decisionEnvelope?: DecisionEnvelopeModel | null;
   decisionEnvelopeSummary?: DecisionEnvelopeSummary;
   nextBestAction?: NextBestAction;

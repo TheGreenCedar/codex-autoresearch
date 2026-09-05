@@ -13,7 +13,7 @@ export async function captureConfirmationCandidate(
   environment: string,
 ): Promise<ConfirmationCandidate> {
   const input = await captureOutcomeInputs(cwd, environment);
-  const files: ConfirmationCandidate["files"] = {};
+  const files: ConfirmationCandidate["files"] = Object.create(null);
   let bytes = 0;
   for (const file of Object.keys(input.files)) {
     const absolute = path.join(cwd, file);

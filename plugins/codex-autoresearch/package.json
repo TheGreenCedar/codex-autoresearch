@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "2.9.0",
+  "version": "3.0.0-rc.1",
   "private": true,
   "description": "Codex plugin for bounded, measured benchmark and optimization loops.",
   "homepage": "https://github.com/TheGreenCedar/codex-autoresearch",
@@ -29,6 +29,7 @@
     "dist/scripts/check.mjs",
     "dist/scripts/check-runner.mjs",
     "dist/scripts/outcome-worker.mjs",
+    "dist/scripts/comparison-harness.mjs",
     "dist/scripts/finalize-autoresearch.mjs",
     "dist/scripts/operator-task-benchmark.mjs",
     "docs/",
@@ -63,7 +64,7 @@
     "test:compiled:dashboard": "node --test --test-timeout=120000 --test-concurrency=8 \"dist/tests/dashboard/**/*.test.mjs\"",
     "test:compiled:finalize": "node --test --test-timeout=120000 --test-concurrency=2 \"dist/tests/finalize/**/*.test.mjs\"",
     "test:compiled:process": "node --test --test-timeout=120000 --test-concurrency=1 \"dist/tests/process/**/*.test.mjs\" dist/tests/outcome-worker.test.mjs",
-    "test:compiled:core": "node --test --test-timeout=120000 --test-concurrency=8 dist/tests/bootstrap-runtime.test.mjs dist/tests/coherent-session-snapshot.test.mjs dist/tests/decision-compiler.test.mjs dist/tests/decision-projection.test.mjs dist/tests/evidence-core.test.mjs dist/tests/experiment-contract.test.mjs dist/tests/outcome-evidence.test.mjs dist/tests/outcome-foundation.test.mjs dist/tests/result-semantics.test.mjs dist/tests/investigation-workflow.test.mjs dist/tests/tool-contracts-decision-protocol.test.mjs dist/tests/experiment-memory.test.mjs dist/tests/command-builders.test.mjs dist/tests/check-runner.test.mjs dist/tests/benchmark-constraints.test.mjs dist/tests/loop-governance.test.mjs dist/tests/session-control-plane.test.mjs dist/tests/packet-diagnostics.test.mjs dist/tests/state-finalization-readout.test.mjs dist/tests/source-hygiene.test.mjs dist/tests/hostile-workflow.test.mjs dist/tests/product-claim-coverage.test.mjs dist/tests/dashboard-server-registry.test.mjs dist/tests/decision-guidance-dashboard-health.test.mjs dist/tests/decision-guidance-gate-quality.test.mjs dist/tests/decision-guidance-lane-briefs.test.mjs dist/tests/decision-guidance-runtime-drift.test.mjs dist/tests/decision-guidance-task-artifacts.test.mjs dist/tests/decision-guidance-terminal-report.test.mjs dist/tests/github-confirmation.test.mjs",
+    "test:compiled:core": "node --test --test-timeout=120000 --test-concurrency=8 dist/tests/bootstrap-runtime.test.mjs dist/tests/coherent-session-snapshot.test.mjs dist/tests/decision-compiler.test.mjs dist/tests/decision-projection.test.mjs dist/tests/evidence-core.test.mjs dist/tests/experiment-contract.test.mjs dist/tests/outcome-evidence.test.mjs dist/tests/outcome-foundation.test.mjs dist/tests/result-semantics.test.mjs dist/tests/investigation-workflow.test.mjs dist/tests/tool-contracts-decision-protocol.test.mjs dist/tests/experiment-memory.test.mjs dist/tests/command-builders.test.mjs dist/tests/check-runner.test.mjs dist/tests/benchmark-constraints.test.mjs dist/tests/loop-governance.test.mjs dist/tests/session-control-plane.test.mjs dist/tests/packet-diagnostics.test.mjs dist/tests/state-finalization-readout.test.mjs dist/tests/source-hygiene.test.mjs dist/tests/hostile-workflow.test.mjs dist/tests/product-claim-coverage.test.mjs dist/tests/dashboard-server-registry.test.mjs dist/tests/decision-guidance-dashboard-health.test.mjs dist/tests/decision-guidance-gate-quality.test.mjs dist/tests/decision-guidance-lane-briefs.test.mjs dist/tests/decision-guidance-runtime-drift.test.mjs dist/tests/decision-guidance-task-artifacts.test.mjs dist/tests/decision-guidance-terminal-report.test.mjs dist/tests/github-confirmation.test.mjs dist/tests/outcome-delivery.test.mjs dist/tests/comparative-protocol.test.mjs",
     "test:platform": "run-s build:dashboard build:node test:compiled:platform test:compiled:platform:git",
     "test:compiled:platform": "node --test --test-timeout=120000 --test-concurrency=2 dist/tests/check-runner.test.mjs dist/tests/bootstrap-runtime.test.mjs dist/tests/cli/setup-config-tools.test.mjs dist/tests/cli/runtime-release.test.mjs dist/tests/product/session-documents.test.mjs dist/tests/process/runner-process-lifecycle.test.mjs dist/tests/outcome-worker.test.mjs",
     "test:compiled:platform:git": "node --test --test-timeout=120000 --test-name-pattern=\"^(scoped keep commits preserve unrelated staged files|discard reverts scoped experiment paths without deleting unrelated dirty work|keep logs report structured git index lock recovery|keep commit creation does not execute repository hooks)$\" dist/tests/cli/git-transactions.test.mjs",
@@ -71,13 +72,14 @@
     "test:perf": "run-s build:node test:compiled:perf",
     "test:dashboard": "run-s build:node build:dashboard test:compiled:dashboard",
     "test:dashboard:browser": "npm run build:dashboard && node --test tests/dashboard-browser-a11y.test.mjs",
-    "test:dashboard:cross-browser": "npm run build:dashboard && node --test tests/dashboard-cross-browser.test.mjs",
+    "test:dashboard:cross-browser": "npm run build:dashboard && node --test tests/dashboard-cross-browser.test.mjs tests/dashboard-outcome-browser.test.mjs",
     "test:finalize": "run-s build:dashboard build:node test:compiled:finalize",
     "test:core": "run-s build:node test:compiled:core",
     "check:product": "npm run build:node && node scripts/check.mjs",
     "check:source-hygiene": "node scripts/check.mjs --phase source-hygiene",
     "smoke:release-provenance": "node scripts/check.mjs --phase release-provenance-smoke",
-    "check": "run-p typecheck lint format:check && npm run check:product"
+    "check": "run-p typecheck lint format:check && npm run check:product",
+    "comparison": "npm run build:node && node dist/scripts/comparison-harness.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

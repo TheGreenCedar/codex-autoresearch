@@ -77,3 +77,17 @@ A `github-actions` action has purpose `confirmation` and a `candidateArtifact` c
 The adapter persists an attempt before dispatch and saves the returned run ID. If the response is lost, resume finds the uniquely nominated run without dispatching again. Unavailable proof remains reconcilable. Verification binds run, workflow revision, protocol, population, environment, criterion, and candidate to the receipt. Provider duration cannot be replaced by a shorter local observation interval; missing duration is conservatively estimated, and over-budget proof cannot satisfy a criterion.
 
 Each attempt and disclosed feedback stays in the outcome. Changing investigations cannot refresh exposed data. Verified Actions provenance is internal reproduction unless the accepted custody boundary is external and the data remains fresh. Private repository artifact attestations are optional. The maintained public synthetic CI fixture tests this integration and explicitly reports no independence or product-benefit claim.
+
+## Delivery
+
+Criteria coverage makes delivery ready; it does not deliver the result. Reserve a managed action with `purpose: "delivery"`, then use `log --observation-file` with an ID, its execution ID, and a `delivery` object. Delivery preparation and recording consume that action's remaining allowance.
+
+For an answer endpoint, provide `delivery.answer`. For a code endpoint, provide `delivery.candidateExecutionId` and `delivery.paths`. The candidate must have a completed owning edit action, unchanged assessed inputs, and actual current worker correctness checks. The delivered patch must contain the complete owned change that was assessed. A subset belongs in retained artifacts until its separate application is assessed. Initial dirty work remains the patch's baseline; the patch does not claim to reconstruct that baseline from Git HEAD.
+
+An integrated or deployed endpoint additionally requires an accepted parent `deliveryTarget` with GitHub `repository`, `ref`, and, for deployment, `environment`. Its delivery action must carry `git` or `publish` authority. Perform the authorized integration or deployment within that ticket, then log its result; logging verifies existing provider state and performs no publish action. Deployment logging includes the existing `deploymentId`.
+
+The provider's immutable commit tree must match the complete assessed input, including tracked evaluator and check sources. Untracked or ignored local build inputs cannot silently disappear from that comparison. Deployment verification also checks the latest successful status's environment and deployment identity. A local patch alone cannot satisfy either endpoint.
+
+A successful transaction records the artifact, candidate, evidence, authorization, and endpoint in an immutable manifest bound to the delivery execution. Exact replay returns that receipt. Input drift, missing or substituted artifacts, incomplete criteria, and expired allowance prevent current completion. `state` and `finalize-preview` report `satisfied` only when both the current criteria and requested endpoint are verified. Full JSON audit output retains the delivery receipts and owned baseline identities.
+
+Outcome dashboard exports are written under the private outcome `exports/` directory, so taking a snapshot cannot change the assessed candidate. An explicit `--output` must name an HTML file within that directory. The `log` delivery response includes the immutable artifact path and digest.

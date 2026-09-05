@@ -29,7 +29,6 @@ An explicit loop request with an incomplete contract is `needs-user`, with bound
 
 The fit parser reads one labeled field per line: `Benchmark: <command>`, `Metric: <name> (<unit>), lower is better` (or `higher`), `Checks: <command>`, and `Scope: <paths>`, plus `Stop after <N> packets`. If the user's explicit loop request already supplies those facts in prose, include that faithful field transcription with the original request. Preserve negation and read-only intent, and leave genuinely missing facts missing. Do not ask the user to repeat facts merely to satisfy parser syntax.
 
-
 ## Continue directly when the loop does not fit
 
 Use this evidence capsule:
@@ -151,7 +150,6 @@ npm run check
 
 Dashboard-visible changes also require a served or exported visual inspection and `npm run test:dashboard:browser`. Run `git diff --check` for every change.
 
-
 ## Governed investigations
 
 Use an outcome when the user requests an investigation that spans preparation, experiments, repairs, confirmation, and delivery. Require an explicit cumulative action limit, execution-time limit, or deadline before starting governed work. Never invent an allowance. Continue the state-free direct-work path for ordinary work that does not need this governance.
@@ -164,5 +162,8 @@ Use current criterion coverage when assessing evidence. A retained observation m
 
 Before discarding useful owned code, select only the paths to retain in the observation's `retainPatch` request. Retention is not code acceptance. Applying a retained patch requires a new authorized action and fresh scope and correctness assessment. Preserve preexisting dirty work. Reconcile legacy drift only after reviewing the changed sources and recording the corresponding authorization amendment; imported notes remain history.
 
-
 For governed process or GitHub Actions work, reserve through `next --action-file` and reconnect with `next --resume`; never replace an uncertain launch. Use `--cancel` on the existing execution. Distinguish verified execution provenance from externally controlled evaluator independence. Read [bounded investigations](../../docs/investigations.md) for the native observation boundary, confirmation receipt protocol, and cumulative accounting.
+
+When the canonical outcome projection is delivery-ready, reserve a managed delivery action and log the requested endpoint using current criterion evidence and actual correctness checks. Deliver the complete assessed owned patch. Retained subsets are not accepted code. Integrated or deployed delivery requires the accepted provider target and actual matching provider proof. Claim completion only when the canonical projection is satisfied; stopped-unmet needs an unresolved-criteria handoff.
+
+The comparison harness is disabled by default. Engineering fixtures do not authorize model trials. Require a separate pilot or scoring budget and the accepted host/assessment boundaries in the [comparison protocol](../../docs/comparative-evaluation.md). Do not claim comparative superiority or publish stable 3.0 from engineering checks.

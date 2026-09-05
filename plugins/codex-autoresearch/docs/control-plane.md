@@ -92,3 +92,6 @@ Non-deterministic keep qualification uses the complete accepted candidate and re
 
 
 The canonical result separates execution completion, measurement validity, hypothesis conclusion, metric movement, criterion attainment, and code acceptance. Valid negative predicate evidence refutes a criterion without becoming a crashed execution. Threshold attainment does not imply improvement, and improvement does not imply attainment or a keep. The compact `result` projection carries these dimensions on every surface; the legacy `outcome` alias describes metric movement (`uncompared` when valid evidence has no comparison).
+
+
+Governed outcomes add active, blocked, satisfied, and stopped-unmet projections to the same compiler. A satisfied criterion and a resolved hypothesis are separate facts. Delivery-ready means every current criterion is covered; satisfied additionally requires a verified receipt for the requested endpoint. The terminal and read-only dashboard use this projection, including remaining cumulative allowance and unresolved criterion IDs. Legacy finalization and learning records cannot supply outcome completion authority.

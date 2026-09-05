@@ -183,3 +183,8 @@ Update these together:
 - tests or docs that intentionally display or assert the version
 
 After release, inspect the installed versioned cache before treating source and installed behavior as the same runtime.
+
+
+The 3.0 candidate packages the internal outcome worker and comparison collector. Changes to either entrypoint must stay synchronized with package contents, bootstrap archive validation, and extracted-runtime smoke. Native platform checks include outcome worker cancellation and recovery. The CI workflow's synthetic round trip uploads a fixed candidate, dispatches the same workflow's bounded evaluator, and verifies the returned run and artifact. Its proof explicitly excludes evaluator independence and product usefulness.
+
+Run no model-driven pilot or scoring trials as part of engineering verification. The [comparison protocol](comparative-evaluation.md) requires a separate budget and accepted host before any trial execution. Stable 3.0 remains gated on the comparative decision.

@@ -1,3 +1,4 @@
+import { formatCliJson } from "../lib/cli-json.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { classifyResult, isResultSemantics } from "../lib/result-semantics.js";
@@ -68,4 +69,14 @@ test("result dimensions reject coerced JSON values", () => {
   for (const key of Object.keys(result))
     for (const malformed of [["valid"], [result[key as keyof typeof result]], 0, null, {}, true])
       assert.equal(isResultSemantics({ ...result, [key]: malformed }), false, key);
+});
+
+test("compact result formatting preserves independent dimensions and ordinary JSON values", () => {
+  const value = {
+    result: classifyResult({ kind: "predicate", observed: "counterexample" }),
+    history: [null, { text: 'quoted " text', count: 1 }],
+    empty: {},
+  };
+  assert.deepEqual(JSON.parse(formatCliJson(value)), value);
+  assert.equal(formatCliJson({ result: value.result }).split("\n").length, 3);
 });

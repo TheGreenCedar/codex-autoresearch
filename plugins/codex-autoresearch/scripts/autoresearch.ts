@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { formatCliJson } from "../lib/cli-json.js";
 import {
   outcomeCommand,
   nextOutcomeAction,
@@ -3489,6 +3490,30 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
         ? projectDashboardDecisionPlan(canonicalState.decisionPlan as DecisionPlan)
         : null,
     resolvedDecision: canonicalState.resolvedDecision || null,
+    investigationAudit: canonicalState.investigation
+      ? {
+          investigations: canonicalState.investigations,
+          executions: canonicalState.executions?.map((receipt: LooseObject) => ({
+            id: receipt.id,
+            status: receipt.status?.kind,
+            result: receipt.result,
+            consumptionSource: receipt.consumptionSource,
+          })),
+          evidence: canonicalState.evidence?.map((evidence: LooseObject) => ({
+            id: evidence.id,
+            criterionId: evidence.criterionId,
+            text: evidence.text,
+            relation: evidence.relation,
+            historicalValidity: evidence.historicalValidity,
+          })),
+          deliveries: canonicalState.deliveries,
+          retainedPatches: canonicalState.retainedPatches?.map((patch: LooseObject) => ({
+            id: patch.id,
+            digest: patch.digest,
+            disposition: patch.disposition,
+          })),
+        }
+      : null,
   };
   return buildDashboardViewModelLazy({
     state: enrichedState as any,
@@ -5193,7 +5218,7 @@ async function executeAutoresearchCli(
       writeStdout(outcome.text);
       return;
     }
-    writeStdout(JSON.stringify(redactCliResponseForOutput(outcome.result), null, 2));
+    writeStdout(formatCliJson(redactCliResponseForOutput(outcome.result)));
     if (outcome.keepAlive) return await new Promise(() => {});
   });
 }
