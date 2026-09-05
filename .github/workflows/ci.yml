@@ -115,9 +115,6 @@ jobs:
     permissions:
       contents: read
       actions: write
-    env:
-      AUTORESEARCH_SYNTHETIC_CWD: ${{ runner.temp }}/autoresearch-synthetic-subject
-      AUTORESEARCH_SYNTHETIC_OUTPUT: ${{ runner.temp }}/autoresearch-synthetic-output
     defaults:
       run:
         working-directory: plugins/codex-autoresearch
@@ -130,6 +127,10 @@ jobs:
           node-version: 24
       - run: npm ci --prefer-offline --no-audit
       - run: npm run build:node
+      - name: Set synthetic paths
+        run: |
+          echo "AUTORESEARCH_SYNTHETIC_CWD=$RUNNER_TEMP/autoresearch-synthetic-subject" >> "$GITHUB_ENV"
+          echo "AUTORESEARCH_SYNTHETIC_OUTPUT=$RUNNER_TEMP/autoresearch-synthetic-output" >> "$GITHUB_ENV"
       - run: node dist/scripts/synthetic-confirmation.mjs prepare
       - id: candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -160,9 +161,6 @@ jobs:
     permissions:
       contents: read
       actions: read
-    env:
-      AUTORESEARCH_SYNTHETIC_CWD: ${{ runner.temp }}/autoresearch-confirmation-subject
-      AUTORESEARCH_SYNTHETIC_OUTPUT: ${{ runner.temp }}/autoresearch-confirmation-output
     defaults:
       run:
         working-directory: plugins/codex-autoresearch
@@ -173,6 +171,10 @@ jobs:
           node-version: 24
       - run: npm ci --prefer-offline --no-audit
       - run: npm run build:node
+      - name: Set confirmation paths
+        run: |
+          echo "AUTORESEARCH_SYNTHETIC_CWD=$RUNNER_TEMP/autoresearch-confirmation-subject" >> "$GITHUB_ENV"
+          echo "AUTORESEARCH_SYNTHETIC_OUTPUT=$RUNNER_TEMP/autoresearch-confirmation-output" >> "$GITHUB_ENV"
       - run: node dist/scripts/synthetic-confirmation.mjs confirm
         env:
           GH_TOKEN: ${{ github.token }}
