@@ -36,66 +36,26 @@ jobs:
       - name: Enforce action pinning
         run: node .github/scripts/check-workflow-policy.mjs
 
-  test:
+  validated-source:
     needs: workflow-policy
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 120 || 45 }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: plugins/codex-autoresearch
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    permissions:
+      actions: read
+      contents: read
     steps:
       - name: Checkout Code
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version: 24
-          cache: 'npm'
-          cache-dependency-path: plugins/codex-autoresearch/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci --prefer-offline --no-audit
-
-      - name: Run full check gate
-        run: npm run check
-
-      - name: Run required Chrome dashboard smoke
-        if: runner.os == 'Linux'
+      - name: Require successful CI for this exact main commit
         env:
-          CODEX_AUTORESEARCH_BROWSER: /usr/bin/google-chrome
-        run: npm run test:dashboard:browser
-
-      - name: Install cross-browser dashboard engines
-        if: runner.os == 'Linux'
-        run: npx playwright install --with-deps chromium firefox webkit
-
-      - name: Run cross-browser dashboard gate
-        if: runner.os == 'Linux'
-        run: npm run test:dashboard:cross-browser
-
-      - name: Upload cross-browser dashboard evidence
-        if: runner.os == 'Linux' && always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: dashboard-cross-browser-release-${{ github.run_attempt }}
-          path: plugins/codex-autoresearch/tmp/dashboard-cross-browser/
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Run CLI smoke test
-        run: node scripts/autoresearch.mjs --help
-
-      - name: Run finalizer launcher smoke test
-        run: node scripts/finalize-autoresearch.mjs --help
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/require-ci.mjs
 
   publish:
-    needs: test
+    needs: validated-source
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     permissions:
       attestations: write
       contents: write

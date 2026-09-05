@@ -113,7 +113,7 @@ Automation does not prove spoken output, physical-device behavior, or accessibil
 
 `dist/` and `assets/dashboard-build/` are generated and ignored in source. Release artifacts must include them.
 
-`npm run check` runs compiled test suites sequentially with a separate bounded deadline for each suite; streamed failures include timeout causes. Hosted Windows jobs have a 120-minute ceiling to accommodate native Git fixture overhead. It builds the runtime and dashboard, checks the generated assets, packs the plugin, extracts it, and smokes both the launcher and dashboard export. `prepack` is the single publish-time build path.
+`npm run check` runs compiled test suites sequentially with a separate bounded deadline for each suite; streamed failures include timeout causes. It builds the runtime and dashboard, checks the generated assets, packs the plugin, extracts it, and smokes both the launcher and dashboard export. `prepack` is the single publish-time build path.
 
 If a Git marketplace checkout lacks `dist/`, `scripts/bootstrap-runtime.mjs` downloads the matching GitHub release tarball and adjacent `codex-autoresearch-<version>.tgz.sha256`. Hydration requires `gh` and network access, verifies the checksum and release attestation for this repository's release workflow, validates every archive entry before extraction, checks package name/version, and only then hydrates the plugin cache. Hydration stages and verifies both the runtime and dashboard beside their targets, retains ownership-marked rollback directories until both installs succeed, and restores the prior pair if either install fails. There is no unverified fallback.
 
@@ -128,9 +128,13 @@ A release tarball must:
 
 ## Release flow
 
+CI has a 15-minute job limit. Linux runs the complete product, package, and browser gates. macOS and Windows run `npm run test:platform`: native shell and process behavior, session paths, runtime hydration, and scoped Git keep/discard, index-lock, and hook boundaries. The exhaustive platform-independent cases run on Linux.
+
+CI runs for pull requests into `dev` and pushes to `main`. Promotion does not start duplicate `dev` push and `main` pull-request runs. Release requires successful CI for the exact `main` commit, then independently builds, inspects, smokes, and attests the package; it does not repeat the source test matrix. Missing, failed, cancelled, or unrelated CI blocks publication.
+
 Do not push release tags by hand.
 
-After a synchronized version bump lands on `main`, the `Auto Release` workflow accepts only a strictly increasing stable SemVer and calls the reusable `Release` workflow. That workflow runs checks, builds through `prepack`, packs and extracts the artifact, refuses an existing tag, then creates the GitHub release and tag with the tarball and checksum.
+After a synchronized version bump lands on `main`, the `Auto Release` workflow accepts only a strictly increasing stable SemVer and calls the reusable `Release` workflow. That workflow verifies successful CI for its exact commit, builds through `prepack`, packs and extracts the artifact, refuses an existing tag, then creates the GitHub release and tag with the tarball and checksum.
 
 Use manual `Release` dispatch only as a recovery path with the package version. A manual prerelease is published with GitHub's prerelease flag and does not move `latest`. Manual downgrades are rejected too.
 

@@ -8,7 +8,7 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## 2.9.0 - 2026-09-05
 
-- Run verification suites with separate bounded deadlines and report timeout causes, so a slow Windows suite does not consume the time allowed for later suites.
+- Bound CI jobs to 15 minutes: run the full suite on Linux and focused native checks on macOS and Windows. Release reuses successful CI for its exact commit, then verifies the packaged artifact and provenance. Local full checks retain separate suite deadlines and report timeout causes.
 
 Measured loops now have a clearer first run, stricter repeat evidence, and a simpler handoff. Existing sessions keep working with their current note paths; new sessions put notes and ideas in `.autoresearch/`.
 
