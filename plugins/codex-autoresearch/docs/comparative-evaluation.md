@@ -2,7 +2,7 @@
 
 The 3.0 candidate has no demonstrated advantage over ordinary Codex or released 2.9.0. Engineering checks and the public synthetic GitHub fixture establish implementation behavior. Comparative benefit and stable release require a separately funded study.
 
-The maintained harness prepares a fixed, randomized schedule and collects authenticated host receipts and blinded assessments. It does not start models. Trial execution belongs to the accepted host, which must enforce the same aggregate allocation for each task and arm. The collector exports paired task-level results for the independently preregistered analysis and leaves its own conclusion inconclusive.
+The comparison tool prepares a fixed, randomized schedule and collects signed host receipts and blinded assessments. It does not start models. The accepted host runs the trials and must enforce the same total allowance for each task in each comparison group, called an arm. The collector pairs each task's results across arms for the independently preregistered analysis. It does not decide whether the candidate is better; its own conclusion stays inconclusive.
 
 ## Stages and ownership
 
@@ -12,7 +12,7 @@ The maintained harness prepares a fixed, randomized schedule and collects authen
 4. Execute the sealed schedule on the accepted host. Keep the arm mapping private from assessors and present outputs under the generated opaque trial IDs.
 5. Collect signed usage and outcome receipts, then apply the pinned analysis to paired task-level results. A task is the independent sampling unit; repeated seeds are averaged within its arm. Report infeasible-task handling separately. Unresolved uncertainty remains inconclusive.
 
-The benefit targets are more verified outcomes on uncertain tasks, no increased cost per verified success, less operator burden, and noninferiority on simple benchmarks. Test them against both ordinary Codex and released 2.9.0. Report intervals and failures, including cost when no output succeeds; do not manufacture a finite cost-per-success value for zero successes. Passing a subset of targets does not pass the comparative release gate.
+To pass, the candidate must produce more verified outcomes on uncertain tasks, avoid increasing cost per verified success, require less work from the operator, and meet the preregistered noninferiority margin on simple benchmarks. Test all four requirements against both ordinary Codex and released 2.9.0. Report intervals and failures, including total cost when no output succeeds. With zero successes, cost per success has no finite value. Passing only some requirements does not pass the comparative release gate.
 
 ## Harness
 
@@ -42,7 +42,7 @@ The protocol has `schemaVersion: 1`, an ID, stage (`pilot` or `scoring`), one mo
 - `assessmentAuthority`: a distinct blinded assessor reference and Ed25519 public key.
 - `preregistration` for scoring: a registry reference, SHA-256 analysis artifact digest, and simple-task noninferiority margin between zero and one.
 
-The host must verify and attest the actual runtime, model, environment, input, and enforcement configuration. A signature authenticates that authority's statement; it does not independently prove host isolation, assessor blindness, or scientific independence. Those boundaries must be established and audited before the pilot. No local declaration supplies a provider spending cap.
+The host must verify and attest the actual runtime, model, environment, input, and budget enforcement configuration. A signature identifies who made the statement. Host isolation, assessor blindness, and scientific independence still need separate checks before the pilot. A local declaration cannot enforce a provider spending cap.
 
 ## Receipt protocol
 

@@ -8,20 +8,16 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## 3.0.0-rc.1 - Unreleased candidate
 
-- Deliver a complete owned, checked patch or an answer after current criterion coverage. Integrated and deployed endpoints require accepted targets and actual provider proof; retained subsets remain unaccepted. Terminal and dashboard share outcome, allowance, evidence, and delivery state.
+- Add bounded investigations for work whose method may change. The `outcome` commands preserve the accepted objective, permissions, and cumulative costs across preparation, failed attempts, repairs, confirmation, and delivery. An explicit budget is required; linked worktrees share reservations, and unresolved executions keep their reserved allowance.
+- Resume actions by their recorded identity without launching them twice. Evaluator versions are immutable, and goals can use predicate observations without inventing a metric. Existing benchmark sessions remain available.
+- Distinguish a valid observation, an improved metric, a reached target, and accepted code. Legacy learning notes no longer decide whether work continues. Repeated failures use the accepted limit and the same failure code and relevant preconditions.
+- Check whether each result still applies to its criterion after inputs change. Cached results do not count as new measurements. Selected changes can be saved as immutable patches, but saving part of a rejected candidate does not accept it. Product proof requirements must have explicit identities; goal wording cannot create them.
+- Keep process actions running in a packaged worker when the observing CLI closes. GitHub Actions confirmation verifies the candidate, evaluator, and execution receipt and preserves disclosed feedback. It records provider usage separately from local observation time; verified execution alone does not establish evaluator independence.
+- Deliver an answer or the complete checked patch only when every current criterion has evidence. Integration and deployment also require accepted targets and matching provider records. Terminal and dashboard show the same outcome, remaining allowance, evidence, and delivery state.
+- Preserve original legacy session bytes and referenced artifacts during adoption. Unknown historical costs stay unknown. Later legacy writes block dependent work; authorized reconciliation keeps both snapshots.
+- Keep dashboard exports outside the inputs being assessed. Windows cleanup rejects reused process IDs whose identities have changed and keeps the reservation when cleanup is uncertain.
 - Include a disabled comparison protocol and receipt collector for separately funded pilot and scoring studies. No model-driven comparisons or stable 3.0 release are included.
-- Keep outcome dashboard exports outside assessed candidate inputs. Windows cleanup rejects replacement process identities and retains uncertain exposure.
-
-- Run bounded process actions in a durable packaged worker and reconnect without duplicate launches. GitHub Actions confirmation binds immutable candidates and evaluator authority to verified receipts, preserves disclosure history, and distinguishes provider usage from local observation and evaluator independence.
-
-- Track criterion-specific evidence applicability and preserve selected owned changes as immutable patches. Cached results do not add measurements; rejected candidates do not become accepted through artifact retention. Legacy drift reconciliation preserves both snapshots, and product proof requirements use explicit identities instead of goal wording.
-
-- Add the outcome command family, bounded action tickets, exact resume identities, and predicate observations without metrics. Linked investigations retain cumulative costs and immutable evaluator versions; ordinary benchmark sessions remain usable.
-
-- Separate valid observations, metric movement, target attainment, and code acceptance. Legacy learning prose no longer controls continuation; repeated failures honor the accepted limit and exact defect identity.
-
-- Outcomes retain their original authorization and cumulative resource accounting across investigations. Governed work requires an explicit budget; linked worktrees share reservations, and uncertain execution retains its resource exposure.
-- Adoption preserves legacy session bytes and referenced artifacts with unknown historical costs. Subsequent legacy changes block dependent work instead of silently replacing imported evidence.
+- Clarify the investigation, evidence, and release documentation, including the accepted retry limit and the separate comparative release gate.
 
 ## 2.9.0 - 2026-09-05
 
