@@ -123,13 +123,10 @@ test("release workflows preserve executable package and browser safeguards", asy
     ),
   );
   const ciTestJob = yamlMappingBlock(workflows["ci.yml"], "test", 2);
-  const releaseTestJob = yamlMappingBlock(workflows["release.yml"], "test", 2);
+  const releaseValidationJob = yamlMappingBlock(workflows["release.yml"], "validated-source", 2);
   const releasePublishJob = yamlMappingBlock(workflows["release.yml"], "publish", 2);
 
-  for (const [workflowName, job] of [
-    ["ci", ciTestJob],
-    ["release", releaseTestJob],
-  ] as const) {
+  for (const [workflowName, job] of [["ci", ciTestJob]] as const) {
     const commands = workflowRunCommands(job);
     assert.ok(commands.includes("npm run check"));
     assert.ok(commands.includes("npm run test:dashboard:browser"));
@@ -142,7 +139,15 @@ test("release workflows preserve executable package and browser safeguards", asy
       "macos-latest",
     ]);
     const steps = workflowRunSteps(job);
-    assert.equal(steps.find((step) => step.command === "npm run check")?.condition, "");
+    assert.equal(
+      steps.find((step) => step.command === "npm run check")?.condition,
+      "runner.os == 'Linux'",
+    );
+    assert.equal(
+      steps.find((step) => step.command === "npm run test:platform")?.condition,
+      "runner.os != 'Linux'",
+    );
+    assert.equal(yamlScalarValues(job, "timeout-minutes")[0], "15");
     assert.equal(
       steps.find((step) => step.command === "npm run test:dashboard:browser")?.condition,
       "runner.os == 'Linux'",
@@ -172,7 +177,20 @@ test("release workflows preserve executable package and browser safeguards", asy
   const releaseLines = releaseScripts.flatMap((script) =>
     script.split("\n").map((line) => line.trim()),
   );
-  assert.ok(yamlScalarValues(releasePublishJob, "needs").includes("test"));
+  assert.ok(yamlScalarValues(releasePublishJob, "needs").includes("validated-source"));
+  assert.ok(
+    workflowRunCommands(releaseValidationJob).includes("node .github/scripts/require-ci.mjs"),
+  );
+  assert.equal(yamlScalarValues(releaseValidationJob, "actions")[0], "read");
+  assert.equal(workflowRunCommands(releasePublishJob).includes("npm run check"), false);
+  const ciTriggers = yamlMappingBlock(workflows["ci.yml"], "on", 0);
+  assert.deepEqual(yamlSequenceValues(yamlMappingBlock(ciTriggers, "push", 2), "branches"), [
+    "main",
+  ]);
+  assert.deepEqual(
+    yamlSequenceValues(yamlMappingBlock(ciTriggers, "pull_request", 2), "branches"),
+    ["dev"],
+  );
   assert.ok(yamlScalarValues(releasePublishJob, "runs-on").includes("ubuntu-latest"));
   assert.ok(releaseLines.includes("npm pack"));
   assert.ok(
