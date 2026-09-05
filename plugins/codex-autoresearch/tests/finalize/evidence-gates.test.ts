@@ -128,8 +128,10 @@ testWithTempRoot(
 
     const preview = await finalizePreview({ cwd: repo, trunk: "main" });
     assert.equal(preview.productGradeReady, false);
-    assert.match(preview.blockers.join("\n"), /retrieval accuracy/i);
-    assert.match(preview.blockers.join("\n"), /lazy/i);
+    assert.deepEqual(
+      preview.productClaimCoverage.missingRequiredProof.map((proof: { id: string }) => proof.id),
+      ["independent_product_review"],
+    );
     assert.doesNotMatch(preview.summary, /ready to merge|shippable/i);
 
     const planPath = path.join(root, "groups.json");

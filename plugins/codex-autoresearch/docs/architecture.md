@@ -34,7 +34,7 @@ flowchart LR
   Final --> Git["Review branches"]
 ```
 
-Fit routing returns before repository discovery or setup unless it selects `run-loop`. Assist-only work therefore creates no Autoresearch files, packets, commits, dashboards, research folders, or finalization state. An unrelated active session is read only enough to classify its relation and remains untouched.
+Fit routing precedes setup. An incomplete explicit loop can authorize bounded read-only discovery to propose missing evaluator, check, and scope fields; those proposals remain unaccepted until contract setup. Assist-only work therefore creates no Autoresearch files, packets, commits, dashboards, research folders, or finalization state. An unrelated active session is read only enough to classify its relation and remains untouched.
 
 The skill does not own another database. Read-only commands compare version vectors before and after loading the ledger, config, packet, transaction receipt, process state, and Git identity. They retry a race up to three times. Mutating commands acquire the mutation lock before their first snapshot, validate a precondition decision, mutate, then return a resulting decision.
 
@@ -155,6 +155,8 @@ flowchart TD
 ```
 
 Normal finalization is backed only by accepted, current keeps. Rejected, provisional, superseded, quarantined, invalidated, later-discarded, and reverted evidence stays in the audit history but cannot enter those review branches.
+
+New notes and ideas share `.autoresearch/`; existing root documents remain authoritative when present. Duplicate copies block. Execution paths and the ledger retain their existing locations.
 
 Current-tree finalization is a separate recovery contract. It packages an explicitly reviewed clean non-session branch diff when commit-level keep evidence no longer describes the work. The whole diff becomes the review unit, so its plan, file set, exclusions, claim evidence, and approval must be checked directly.
 

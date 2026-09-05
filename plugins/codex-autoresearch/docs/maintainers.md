@@ -83,11 +83,13 @@ Session read-model budgets are reviewed product contracts. The 100-run fixture c
 
 For docs-only work, read the rendered Markdown and check the command text, then run `git diff --check` and the package gate. The package gate checks required files and local Markdown links; it does not judge whether the prose is any good.
 
-## Product evidence gate
+## Operator integration gate
 
 `npm run check` executes seven portable operator tasks through `scripts/operator-task-benchmark.mjs`: decision consistency across public readouts, invalid CLI rejection, installed-cache discovery, hostile-path finalization safety, the zero-run qualitative session journey, bounded default and mutation output, and long-history retention. Each task emits one machine-readable `EVIDENCE` record, followed by one reconciled `EVIDENCE_SUMMARY`. The independent `METRIC operator_task_failures=<count>` ceiling is zero; `--fail-on-failure` makes any failed case fail the product phase.
 
 Dashboard geometry is the separate browser operator task. It requires a real browser, so the required Chrome dashboard gate emits its own `EVIDENCE` and `EVIDENCE_SUMMARY` records instead of hiding a browser dependency inside the portable package check. Focused contract-integrity tests separately protect version and manifest agreement, package contents, documentation links, release wiring, and session-artifact invariants. Tests also feed each portable validator intentionally faulty raw observations and require the case-specific failure code, proving that representative defects are rejected rather than converted into a qualitative score.
+
+These scripted integration tasks do not compare optimization quality, cost, or intervention rates against plain Codex. Report that advantage only from a separate paired task evaluation with equal budgets and independently checked outcomes.
 
 This evidence is not proof of perfection, broad UX quality, manual screen-reader behavior, physical-device behavior, undiscovered defects, or every possible session. Ordinary qualitative research still uses `quality_gap`; `quality_gap=0` remains valid only for the accepted checklist in the current research round. The product gate uses `operator_task_failures` for its explicitly bounded cases.
 

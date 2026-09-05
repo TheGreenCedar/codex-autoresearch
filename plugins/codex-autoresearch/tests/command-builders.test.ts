@@ -273,6 +273,7 @@ test("handler adapters invoke the binding declared by each table entry", async (
   assert.deepEqual([...commandHandlerAdapterBindings].sort(), [
     "checksInspect",
     "doctorSession",
+    "finalizePreview",
     "logExperiment",
     "measureQualityGap",
     "publicState",

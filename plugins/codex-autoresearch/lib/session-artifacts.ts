@@ -1,5 +1,6 @@
 import {
   AUTORESEARCH_DASHBOARD_FILE,
+  AUTORESEARCH_DOCUMENT_DIR,
   AUTORESEARCH_RESEARCH_DIR,
   AUTORESEARCH_SESSION_FILES,
 } from "./session-paths.js";
@@ -12,9 +13,11 @@ const SESSION_FILES = new Set([...AUTORESEARCH_SESSION_FILES, AUTORESEARCH_DASHB
 const RESEARCH_DIR = AUTORESEARCH_RESEARCH_DIR;
 const RESEARCH_DIR_PREFIX = `${AUTORESEARCH_RESEARCH_DIR}/`;
 export const REPORT_DIRNAME = "autoresearch-finalize";
-export const CLEANUP_SESSION_PATHS = [RESEARCH_DIR, ...SESSION_FILES].sort((a, b) =>
-  a.localeCompare(b),
-);
+export const CLEANUP_SESSION_PATHS = [
+  AUTORESEARCH_DOCUMENT_DIR,
+  RESEARCH_DIR,
+  ...SESSION_FILES,
+].sort((a, b) => a.localeCompare(b));
 
 export function isAutoresearchSessionArtifact(file: string, mode: SessionArtifactMode): boolean {
   const value = String(file || "");
@@ -35,6 +38,8 @@ export function shouldExcludeSessionArtifact(
 function isCommonSessionArtifact(normalized: string): boolean {
   return (
     SESSION_FILES.has(normalized) ||
+    normalized === AUTORESEARCH_DOCUMENT_DIR ||
+    normalized.startsWith(`${AUTORESEARCH_DOCUMENT_DIR}/`) ||
     normalized.startsWith("autoresearch.research/") ||
     normalized.startsWith(".git/autoresearch-runtime/")
   );

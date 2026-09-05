@@ -1,3 +1,4 @@
+import { resolveSessionPaths } from "../../lib/session-paths.js";
 import assert from "node:assert/strict";
 import {
   access,
@@ -198,7 +199,10 @@ async function setupTransactionFixture(
     await git(dir, ["switch", "--detach"]);
   }
   if (options.dirtySessionBeforePacket) {
-    await writeFile(path.join(dir, "autoresearch.md"), "operator state that must survive\n");
+    await writeFile(
+      resolveSessionPaths({ workDir: dir }).notesPath,
+      "operator state that must survive\n",
+    );
   }
   const packet = await runCli(["next", "--cwd", dir]);
   assert.equal(packet.code, 0, packet.stderr);
@@ -1573,10 +1577,15 @@ test("cleanup plans structurally exclude session and evidence paths before destr
     );
 
     const pending = JSON.parse(await readFile(await receiptPath(dir), "utf8"));
-    assert.equal(pending.cleanup.trackedPaths.includes("autoresearch.md"), false);
+    assert.equal(
+      pending.cleanup.trackedPaths.includes(
+        path.relative(dir, resolveSessionPaths({ workDir: dir }).notesPath),
+      ),
+      false,
+    );
     assert.equal(pending.cleanup.untrackedPaths.includes("evidence/proof.json"), false);
     assert.equal(
-      await readFile(path.join(dir, "autoresearch.md"), "utf8"),
+      await readFile(resolveSessionPaths({ workDir: dir }).notesPath, "utf8"),
       "operator state that must survive\n",
     );
     assert.equal(

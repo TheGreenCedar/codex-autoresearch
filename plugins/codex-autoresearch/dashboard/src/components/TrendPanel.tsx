@@ -149,12 +149,7 @@ export function TrendPanel({
       )}
 
       {openedPoint && (
-        <ExperimentModal
-          point={openedPoint}
-          valueMode={valueMode}
-          readout={readout}
-          onClose={closePoint}
-        />
+        <ExperimentModal point={openedPoint} readout={readout} onClose={closePoint} />
       )}
     </section>
   );

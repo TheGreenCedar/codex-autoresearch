@@ -16,7 +16,7 @@ Do not narrate what the page is about to do. Just do it.
 
 The important facts must survive any rewrite:
 
-- fit is decided before repository discovery or setup; assist-only work creates no Autoresearch state
+- fit is decided before repository discovery or setup; assist-only work creates no Autoresearch state; explicit incomplete loop requests may use bounded read-only discovery to propose missing commands or paths, never to accept or execute them
 - an accepted experiment contract is the sole evaluator and checks execution authority
 - every read surface projects one coherently compiled `DecisionPlan`
 - benchmarks print `METRIC name=value`

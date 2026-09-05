@@ -1,3 +1,5 @@
+import path from "node:path";
+import { resolveSessionPaths } from "./session-paths.js";
 import { buildDashboardSettings } from "./commands/dashboard.js";
 import { buildExperimentMemory } from "./experiment-memory.js";
 import { normalizeLaneBrief } from "./lane-briefs.js";
@@ -36,6 +38,7 @@ export function buildParallelOrchestrationContext({
   );
   const laneResults = latestLaneResults(workDir, Number(state.segment), records);
   const baseLanes = buildParallelLanes({
+    workDir,
     memory: resolvedMemory,
     fanoutPlan,
     config,
@@ -59,25 +62,29 @@ export function buildParallelOrchestrationContext({
 }
 
 export function buildParallelLanes({
+  workDir,
   memory,
   fanoutPlan = null,
   config = {},
 }: {
+  workDir: string;
   memory: CommandRecord;
   fanoutPlan?: CommandRecord | null;
   config?: CommandRecord;
 }) {
   const planned = Array.isArray(fanoutPlan?.lanes) ? fanoutPlan.lanes : [];
   if (planned.length > 0) {
-    return planned.map((lane, index) => normalizeParallelLane(record(lane), index, config));
+    return planned.map((lane, index) =>
+      normalizeParallelLane(record(lane), index, config, workDir),
+    );
   }
   const memoryLanes = Array.isArray(memory?.lanePortfolio) ? memory.lanePortfolio : [];
   const lanes = memoryLanes.map((lane, index) =>
-    normalizeParallelLane(record(lane), index, config),
+    normalizeParallelLane(record(lane), index, config, workDir),
   );
   const existingIds = new Set(lanes.map((lane) => lane.id));
-  for (const seed of defaultParallelLaneSeeds(config)) {
-    const normalized = normalizeParallelLane(seed, lanes.length, config);
+  for (const seed of defaultParallelLaneSeeds(config, workDir)) {
+    const normalized = normalizeParallelLane(seed, lanes.length, config, workDir);
     if (existingIds.has(normalized.id)) continue;
     lanes.push(normalized);
     existingIds.add(normalized.id);
@@ -85,7 +92,12 @@ export function buildParallelLanes({
   return lanes;
 }
 
-export function normalizeParallelLane(lane: CommandRecord, index: number, config: CommandRecord) {
+export function normalizeParallelLane(
+  lane: CommandRecord,
+  index: number,
+  config: CommandRecord,
+  workDir: string,
+) {
   const rawId = lane.id || lane.label || lane.title || `lane-${index + 1}`;
   const id = safeSlug(String(rawId)) || `lane-${index + 1}`;
   const label = String(lane.label || lane.title || `Lane ${index + 1}`);
@@ -108,7 +120,10 @@ export function normalizeParallelLane(lane: CommandRecord, index: number, config
         `Current ${config.metricName || "primary metric"} evidence and session memory.`,
     ),
     boundaries: [executionBoundary],
-    pointers: ["autoresearch.jsonl", "autoresearch.ideas.md"],
+    pointers: [
+      "autoresearch.jsonl",
+      path.relative(workDir, resolveSessionPaths({ workDir }).ideasPath).replace(/\\/g, "/"),
+    ],
     expectedDecisionOutput: "one recommendation, supporting evidence, and the next measured action",
     lessonsToAvoid: [],
   });
@@ -206,7 +221,7 @@ function enrichParallelLanesWithLaneResults(lanes: CommandRecord[], laneResults:
   });
 }
 
-function defaultParallelLaneSeeds(config: CommandRecord): CommandRecord[] {
+function defaultParallelLaneSeeds(config: CommandRecord, workDir: string): CommandRecord[] {
   const metricName = config.metricName || "primary metric";
   return [
     {
@@ -218,7 +233,10 @@ function defaultParallelLaneSeeds(config: CommandRecord): CommandRecord[] {
         objective: `Find one evidence-backed hypothesis that could move ${metricName}.`,
         evidencePoint: "Current ledger, ASI memory, and recent packet evidence.",
         boundaries: ["read-only", "do not edit files", "return one candidate next action"],
-        pointers: ["autoresearch.jsonl", "autoresearch.ideas.md"],
+        pointers: [
+          "autoresearch.jsonl",
+          path.relative(workDir, resolveSessionPaths({ workDir }).ideasPath).replace(/\\/g, "/"),
+        ],
         expectedDecisionOutput: "one scout recommendation with evidence and a next measured action",
       },
     },
@@ -249,7 +267,10 @@ function defaultParallelLaneSeeds(config: CommandRecord): CommandRecord[] {
           "Prepare one isolated edit candidate after a scout produces a concrete hypothesis.",
         evidencePoint: "Accepted scout recommendation and current commit path boundaries.",
         boundaries: ["use a separate worktree or owned write scope", "keep edits scoped"],
-        pointers: ["autoresearch.ideas.md", "autoresearch.config.json"],
+        pointers: [
+          path.relative(workDir, resolveSessionPaths({ workDir }).ideasPath).replace(/\\/g, "/"),
+          "autoresearch.config.json",
+        ],
         expectedDecisionOutput: "one implementation plan with files, risks, and verification",
       },
     },

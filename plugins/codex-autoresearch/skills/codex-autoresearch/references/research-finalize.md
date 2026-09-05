@@ -18,6 +18,8 @@ Keep the benchmark, accepted evidence, keep/discard decisions, integration, and 
 
 ## Finalize the work that actually exists
 
+The default handoff is one reviewable change and its evidence receipt: accepted commit IDs and file set, evaluator, checks, baseline and candidate results, exclusions, blockers, and claim limits. Keep the existing branch when it already contains only that review unit and the preview permits delivery. Use branch separation for mixed experiment history; a receipt does not bypass blockers.
+
 Preview before mutation. Normal finalization is backed only by accepted, current keeps; rejected, provisional, superseded, quarantined, invalidated, discarded, and reverted evidence remains audit history.
 
 Treat planned paths as literal Git paths, including brackets, wildcard characters, spaces, and Unicode. Do not shell-expand or manually escape them. Generated and supplied review refs must pass Git ref validation before any branch mutation.

@@ -10,7 +10,8 @@ import { numberOption } from "../cli/args.js";
 import { resolveAuthorizedWorkDir } from "../cli/workdir-context.js";
 import {
   acceptedExperimentContractForMutation,
-  completedContractNoiseRepeats,
+  contractNoiseSamples,
+  contractReferenceSamples,
   contractCandidateFingerprintForWorkDir,
   contractStopStatus,
   evaluateContractKeepEligibility,
@@ -277,10 +278,10 @@ async function runExperimentWithProgressWriter(
     executionDigest: check.execution.executionDigest,
     passed: result.exitCode === 0 && !result.timedOut && !result.terminationFailed,
   }));
-  const completedNoiseRepeats =
+  const noiseSamples =
     primaryMetric == null
-      ? 0
-      : completedContractNoiseRepeats(experimentContract, state.current, {
+      ? []
+      : contractNoiseSamples(experimentContract, state.current, {
           candidateFingerprint: contractCandidateFingerprint,
           metric: primaryMetric,
         });
@@ -290,7 +291,13 @@ async function runExperimentWithProgressWriter(
     candidateOrigin,
     acceptedEvaluation: benchmarkPassed && primaryPresent,
     checkOutcomes: contractCheckOutcomes,
-    completedRepeats: completedNoiseRepeats,
+    completedRepeats: noiseSamples.length,
+    noiseSamples,
+    referenceSamples: contractReferenceSamples(
+      experimentContract,
+      state.current,
+      finiteMetric(state.best ?? state.baseline),
+    ),
     metric: primaryMetric,
     referenceMetric: finiteMetric(state.best ?? state.baseline),
   });

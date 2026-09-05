@@ -5,6 +5,11 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { renderShellCommand } from "./command-rendering.js";
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
+import { parseEvidenceAxes } from "./evidence-axes.js";
+import {
+  acceptedExperimentContractForEvidenceValidation,
+  type ExperimentContract,
+} from "./experiment-contract.js";
 import { productGradeFinalizationIssue } from "./finalization-acceptance.js";
 import {
   blockedFinalizationDecisionFact,
@@ -188,6 +193,17 @@ export async function finalizePreview(args: LooseObject) {
       base: finalTreePlan.base,
       ready,
       groups,
+      evidenceReceipt: buildEvidenceReceipt({
+        workDir,
+        branch,
+        ready,
+        groups,
+        ledgerEntries,
+        finalTreePlan,
+        warnings,
+        productGradeIssue,
+        semanticSafety,
+      }),
       missingCommitCount,
       excludedCommits: finalTreePlan.excludedCommits,
       excludedPlannedFileConflicts: finalTreePlan.excludedPlannedFileConflicts,
@@ -208,7 +224,7 @@ export async function finalizePreview(args: LooseObject) {
       summary: productGradeIssue
         ? "Experimental review branch only: product-grade proof is missing."
         : ready
-          ? "Review branch preview is ready."
+          ? "Review the existing change and its evidence receipt."
           : "Finalization preview is blocked.",
       suggestedCommand: renderShellCommand(planArgv),
       suggestedCommands: {
@@ -216,7 +232,8 @@ export async function finalizePreview(args: LooseObject) {
           argv: planArgv,
           cwd: workDir,
           display: renderShellCommand(planArgv),
-          purpose: "Write a review-branch plan without dirtying the source branch.",
+          purpose:
+            "Advanced: separate mixed history into review branches without dirtying the source branch.",
           mutates: false,
         },
       },
@@ -228,6 +245,126 @@ export async function finalizePreview(args: LooseObject) {
     "finalize-preview",
     args.canonicalDecisionProjection !== false,
   );
+}
+
+function buildEvidenceReceipt({
+  workDir,
+  branch,
+  ready,
+  groups,
+  ledgerEntries,
+  finalTreePlan,
+  warnings,
+  productGradeIssue,
+  semanticSafety,
+}: {
+  workDir: string;
+  branch: string;
+  ready: boolean;
+  groups: RunGroup[];
+  ledgerEntries: LooseObject[];
+  finalTreePlan: FinalTreePlan;
+  warnings: string[];
+  productGradeIssue: string | null;
+  semanticSafety: LooseObject;
+}) {
+  const evidence = buildFinalizationEvidenceState(
+    groups
+      .filter(
+        (group) =>
+          !semanticSafety.blockers.some((blocker: LooseObject) =>
+            commitReferencesMatch(blocker.commit, group.commit),
+          ),
+      )
+      .map((group) => group.commit),
+    ledgerEntries,
+  );
+  const selected = evidence.acceptedRuns.flatMap((entry) => {
+    const commit = evidence.acceptedCommits.find((value) =>
+      commitReferencesMatch(value, entry.commit),
+    );
+    return commit ? [{ commit, entry }] : [];
+  });
+  const files = [
+    ...new Set(
+      groups
+        .filter((group) => evidence.acceptedCommits.includes(group.commit))
+        .flatMap((group) => group.files)
+        .filter((file) => !isAutoresearchSessionArtifact(file, "finalization")),
+    ),
+  ].sort();
+  const observations = selected.slice(0, 20).map(({ commit, entry }) => {
+    const evaluation = entry.contractEvaluationEvidence;
+    let contract: ExperimentContract | null = null;
+    try {
+      const candidate = acceptedExperimentContractForEvidenceValidation(
+        workDir,
+        ledgerEntries.slice(0, ledgerEntries.indexOf(entry) + 1),
+      );
+      if (
+        candidate?.contractDigest === evaluation?.contractDigest &&
+        entry.experimentContractDigest === candidate?.contractDigest
+      )
+        contract = candidate;
+    } catch {
+      // Historical contract corruption is unknown receipt evidence, never a new authorization.
+    }
+    const axes = parseEvidenceAxes(entry);
+    const candidateMatches =
+      axes.valid &&
+      axes.runPurpose === "candidate" &&
+      axes.evaluationAuthority === "accepted-contract" &&
+      axes.candidateOrigin.kind !== "none" &&
+      (axes.candidateOrigin.kind !== "commit" ||
+        commitReferencesMatch(axes.candidateOrigin.oid, commit)) &&
+      typeof evaluation?.candidateFingerprint === "string" &&
+      /^[a-f0-9]{64}$/i.test(evaluation.candidateFingerprint);
+    return {
+      run: entry.run,
+      commit,
+      metric:
+        typeof entry.metric === "number" && Number.isFinite(entry.metric) ? entry.metric : null,
+      metricName: contract?.metric?.metricName ?? null,
+      metricUnit: contract?.metric?.unit ?? null,
+      metricKind: contract?.metric?.kind ?? null,
+      contractDigest: contract?.contractDigest ?? null,
+      evaluatorIdentity: contract?.evaluator?.execution?.executionDigest ?? null,
+      checkIdentities: (contract?.checks ?? []).map(
+        (check: LooseObject) => check.execution?.executionDigest ?? null,
+      ),
+      checksPassed:
+        contract &&
+        candidateMatches &&
+        evaluation?.acceptedEvaluation === true &&
+        evaluation?.checksPassed === true &&
+        evaluation?.metric === entry.metric
+          ? true
+          : null,
+    };
+  });
+  return {
+    schemaVersion: 1,
+    kind: "accepted-change-evidence",
+    branch,
+    previewReady: ready,
+    commits: evidence.acceptedCommits.slice(0, 20),
+    files: files.slice(0, 100),
+    observations,
+    counts: {
+      commits: evidence.acceptedCommits.length,
+      files: files.length,
+      observations: selected.length,
+    },
+    truncated: evidence.acceptedCommits.length > 20 || files.length > 100 || selected.length > 20,
+    excludedCommits: finalTreePlan.excludedCommits.map((item) => item.commit).slice(0, 20),
+    limitations: [
+      "This receipt projects logged evidence; it does not authorize publication or prove product readiness.",
+      "Measurements from different contracts are not comparable. Missing contract or check evidence remains unknown.",
+      "Baseline comparison and repeat qualification remain in the session report and ledger; this receipt does not recompute them.",
+      ...(productGradeIssue ? [productGradeIssue] : []),
+      ...warnings.slice(0, 10),
+    ],
+  };
 }
 
 function captureFinalizationDecisionFact(args: LooseObject, fact: FinalizationDecisionFact): void {
@@ -479,8 +616,8 @@ function finalizePreviewNextAction({
 }: LooseObject): string {
   if (ready) {
     return productGradeIssue
-      ? "Review the preview as an experimental review branch only; product-grade proof is missing, then run the suggested finalizer plan command."
-      : "Review the preview, then run the suggested finalizer plan command.";
+      ? "Review the existing change and evidence receipt as experimental work; product-grade proof is missing. Use branch reconstruction only when the history needs separation."
+      : "Review the existing change and evidence receipt. Use the advanced finalizer plan only when the history needs separate review branches.";
   }
   if (!semanticSafety.ok) {
     return "Resolve semantic safety blockers before finalizing stale, reverted, or invalidated evidence.";

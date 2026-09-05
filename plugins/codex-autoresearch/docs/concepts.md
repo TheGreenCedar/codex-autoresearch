@@ -47,17 +47,19 @@ Every run also keeps three independent facts:
 
 | Path | What it contains |
 | --- | --- |
-| `autoresearch.md` | Goal, metric, scope, constraints, decisions, and stop conditions |
+| `.autoresearch/autoresearch.md` | Goal, metric, scope, constraints, decisions, and stop conditions |
 | `autoresearch.jsonl` | Append-only config and packet ledger |
 | `autoresearch.config.json` | Budgets, commit paths, protected benchmark paths, and runtime options |
 | `autoresearch.sh` or `autoresearch.ps1` | Repeatable benchmark entrypoint |
 | `autoresearch.checks.sh` or `autoresearch.checks.ps1` | Optional correctness command |
-| `autoresearch.ideas.md` | Deferred ideas, failed paths, and next actions |
+| `.autoresearch/autoresearch.ideas.md` | Deferred ideas, failed paths, and next actions |
 | `autoresearch.research/<slug>/` | Sources, synthesis, quality gaps, and deliverables for qualitative work |
 | `autoresearch.research/<slug>/quality-gap-decisions.jsonl` | Append-only acceptance decisions for stable gap IDs |
 | `.git/autoresearch/last-run.json` | Reusable packet written by `next` in a Git repo |
 | `.git/autoresearch/progress.json` | Progress snapshot for a slow packet in a Git repo |
 | `.git/autoresearch/pending-log-*.json` | Version-2 staged transaction receipts that make interrupted logging exactly-once and block unsafe continuation |
+
+New sessions keep notes and ideas together in `.autoresearch/`. Existing root-level copies remain in use; if both locations contain the same document, resolve the conflict before continuing. Execution inputs and the ledger retain their existing paths so accepted sessions do not need migration.
 
 Outside Git, the three transient records fall back to `autoresearch.last-run.json`, `autoresearch.progress.json`, and `autoresearch.pending-transaction.json` in the worktree. In a Git repository they use one preflighted `.git/autoresearch/` store; conflicting Git-private and fallback copies block instead of choosing whichever file is newest.
 

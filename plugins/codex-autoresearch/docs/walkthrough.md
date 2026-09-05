@@ -1,73 +1,68 @@
-# From baseline to finalization preview
+# From baseline to a reviewable change
 
-This walkthrough picks up where [Start](start.md) leaves off: the contract is understood, the source checkout is open at `plugins/codex-autoresearch`, and a test suite takes about fourteen seconds. The goal is not simply to make the number smaller; the tests still have to exercise the same behavior, and the change should stay inside the test configuration and helpers.
+This example improves `src/parser.mjs` while keeping `bench/parser.mjs` and the independent assertions in `tests/parser.test.mjs` protected. Follow [Start](start.md#start-from-the-cli) to create the scaffold, identify check authority, review the derived contract, and accept it with `new-segment --yes`. Continue from the plugin package with the same `project` variable. Do not repeat setup over an existing session.
 
-If you installed through Codex instead of cloning the source, ask `@Codex Autoresearch` to run these steps for you.
+The numbers below are illustrative. They are not measurements of this repository.
 
-## Set up the session
+## Establish the reference
 
-From `plugins/codex-autoresearch`, create the session and configure the paths a kept result may commit:
+Start's two unchanged baseline packets produce, for example, `seconds=14.20` and `seconds=14.24`, with the accepted checks passing both times. Both are logged as `measure`. They consume two packets and establish the reference sample cohort used to judge candidate variation.
 
-```bash
-git -C <project> status --short --branch
-node scripts/autoresearch.mjs setup --cwd <project> --name "Test runtime" --metric-name seconds --direction lower --benchmark-command "npm test -- --runInBand" --benchmark-prints-metric false --checks-command "npm test" --packet-budget 5 --wall-clock-budget-seconds 1800
-node scripts/autoresearch.mjs config --cwd <project> --commit-paths "vitest.config.ts,tests/helpers/"
-node scripts/autoresearch.mjs doctor --cwd <project> --check-benchmark --explain
-node scripts/autoresearch.mjs state --cwd <project> --report
-```
-
-The status check keeps unrelated changes visible before setup writes session files. Doctor should confirm that the accepted evaluator can produce `METRIC seconds=<number>` from the timed raw command. The state report is the authority for whether the first packet may run.
-
-Now record the baseline:
+If you have not run those packets yet:
 
 ```bash
-node scripts/autoresearch.mjs next --cwd <project>
-node scripts/autoresearch.mjs log --cwd <project> --from-last --status measure --description "Baseline before test-runner changes"
-node scripts/autoresearch.mjs state --cwd <project> --report
+node scripts/autoresearch.mjs state --cwd "$project" --report
+node scripts/autoresearch.mjs next --cwd "$project"
+node scripts/autoresearch.mjs log --cwd "$project" --from-last --status measure --description "Parser baseline 1"
+node scripts/autoresearch.mjs state --cwd "$project" --report
+node scripts/autoresearch.mjs next --cwd "$project"
+node scripts/autoresearch.mjs log --cwd "$project" --from-last --status measure --description "Parser baseline 2"
+node scripts/autoresearch.mjs state --cwd "$project" --report
 ```
 
-Assume the result is `seconds=14.2`. It is logged as `measure`, not `keep`, because no change has been made.
+Inspect each packet and its checks, and follow the returned action before the next command. A failed or blocked result is a reason to stop this sequence and resolve the reported condition.
 
-## Try one idea
+## Try one idea twice
 
-Codex finds that an unchanged helper fixture is rebuilt for every test file. It changes `tests/helpers/cache.ts`, then measures again:
+Suppose profiling identifies repeated construction of an unchanged lookup table inside the parser's hot path. Change only `src/parser.mjs` to reuse that table. Keep the input workload, benchmark, and correctness assertions unchanged.
+
+Measure the candidate once and record qualification evidence without committing it:
 
 ```bash
-git status --short
-node scripts/autoresearch.mjs next --cwd <project>
-node scripts/autoresearch.mjs state --cwd <project> --compact
+git -C "$project" status --short
+node scripts/autoresearch.mjs state --cwd "$project" --report
+node scripts/autoresearch.mjs next --cwd "$project"
+node scripts/autoresearch.mjs log --cwd "$project" --from-last --status measure --description "Parser candidate qualification 1"
+node scripts/autoresearch.mjs state --cwd "$project" --report
 ```
 
-This time the benchmark reports `seconds=10.8` and the checks pass. Before keeping it, inspect the diff and make sure `git status` contains only the files owned by this experiment. Then log the result from the saved packet:
+Assume this packet reports `seconds=10.80` and passing checks. Leave the candidate source unchanged so the next packet measures the same candidate:
 
 ```bash
-node scripts/autoresearch.mjs log --cwd <project> --from-last --status keep --description "Reuse the unchanged helper fixture across test files"
+node scripts/autoresearch.mjs next --cwd "$project"
+node scripts/autoresearch.mjs state --cwd "$project" --report
+git -C "$project" diff -- src/parser.mjs
+git -C "$project" status --short --branch
 ```
 
-Because `commitPaths` is configured, Autoresearch can commit only the permitted paths. If unrelated work has appeared in the tree, separate it before logging.
-
-## Decide whether to continue
-
-The log result includes the precondition and resulting decisions. The resulting `DecisionPlan` says whether packet work, direct handback, repair, transition, or finalization comes next. Compatibility continuation fields do not separately authorize a packet.
-
-Before spending another packet, read the canonical state:
+Suppose the repeat reports `seconds=10.84` and passing checks. Two candidate samples and two reference samples now exist. The accepted contract decides whether their spread and improvement qualify; two repeats alone do not guarantee a keep. If the saved packet permits `keep` and the diff contains only the intended parser change, record it:
 
 ```bash
-node scripts/autoresearch.mjs state --cwd <project> --report
+node scripts/autoresearch.mjs log --cwd "$project" --from-last --status keep --description "Reuse the parser lookup table without changing parsed output"
+node scripts/autoresearch.mjs state --cwd "$project" --report
 ```
 
-Another run may be useful if the accepted contract needs a cold-process repeat or there is a different low-risk hypothesis to test. A stale packet, exhausted budget, no-learning pause, evaluator drift, or failed check should send the session to its named action instead.
+The scoped keep can commit `src/parser.mjs`. Four packets have been consumed: two baselines and two candidate evaluations. The first candidate's `measure` did not authorize a keep; its evidence supplies a repeat for the unchanged candidate. There is no reason to spend the fifth packet merely because budget remains.
 
-## Preview the review work
+## Hand off the change
 
-Once the useful experiments are done, preview finalization:
+Follow the canonical state action. When it permits finalization, request the complete preview to include the evidence receipt:
 
 ```bash
-git status --short
-node scripts/autoresearch.mjs state --cwd <project> --report
-node scripts/autoresearch.mjs finalize-preview --cwd <project>
+git -C "$project" status --short --branch
+node scripts/autoresearch.mjs finalize-preview --cwd "$project" --json-full
 ```
 
-The preview does not create or switch branches. It shows which accepted results are still current, what files they cover, and what would block branch creation.
+The preview is read-only. Its `evidenceReceipt` identifies current accepted commits, files, measurements, contract/check identities where proven, and limitations. Check the preview's blockers and exclusions before handoff. Use the existing branch when it already contains only the intended review unit; mixed experiment history may need the branch separation described in [Finish](finish.md).
 
-The strongest honest claim in this example may be only that the local test benchmark fell from 14.2 seconds to 10.8 while `npm test` still passed. Broader claims need broader evidence. [Finish](finish.md) explains how that evidence becomes reviewable work.
+For the illustrative values above, the supported claim is that the specified parser workload ran in 10.80–10.84 seconds versus 14.20–14.24 seconds, while the accepted parser assertions passed. That does not establish performance on other workloads or product readiness.

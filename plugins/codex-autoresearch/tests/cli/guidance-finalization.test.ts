@@ -447,6 +447,57 @@ test("pending log receipts block state, doctor, and new log attempts", async () 
   });
 });
 
+testIo(
+  "finalize receipt projects identities and passed checks from a real accepted keep",
+  async () => {
+    await withTempDir("accepted-keep-receipt", async (dir) => {
+      await prepareCurrentTreeFinalizationBlocker(dir, runCli);
+      const ledgerPath = path.join(dir, "autoresearch.jsonl");
+      const before = await readFile(ledgerPath, "utf8");
+      const entries = before
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const keep = entries.find((entry) => entry.status === "keep");
+      assert.ok(keep?.contractEvaluationEvidence);
+      const accepted = entries.find(
+        (entry) =>
+          entry.type === "experiment-contract-accepted" &&
+          entry.contract?.contractDigest === keep.contractEvaluationEvidence.contractDigest,
+      );
+      assert.ok(accepted?.contract);
+
+      const result = await runCli(["finalize-preview", "--cwd", dir, "--json-full"]);
+      assert.equal(result.code, 0, result.stderr);
+      const payload = JSON.parse(result.stdout);
+      const observation = payload.evidenceReceipt.observations.find(
+        (entry) => entry.run === keep.run,
+      );
+      assert.ok(observation, JSON.stringify(payload.evidenceReceipt));
+      assert.equal(observation.contractDigest, accepted.contract.contractDigest);
+      assert.equal(
+        observation.evaluatorIdentity,
+        accepted.contract.evaluator.execution.executionDigest,
+      );
+      assert.deepEqual(
+        observation.checkIdentities,
+        accepted.contract.checks.map((check) => check.execution.executionDigest),
+      );
+      assert.equal(observation.checkIdentities.length > 0, true);
+      assert.equal(
+        observation.checkIdentities.every(
+          (identity) => typeof identity === "string" && identity.length > 0,
+        ),
+        true,
+      );
+      assert.equal(observation.checksPassed, true);
+      assert.equal(observation.metric, keep.metric);
+      assert.equal(payload.evidenceReceipt.previewReady, false);
+      assert.equal(await readFile(ledgerPath, "utf8"), before);
+    });
+  },
+);
+
 testIo("doctor keeps current-tree finalization blockers scoped to finalization", async () => {
   await withTempDir("doctor-current-tree-finalization", async (dir) => {
     await prepareCurrentTreeFinalizationBlocker(dir, runCli);

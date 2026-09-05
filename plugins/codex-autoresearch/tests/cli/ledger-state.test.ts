@@ -346,7 +346,7 @@ test("state exposes missing product claim coverage for shippable retrieval work"
     assert.equal(coverage.productGradeReady, false);
     assert.deepEqual(
       coverage.missingRequiredProof.map((proof) => proof.id),
-      ["retrieval_accuracy", "lazy_behavior", "ranking_quality", "docs_tests"],
+      ["independent_product_review"],
     );
   });
 });
@@ -398,10 +398,12 @@ test("finalize-preview json exposes missing product-grade claim coverage", async
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.productGradeReady, false);
-    assert.match(payload.blockers.join("\n"), /retrieval accuracy/i);
-    assert.match(payload.blockers.join("\n"), /lazy/i);
+    assert.deepEqual(
+      payload.productClaimCoverage.missingRequiredProof.map((proof) => proof.id),
+      ["independent_product_review"],
+    );
     assert.match(result.stdout, /Product-grade evidence is missing/);
-    assert.match(result.stdout, /Lazy\/selective behavior/);
+    assert.deepEqual(payload.productClaimCoverage.coveredProof, []);
     assert.match(result.stdout, /Experimental review branch only/);
   });
 });

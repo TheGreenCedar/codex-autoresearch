@@ -1,6 +1,6 @@
 # Finish a session
 
-An Autoresearch branch often contains useful work mixed with experiments, corrections, and session files. Finalization separates the current accepted work into something another person can review. It does not strengthen the evidence or decide that the change is ready to ship.
+Finish with one reviewable change and a short evidence receipt. The receipt states what changed, which workload was measured, the baseline and candidate results, the checks, and any limits on the claim. It does not decide that the change is ready to ship.
 
 ## Preview before changing branches
 
@@ -12,11 +12,24 @@ node scripts/autoresearch.mjs state --cwd <project> --report
 node scripts/autoresearch.mjs finalize-preview --cwd <project>
 ```
 
-The preview shows which accepted keeps are still current, what files they cover, what will be excluded, and what blocks branch creation. It also reports dirty-tree problems, overlap between proposed groups, stale plans, and gaps between the claim and the evidence.
+The default receipt gives bounded counts; use `finalize-preview --json-full` for detailed handoff evidence. The preview shows which accepted keeps are still current, what files they cover, what will be excluded, and what blocks branch creation. With `--json-full`, its `evidenceReceipt` contains the accepted commit IDs, file set, logged measurements, and contract/check identities when recorded. Missing identities remain unknown, and truncated receipts report their full counts. It also reports dirty-tree problems, overlap between proposed groups, stale plans, and gaps between the claim and the evidence.
 
 Use `--trunk origin/main` when the default branch cannot be inferred. Add `--progress` when a large history is quiet long enough to look stuck.
 
 In normal finalization, only accepted, current keeps can enter a review branch. Baselines, measurements, rejected or provisional work, failed checks, crashes, invalidated results, later discards, and reverted changes stay in the ledger but stay out of the branch. Session artifacts are excluded unless the reviewer explicitly asks for them.
+
+## Hand off one change
+
+If the existing branch already contains one coherent accepted change, use the preview to identify the accepted commits and exact file set. Hand off that change with a receipt containing:
+
+- the goal, commit IDs, and changed files
+- the accepted evaluator and checks, with baseline and candidate results
+- the preview's exclusions and blockers, and any unverified claim
+- the current delivery state: local, pushed, or under review
+
+Use the actual preview and ledger results. If the preview is blocked or the branch includes session files, unrelated work, or rejected experiments, it is not ready for this simple handoff. Resolve the blocker or use the branch separation below. A receipt records evidence; it does not bypass finalization checks.
+
+Creating additional branches is unnecessary when the current branch is already the intended review unit. Push, PR creation, and merge remain distinct actions requiring the user's authorization.
 
 ## Say only what the evidence supports
 
@@ -36,7 +49,7 @@ node scripts/autoresearch.mjs finalize-current-tree --cwd <project> --exclude-se
 
 This is an exceptional recovery route, not keep-backed finalization. It treats the entire clean non-session branch diff as one explicitly reviewed unit and may include corrections or support work that was never logged as a keep. Use it only when canonical state names `current-tree-finalization`. Verify the clean tree, exact file set, session exclusions, claim evidence, and generated plan before approval.
 
-## Create and verify the review branches
+## Separate mixed history into review branches
 
 From the reviewed source branch, write a plan:
 

@@ -746,8 +746,8 @@ async function setupPlan(args: any) {
     commitPaths.length > 0
       ? {
           paths: [
-            "autoresearch.md",
-            "autoresearch.ideas.md",
+            path.relative(workDir, resolveSessionPaths({ workDir }).notesPath),
+            path.relative(workDir, resolveSessionPaths({ workDir }).ideasPath),
             shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1",
             "autoresearch.config.json",
           ],
@@ -757,8 +757,8 @@ async function setupPlan(args: any) {
                 "git",
                 "add",
                 "--",
-                "autoresearch.md",
-                "autoresearch.ideas.md",
+                path.relative(workDir, resolveSessionPaths({ workDir }).notesPath),
+                path.relative(workDir, resolveSessionPaths({ workDir }).ideasPath),
                 shellKind === "bash" ? "autoresearch.sh" : "autoresearch.ps1",
                 "autoresearch.config.json",
               ],
@@ -1461,9 +1461,9 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
       "Read continuation before deciding whether to continue or finalize.",
     ],
     readFirst: [
-      "autoresearch.md",
+      path.relative(workDir, resolveSessionPaths({ workDir }).notesPath),
       "autoresearch.jsonl",
-      "autoresearch.ideas.md",
+      path.relative(workDir, resolveSessionPaths({ workDir }).ideasPath),
       "autoresearch.last-run.json when present",
     ],
     state,
@@ -2098,8 +2098,7 @@ function renderIdeasDocument(args: any) {
       .filter((constraint: any) => !/^Decision contract:/i.test(constraint))
       .slice(0, 3)
       .map((constraint: any) => `Validate constraint before promotion: ${constraint}`),
-    "Reserve one packet for a distant-scout lane before repeating the same near-neighbor tweak.",
-    "If a promotion-grade packet has no decision row, log it as benchmark coverage work rather than a candidate regression.",
+    "Try one focused change at a time; repeat unchanged candidates when the accepted noise model requires it.",
   ]);
   return [`# Autoresearch Ideas: ${title}`, "", ...ideas.map((idea: any) => `- ${idea}`), ""].join(
     "\n",
@@ -2112,15 +2111,13 @@ function renderResumeBlock(workDir: string) {
   return [
     "## Resume This Session",
     "",
-    "Use these commands to pick the loop back up without rediscovering state:",
+    "Read the current decision before resuming:",
     "",
     "```bash",
-    `node ${script} state --cwd ${cwd}`,
-    `node ${script} doctor --cwd ${cwd} --check-benchmark`,
-    `node ${script} next --cwd ${cwd}`,
-    `node ${script} log --cwd ${cwd} --from-last --status keep --description "Describe the kept change"`,
-    `node ${script} export --cwd ${cwd}`,
+    `node ${script} state --cwd ${cwd} --report`,
     "```",
+    "",
+    "Follow its next action. A measurement is a keep only after the accepted checks and repeat requirements pass.",
     "",
   ].join("\n");
 }
@@ -2645,7 +2642,7 @@ async function writeSetupBootstrapFiles(args: LooseObject, options: LooseObject)
 
   files.push(
     await writeSessionFile(
-      path.join(workDir, "autoresearch.md"),
+      resolveSessionPaths({ workDir }).notesPath,
       `${renderSessionDocument(options.sessionDocumentArgs(context)).trimEnd()}\n\n${renderResumeBlock(workDir)}`,
       { overwrite, root: workDir },
     ),
@@ -2659,7 +2656,7 @@ async function writeSetupBootstrapFiles(args: LooseObject, options: LooseObject)
   );
   files.push(
     await writeSessionFile(
-      path.join(workDir, "autoresearch.ideas.md"),
+      resolveSessionPaths({ workDir }).ideasPath,
       options.ideasContent(context),
       { overwrite, root: workDir },
     ),
@@ -4119,7 +4116,7 @@ async function researchFanout(args: LooseObject) {
     12,
   );
   const dryRun = boolOption(args.dry_run ?? args.dryRun, !boolOption(args.yes, false));
-  const lanes = buildParallelLanes({ memory, config }).slice(0, laneLimit);
+  const lanes = buildParallelLanes({ workDir, memory, config }).slice(0, laneLimit);
   const plan = {
     id: `fanout-${Date.now()}`,
     status: dryRun ? "preview" : "planned",

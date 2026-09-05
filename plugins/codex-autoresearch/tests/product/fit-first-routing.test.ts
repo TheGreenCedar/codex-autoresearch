@@ -137,6 +137,105 @@ function assertAssistOnly(payload: Record<string, unknown>) {
   assert.equal("retrievalConstraint" in capsule, false);
 }
 
+test("prompt-plan prepares fresh complete loops without requiring replacement wording", async () => {
+  await withTempDir("fit-first-fresh", async (dir) => {
+    const before = await directorySnapshot(dir);
+    const prompts = [
+      [
+        "Run a measured loop to speed tests for 5 iterations.",
+        "Benchmark: npm test",
+        "Metric: seconds, lower is better",
+        "Checks: npm test",
+        "Scope: src/",
+      ].join("\n"),
+      [
+        "/goal @Codex Autoresearch make the unit tests faster.",
+        "Benchmark: npm test -- --runInBand",
+        "Wrap that raw command so the benchmark prints METRIC seconds=<number>.",
+        "Metric: seconds, lower is better",
+        "Checks: npm test",
+        "Scope: test runner config and test helpers only",
+        "Measure a baseline before changing code. Stop after 5 attempts or 30 minutes.",
+      ].join("\n"),
+    ];
+    for (const prompt of prompts) {
+      const payload = await promptPlan(dir, prompt);
+      assert.equal(payload.fit.disposition, "run-loop", JSON.stringify(payload));
+      assert.equal(payload.fit.sessionRelation, "none");
+      assert.equal(payload.contractCandidate.maxIterations, 5);
+      assert.equal("setup" in payload, false);
+    }
+    assert.deepEqual(await directorySnapshot(dir), before);
+  });
+});
+
+test("fit intent ignores read-only paths and negation literals in contract data", async () => {
+  await withTempDir("fit-first-contract-literals", async (dir) => {
+    for (const fields of [
+      ["Benchmark: node bench/parser.mjs", "Scope: src/read-only-parser.mjs"],
+      ["Benchmark: node -e \"console.log('do not run')\"", "Scope: src/parser.mjs"],
+      ["Benchmark: node bench/parser.mjs", "Scope: src/parser.mjs"],
+    ]) {
+      const payload = await promptPlan(
+        dir,
+        [
+          "Run 5 measured iterations to reduce parser runtime.",
+          ...fields,
+          "Metric: seconds, lower is better",
+          "Checks: node --test tests/read-only.test.mjs",
+        ].join("\n"),
+      );
+      assert.equal(payload.fit.disposition, "run-loop", JSON.stringify(payload));
+    }
+    assert.deepEqual(await directorySnapshot(dir), {});
+  });
+});
+
+test("complete loop examples in explanations and prohibited execution stay direct", async () => {
+  await withTempDir("fit-first-nonexecution", async (dir) => {
+    for (const request of [
+      "Explain how to run a measured loop for 5 iterations.",
+      "Do not run a measured loop for 5 iterations.",
+      "Review this measured loop for 5 iterations.",
+      "Read-only: run a measured loop for 5 iterations.",
+    ]) {
+      const payload = await promptPlan(
+        dir,
+        [
+          request,
+          "Benchmark: npm test",
+          "Metric: seconds, lower is better",
+          "Checks: npm test",
+          "Scope: src/",
+        ].join("\n"),
+      );
+      assertAssistOnly(payload);
+    }
+    assert.deepEqual(await directorySnapshot(dir), {});
+  });
+});
+
+test("advertised first-use prompts prepare a loop without writing or executing", async () => {
+  await withTempDir("fit-first-documented", async (dir) => {
+    const packageRoot = path.resolve(import.meta.dirname, "../../..");
+    const before = await directorySnapshot(dir);
+    for (const document of [
+      path.join(packageRoot, "docs/start.md"),
+      path.join(packageRoot, "../../README.md"),
+    ]) {
+      const text = await readFile(document, "utf8");
+      const prompt = [...text.matchAll(/```text\n([\s\S]*?)```/g)]
+        .map((match) => match[1])
+        .find((block) => block.includes("Benchmark:") && block.includes("Scope:"));
+      assert.ok(prompt, document);
+      const payload = await promptPlan(dir, prompt);
+      assert.equal(payload.fit.disposition, "run-loop", JSON.stringify(payload));
+      assert.equal(payload.fit.sessionRelation, "none");
+    }
+    assert.deepEqual(await directorySnapshot(dir), before);
+  });
+});
+
 test("prompt-plan returns architecture and product reviews directly without discovery or setup", async () => {
   await withTempDir("fit-first-direct", async (dir) => {
     await mkdir(path.join(dir, "docs"), { recursive: true });
@@ -206,6 +305,10 @@ test("prompt-plan asks for the exact missing fields of an explicit incomplete re
     assert.equal(fit.sessionRelation, "none");
     assert.deepEqual(fit.missing, ["direction", "checks_command", "scope"]);
     assert.deepEqual(fit.conflicts, []);
+    assert.deepEqual(payload.nextAction.discovery.fields, ["checks_command", "scope"]);
+    assert.equal(payload.nextAction.discovery.mode, "read-only");
+    assert.equal(payload.nextAction.discovery.maxFiles, 5);
+    assert.equal(payload.nextAction.discovery.accepted, false);
   });
 });
 

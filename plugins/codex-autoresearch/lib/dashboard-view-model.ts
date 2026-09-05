@@ -308,8 +308,8 @@ export function buildDashboardViewModel(context: DashboardContext) {
       nextAction: actionRail[0]?.detail || nextAction,
       confidenceText:
         state.confidence == null
-          ? "Confidence needs at least three finite metric runs and enough signal over noise."
-          : "Confidence compares best movement against median absolute deviation.",
+          ? "Movement / spread needs three finite runs and nonzero history spread. It is not statistical confidence."
+          : "Movement / spread divides improvement by history median absolute deviation across experiments. It is not statistical confidence.",
       finalizeText: finalizePreview?.ready
         ? "Ready to preview final review branches."
         : finalizePreview?.nextAction || "Keep evidence or run finalize-preview when ready.",

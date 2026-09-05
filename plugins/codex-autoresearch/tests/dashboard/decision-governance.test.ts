@@ -922,13 +922,17 @@ test("dashboard keeps one canonical decision first in operate and audit views", 
     const details = getById("metric-details");
 
     assert.equal(signalStrip.getAttribute("aria-label"), "Run readiness signals");
-    assert.equal(signalStrip.querySelectorAll(".signal-item").length, 4);
+    assert.equal(signalStrip.querySelectorAll(".signal-item").length, view === "audit" ? 4 : 2);
     assert.doesNotMatch(signalStrip.textContent || "", /Repeat the best packet/);
     assert.match(decision.textContent || "", /Repeat the best packet/);
     assert.match(signalStrip.textContent, /2 current \/ 1 provisional \/ 1 audit-only/);
-    assert.match(signalStrip.textContent, /1 active \/ 0 done/);
+    if (view === "audit") assert.match(signalStrip.textContent, /1 active \/ 0 done/);
+    else assert.doesNotMatch(signalStrip.textContent, /1 active \/ 0 done/);
     assert.equal(signalStrip.querySelector("button") === null, true);
-    assert.equal(signalStrip.querySelectorAll("details.signal-item").length, 4);
+    assert.equal(
+      signalStrip.querySelectorAll("details.signal-item").length,
+      view === "audit" ? 4 : 2,
+    );
     assert.equal(signalStrip.querySelector(".signal-item[title]") === null, true);
     assert.ok(
       decision.compareDocumentPosition(chart) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING,

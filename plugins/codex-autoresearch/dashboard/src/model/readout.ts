@@ -63,7 +63,7 @@ export function buildReadout(
     confidence: summary?.confidence ?? runs.at(-1)?.confidence ?? null,
     confidenceText:
       viewModel.readout?.confidenceText ||
-      "Confidence compares best movement against observed metric noise.",
+      "Movement / spread compares improvement with history median absolute deviation across experiments; it is not statistical confidence.",
     improvement: improvementPercent(baseline, best, metricDefinition.bestDirection),
     recentRuns: [...runs].reverse().slice(0, 4),
     plottedRuns: evidence,

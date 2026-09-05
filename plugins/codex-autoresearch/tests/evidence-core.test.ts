@@ -19,6 +19,8 @@ import {
   buildLastRunFreshnessSnapshot,
   createSessionReadCache,
   currentState,
+  computeConfidence,
+  stateFromSessionRecords,
   finiteMetric,
   lastRunPacketFreshness,
   loadSessionRecords,
@@ -1997,3 +1999,28 @@ function isStubbornFixtureProcess(pid: number): boolean {
     return false;
   }
 }
+
+test("movement history statistic is finite and explicitly not statistical confidence", () => {
+  const runs = [
+    { run: 1, status: "measure", metric: 100 },
+    { run: 2, status: "discard", metric: 95 },
+    { run: 3, status: "keep", metric: 90 },
+  ];
+  assert.equal(computeConfidence(runs, "lower"), 2);
+  const state = stateFromSessionRecords("/nonexistent-statistic-fixture", runs);
+  assert.deepEqual(state.confidenceStatistic, {
+    kind: "movement-history-mad-ratio",
+    isStatisticalConfidence: false,
+  });
+  assert.equal(
+    computeConfidence(
+      [
+        { status: "measure", metric: 1e308 },
+        { status: "discard", metric: 0 },
+        { status: "keep", metric: -1e308 },
+      ],
+      "lower",
+    ),
+    null,
+  );
+});

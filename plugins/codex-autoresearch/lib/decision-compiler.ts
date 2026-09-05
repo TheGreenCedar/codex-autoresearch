@@ -948,7 +948,7 @@ function compileCapabilities(diagnostics: readonly DecisionDiagnostic[]): Compil
 }
 
 function classifyLearning(snapshot: CoherentSessionSnapshot): DecisionPlan["learning"] {
-  const eligible = eligibleCandidateRuns(snapshot);
+  const eligible = learningCandidateRuns(snapshot);
   let consecutive = 0;
   let latest: DecisionPlan["learning"]["latest"] = {
     kind: "none",
@@ -963,6 +963,97 @@ function classifyLearning(snapshot: CoherentSessionSnapshot): DecisionPlan["lear
     consecutive += 1;
   }
   return { latest, consecutiveNoLearningCandidates: consecutive };
+}
+
+function learningCandidateRuns(snapshot: CoherentSessionSnapshot): UnknownRecord[] {
+  const eligible = eligibleCandidateRuns(snapshot);
+  const contract = acceptedContract(snapshot.records, snapshot.semanticFacts.contractDigest);
+  const noise = isUnknownRecord(contract?.noise) ? contract.noise : null;
+  const repeats =
+    noise?.kind === "bounded"
+      ? noise.repeats
+      : noise?.kind === "unknown"
+        ? noise.qualificationRepeats
+        : 1;
+  if (typeof repeats !== "number" || !Number.isInteger(repeats) || repeats <= 1) return eligible;
+
+  const fingerprint = (record: UnknownRecord): string | null => {
+    const evidence = isUnknownRecord(record.contractEvaluationEvidence)
+      ? record.contractEvaluationEvidence
+      : null;
+    if (
+      !["measure", "keep", "discard"].includes(String(record.status)) ||
+      record.failure != null ||
+      record.quarantined === true ||
+      (record.evidenceStatus === "rejected" && record.status !== "discard") ||
+      record.evidenceStatus === "superseded" ||
+      !evidence ||
+      evidence.contractDigest !== snapshot.semanticFacts.contractDigest ||
+      evidence.acceptedEvaluation !== true ||
+      evidence.checksPassed !== true ||
+      typeof evidence.metric !== "number" ||
+      !Number.isFinite(evidence.metric) ||
+      evidence.metric !== record.metric ||
+      !nonEmptyString(evidence.candidateFingerprint)
+    )
+      return null;
+    return evidence.candidateFingerprint;
+  };
+  const baseline = snapshot.records.find((record) => {
+    const axes = parseEvidenceAxes(record);
+    return (
+      axes.valid &&
+      axes.runPurpose === "baseline" &&
+      axes.evaluationAuthority === "accepted-contract" &&
+      record.preconditionEpoch === snapshot.semanticFacts.preconditionEpoch &&
+      fingerprint(record) != null
+    );
+  });
+  const referenceFingerprint = baseline ? fingerprint(baseline) : null;
+  let referenceRepeats = baseline ? 1 : 0;
+  const experiments: UnknownRecord[] = [];
+  let group: UnknownRecord[] = [];
+  let groupFingerprint: string | null = null;
+  const flush = (pending: boolean) => {
+    if (group.length && (!pending || group.length >= repeats)) {
+      // Preserve real learning from any required repeat without multiplying its votes.
+      const qualification = group.slice(0, repeats);
+      experiments.push(
+        [...qualification]
+          .reverse()
+          .find((record) => validatedLearning(record.learning).kind !== "none") ??
+          qualification.at(-1)!,
+      );
+      experiments.push(...group.slice(repeats));
+    }
+    group = [];
+    groupFingerprint = null;
+  };
+  for (const record of eligible) {
+    const identity = fingerprint(record);
+    if (
+      record.status === "measure" &&
+      identity &&
+      identity === referenceFingerprint &&
+      referenceRepeats < repeats
+    ) {
+      flush(false);
+      referenceRepeats += 1;
+      continue;
+    }
+    if (!identity) {
+      flush(false);
+      experiments.push(record);
+    } else {
+      if (groupFingerprint && groupFingerprint !== identity) flush(false);
+      groupFingerprint = identity;
+      group.push(record);
+      if (record.status !== "measure") flush(false);
+    }
+  }
+  // The current unfinished cohort is still collecting the contract-required evidence.
+  flush(true);
+  return experiments;
 }
 
 function validatedLearning(value: unknown): DecisionPlan["learning"]["latest"] {

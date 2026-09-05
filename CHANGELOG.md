@@ -6,7 +6,17 @@ This project uses a root-only changelog because the root README is the public do
 
 Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older entries that mention MCP servers, MCP tools, or MCP resources describe historical release surfaces before the 1.3.3 removal.
 
-## Unreleased
+## 2.9.0 - 2026-09-05
+
+Measured loops now have a clearer first run, stricter repeat evidence, and a simpler handoff. Existing sessions keep working with their current note paths; new sessions put notes and ideas in `.autoresearch/`.
+
+- The documented first run now starts a fresh measured session. Missing benchmark, checks, and scope can be proposed from bounded read-only discovery before acceptance.
+- Experiment notes no longer count as product-grade or broad-improvement proof. Goal wording no longer invents retrieval-specific requirements.
+- Repeat qualification retains adverse observations and requires comparable repeated reference measurements. Required repeat samples no longer trigger a premature no-learning pause; paused reports correctly show blocked status. The displayed movement/spread ratio is explicitly not statistical confidence.
+- Bundle-size measurement builds first and rejects missing or empty output. Workload placeholders fail instead of producing unrelated metrics; runtime recipes require independently supplied correctness checks.
+- New session notes and ideas share `.autoresearch/`; existing root documents remain supported. Conflicting copies block rather than silently choosing one. Ledger, configuration, and execution paths retain their existing locations.
+- Finalization preview includes a compact evidence receipt for reviewing the existing change. Branch reconstruction remains available for advanced delivery.
+- The default dashboard reduces administrative signals and corrects the percent display in experiment details.
 
 ## 2.8.0 - 2026-08-29
 

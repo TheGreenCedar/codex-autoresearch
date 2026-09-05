@@ -1,3 +1,4 @@
+import { resolveSessionPaths } from "../../lib/session-paths.js";
 import assert from "node:assert/strict";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -24,7 +25,11 @@ test("setup does not append elapsed metrics to explicit metric-emitting benchmar
     ]);
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
-    assert.ok(payload.checkpoint.paths.includes("autoresearch.md"));
+    assert.ok(
+      payload.checkpoint.paths.includes(
+        path.relative(dir, resolveSessionPaths({ workDir: dir }).notesPath),
+      ),
+    );
     assert.ok(payload.checkpoint.paths.includes("autoresearch.config.json"));
     assert.equal(payload.checkpoint.paths.includes(".gitattributes"), false);
     assert.equal(payload.stateStorage.storageMode, "worktree");
@@ -43,7 +48,7 @@ test("setup does not append elapsed metrics to explicit metric-emitting benchmar
     assert.doesNotMatch(script, /Elapsed\.TotalSeconds|elapsed_seconds/);
     assert.doesNotMatch(script, /METRIC seconds=\{0\}|printf 'METRIC seconds/);
 
-    const sessionDoc = await readFile(path.join(dir, "autoresearch.md"), "utf8");
+    const sessionDoc = await readFile(resolveSessionPaths({ workDir: dir }).notesPath, "utf8");
     assert.match(sessionDoc, /`src`: in configured commit scope/);
     assert.match(sessionDoc, /`tests`: in configured commit scope/);
     assert.doesNotMatch(sessionDoc, /TBD: add files after initial inspection/);
@@ -94,7 +99,7 @@ test("setup rejects conflicting private state before creating scaffold files", a
 
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /Conflicting last-run packet state exists/);
-    await assert.rejects(access(path.join(dir, "autoresearch.md")));
+    await assert.rejects(access(resolveSessionPaths({ workDir: dir }).notesPath));
   });
 });
 
