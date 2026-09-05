@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isResultSemantics } from "../lib/result-semantics.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { defaultCommandShell, renderShellCommand } from "../lib/command-rendering.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
@@ -184,7 +185,8 @@ const observationValidators: Record<
           !string(plan.generationId) ||
           !string(plan.phase) ||
           !string(plan.actionKind) ||
-          !string(plan.commandDigest),
+          !string(plan.commandDigest) ||
+          !isResultSemantics(plan.result),
       ) ||
       new Set(terminalPlans.map((plan) => JSON.stringify(plan))).size !== 1 ||
       JSON.stringify(dashboardPlan) !== JSON.stringify(terminalPlan) ||
@@ -460,6 +462,7 @@ function publicPlanFacts(plan: Record<string, unknown>): Record<string, unknown>
     contractDigest: plan.contractDigest,
     evaluatorIdentity: plan.evaluatorIdentity,
     commandDigest: action.commandDigest,
+    result: plan.result,
   };
 }
 

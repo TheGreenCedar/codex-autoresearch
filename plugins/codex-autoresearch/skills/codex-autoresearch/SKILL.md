@@ -105,7 +105,7 @@ setup -> state -> next -> log -> state -> finalize-preview
 
 Baselines and accepted candidate packets consume packet budget. Manual observations and read-only diagnostics do not. An imported commit can authorize a keep only after the accepted evaluator and checks evaluate that commit.
 
-Run at most one packet per decision. Remaining budget is never a reason to run another. Two eligible no-learning candidates pause packet work. Two failures in the same registered layer pause packet work unless that failure class's relevant preconditions changed. A pause hands control back to direct work; it does not trigger fanout, diversification, or an automatic segment transition.
+Run at most one packet per decision. Remaining budget is never a reason to run another. Legacy learning text cannot authorize another attempt. Respect the accepted retry limit for the exact failure code and relevant preconditions; changing prose does not change that identity. A pause hands control back to direct work; it does not trigger fanout, diversification, or an automatic segment transition.
 
 ## Recover logging exactly once
 

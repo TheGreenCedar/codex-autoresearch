@@ -112,6 +112,12 @@ const DECISION_PLAN_SCHEMA: JsonSchema = closedObjectSchema({
   }),
   outcome: closedObjectSchema({
     kind: enumStringSchema([...DECISION_OUTCOME_KINDS]),
+    execution: enumStringSchema(["completed", "failed", "unknown"]),
+    validity: enumStringSchema(["valid", "invalid", "unknown"]),
+    conclusion: enumStringSchema(["supported", "refuted", "inconclusive"]),
+    movement: enumStringSchema(["improved", "regressed", "neutral", "unknown"]),
+    attainment: enumStringSchema(["satisfied", "unsatisfied", "unknown", "not-assessed"]),
+    codeAcceptance: enumStringSchema(["accepted", "rejected", "unassessed"]),
   }),
   learning: closedObjectSchema({
     latest: {

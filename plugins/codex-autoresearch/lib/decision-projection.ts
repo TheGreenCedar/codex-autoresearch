@@ -84,6 +84,7 @@ export interface CompactDecisionPlanProjection extends UnknownRecord {
   contractDigest: string;
   evaluatorIdentity: string;
   outcome: DecisionPlan["outcome"]["kind"];
+  result: DecisionPlan["outcome"];
   learning: UnknownRecord;
 }
 
@@ -103,6 +104,7 @@ export interface DashboardDecisionPlanProjection extends UnknownRecord {
   contractDigest: string;
   evaluatorIdentity: string;
   outcome: DecisionPlan["outcome"]["kind"];
+  result: DecisionPlan["outcome"];
   learning: UnknownRecord;
   display: {
     actionReason: string;
@@ -145,6 +147,7 @@ export function projectCompactDecisionPlan(
     contractDigest: plan.contractDigest,
     evaluatorIdentity: plan.evaluatorIdentity,
     outcome: plan.outcome.kind,
+    result: plan.outcome,
     learning: {
       kind: plan.learning.latest.kind,
       changedBelief: plan.learning.latest.changedBelief,

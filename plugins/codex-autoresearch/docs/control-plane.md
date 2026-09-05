@@ -52,7 +52,7 @@ Diagnostics block capabilities rather than the whole session:
 - `finalize`
 - `parent-final-answer`
 
-A budget or no-learning pause blocks `run-packet` while allowing direct work and a bounded final answer. A finalization problem blocks `finalize`, not an unrelated task. Evaluator drift blocks packet execution and keep authorization while allowing an explicit contract transition. A pending or inconsistent log or Git transaction blocks unsafe mutation, finalization, and session-dependent final claims.
+A budget or accepted retry-limit pause blocks `run-packet` while allowing direct work and a bounded final answer. A finalization problem blocks `finalize`, not an unrelated task. Evaluator drift blocks packet execution and keep authorization while allowing an explicit contract transition. A pending or inconsistent log or Git transaction blocks unsafe mutation, finalization, and session-dependent final claims.
 
 The parent-task relationship matters. A session blocker affects `parent-final-answer` only when the current claim depends on that session. An unrelated request stays independent.
 
@@ -72,7 +72,7 @@ The accepted `ExperimentContract` is the sole evaluator and checks authority. It
 
 Evidence records separate run purpose, evaluation authority, and candidate origin. A keep is authorized mechanically only for a candidate evaluated by the accepted contract, with accepted checks, metric comparison, and noise qualification satisfied. Manual observations and imported commits do not authorize a keep until evaluated under that contract.
 
-Learning defaults to `none`. Two eligible no-learning candidates or two failures in the same registered layer pause packet work unless the relevant precondition digest changes. Required, validated reference repeats do not count as new candidates, and required unchanged-candidate repeats count as one experiment. Surplus, failed, and malformed observations retain conservative limits. Remaining budget never causes another packet to run, and a pause does not create fanout or a new segment.
+Legacy learning records remain visible history. Their prose and unverified references do not authorize continuation or create automatic pauses. Repeated execution failures use the accepted contract's `repeatedFailures.limit` and an exact defect identity (failure code plus registered preconditions). A changed defect or relevant precondition starts a different failure sequence. Governed investigations additionally reserve cumulative resources before work; changing methods cannot restore allowance. Required repeat measurements retain the accepted noise qualification rules.
 
 ## Surface disagreement
 
@@ -89,3 +89,6 @@ Field details are listed in [Concepts](concepts.md#state-fields). Persistence an
 Descriptions and next-action hints are explanatory text. They cannot satisfy product-grade or broad-improvement proof, and goal keywords cannot add domain-specific acceptance requirements. Ordinary review receipts describe the accepted measured result; a broader product claim remains unverified.
 
 Non-deterministic keep qualification uses the complete accepted candidate and reference cohorts. Both require repeated observations. Bounded noise must contain each observed range; unknown noise uses observed ranges conservatively and retains adverse samples. These ranges are sampled variability, not confidence intervals. The compatibility `confidence` number is a movement/history-MAD ratio, labeled “Movement / spread” in the dashboard.
+
+
+The canonical result separates execution completion, measurement validity, hypothesis conclusion, metric movement, criterion attainment, and code acceptance. Valid negative predicate evidence refutes a criterion without becoming a crashed execution. Threshold attainment does not imply improvement, and improvement does not imply attainment or a keep. The compact `result` projection carries these dimensions on every surface; the legacy `outcome` alias describes metric movement (`uncompared` when valid evidence has no comparison).

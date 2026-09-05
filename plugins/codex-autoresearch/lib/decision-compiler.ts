@@ -1,4 +1,11 @@
 import { createHash } from "node:crypto";
+import {
+  classifyResult,
+  isResultSemantics,
+  type ResultSemantics,
+  type EvaluatorObservation,
+} from "./result-semantics.js";
+import { isAcceptedCurrentRun } from "./evidence-registry.js";
 
 import type { CoherentSessionSnapshot } from "./coherent-session-snapshot.js";
 import { parseEvidenceAxes } from "./evidence-axes.js";
@@ -57,7 +64,13 @@ export const DECISION_ACTION_KINDS = [
 
 export type DecisionActionKind = (typeof DECISION_ACTION_KINDS)[number];
 
-export const DECISION_OUTCOME_KINDS = ["improved", "regressed", "neutral", "invalid"] as const;
+export const DECISION_OUTCOME_KINDS = [
+  "improved",
+  "regressed",
+  "neutral",
+  "uncompared",
+  "invalid",
+] as const;
 export type DecisionOutcomeKind = (typeof DECISION_OUTCOME_KINDS)[number];
 
 export type DecisionDiagnosticCode =
@@ -297,7 +310,8 @@ export interface DecisionPlan {
     failureLayer: FailureLayer | null;
     failurePreconditions: readonly string[];
   };
-  outcome: {
+  outcome: ResultSemantics & {
+    /** Compatibility alias for metric movement; inspect validity and attainment separately. */
     kind: DecisionOutcomeKind;
   };
   learning: {
@@ -422,7 +436,16 @@ export function isDecisionPlan(value: unknown): value is DecisionPlan {
   const outcome = isUnknownRecord(value.outcome) ? value.outcome : null;
   if (
     !outcome ||
-    !hasExactKeys(outcome, ["kind"]) ||
+    !hasExactKeys(outcome, [
+      "kind",
+      "execution",
+      "validity",
+      "conclusion",
+      "movement",
+      "attainment",
+      "codeAcceptance",
+    ]) ||
+    !isResultSemantics(outcome) ||
     !DECISION_OUTCOME_KINDS.includes(outcome.kind as DecisionOutcomeKind)
   ) {
     return false;
@@ -482,10 +505,19 @@ export function compileDecisionPlan(
   if (snapshot.pendingTransaction) {
     automatic.push(decisionDiagnostic(snapshot.pendingTransaction.diagnosticCode));
   }
-  if (learning.consecutiveNoLearningCandidates >= 2) {
-    automatic.push(decisionDiagnostic("no-learning-pause"));
-  }
-  if (failures.consecutive >= 2) {
+  // Legacy learning is retained as history, never as continuation authority.
+  const contract = acceptedContract(snapshot.records, snapshot.semanticFacts.contractDigest);
+  const stopPolicy = isUnknownRecord(contract?.stopPolicy) ? contract.stopPolicy : null;
+  const failurePolicy = isUnknownRecord(stopPolicy?.repeatedFailures)
+    ? stopPolicy.repeatedFailures
+    : null;
+  const failureLimit = failurePolicy?.limit;
+  if (
+    typeof failureLimit === "number" &&
+    Number.isSafeInteger(failureLimit) &&
+    failureLimit > 0 &&
+    failures.consecutive >= failureLimit
+  ) {
     automatic.push(
       decisionDiagnostic("same-layer-failure-pause", {
         semantic: { layer: failures.layer },
@@ -1125,7 +1157,12 @@ function validatedFailurePreconditionIdentity(
     const identity = `${preconditions.acceptedCheckIdentity}@${preconditions.acceptedCheckExecutionDigest}`;
     if (!snapshot.semanticFacts.acceptedCheckIdentities.includes(identity)) return "";
   }
-  return canonicalJson(Object.fromEntries(required.map((name) => [name, preconditions[name]])));
+  return nonEmptyString(failure.code)
+    ? canonicalJson({
+        code: failure.code,
+        preconditions: Object.fromEntries(required.map((name) => [name, preconditions[name]])),
+      })
+    : "";
 }
 
 function eligibleCandidateRuns(snapshot: CoherentSessionSnapshot): UnknownRecord[] {
@@ -1164,30 +1201,55 @@ function isProvenExternalInfrastructureFailure(
 }
 
 function classifyOutcome(snapshot: CoherentSessionSnapshot): DecisionPlan["outcome"] {
+  const project = (result: ResultSemantics): DecisionPlan["outcome"] => ({
+    ...result,
+    kind:
+      result.movement === "unknown"
+        ? result.validity === "valid"
+          ? "uncompared"
+          : "invalid"
+        : result.movement,
+  });
+  const unknown = () => project(classifyResult({ kind: "invalid", execution: "unknown" }));
   const latest = latestAcceptedCandidateRun(snapshot);
-  if (!latest) return { kind: "invalid" };
+  if (!latest) return unknown();
+  const acceptance = isAcceptedCurrentRun(latest)
+    ? "accepted"
+    : ["discard", "crash", "checks_failed"].includes(String(latest.status))
+      ? "rejected"
+      : "unassessed";
   const failure = isUnknownRecord(latest.failure) ? latest.failure : null;
-  if (failure || latest.status === "crash" || latest.status === "checks_failed") {
-    return { kind: "invalid" };
-  }
+  // Legacy checks_failed includes timeout and harness failure; a predicate
+  // observation is required to establish a valid counterexample.
+  if (failure || latest.status === "crash" || latest.status === "checks_failed")
+    return project(classifyResult({ kind: "invalid", execution: "failed" }, acceptance));
   const metric = finiteNumber(latest.metric);
-  if (metric == null) return { kind: "invalid" };
+  if (metric === null)
+    return project(classifyResult({ kind: "invalid", execution: "completed" }, acceptance));
   const contract = acceptedContract(snapshot.records, snapshot.semanticFacts.contractDigest);
   const semantics = isUnknownRecord(contract?.metric) ? contract.metric : null;
-  if (!semantics) return { kind: "invalid" };
+  if (!semantics) return unknown();
+  let target: Extract<EvaluatorObservation, { kind: "metric" }>["target"] = null;
   if (semantics.kind === "threshold") {
-    const target = finiteNumber(semantics.target);
-    const comparator = String(semantics.comparator || "");
-    if (target == null || !["<", "<=", "=", ">=", ">"].includes(comparator)) {
-      return { kind: "invalid" };
-    }
-    return thresholdSatisfied(metric, comparator, target)
-      ? { kind: "improved" }
-      : { kind: "regressed" };
-  }
-  if (semantics.kind !== "minimize" && semantics.kind !== "maximize") {
-    return { kind: "invalid" };
-  }
+    const value = finiteNumber(semantics.target);
+    const comparator = semantics.comparator;
+    if (
+      value === null ||
+      (comparator !== "<" &&
+        comparator !== "<=" &&
+        comparator !== "=" &&
+        comparator !== ">=" &&
+        comparator !== ">")
+    )
+      return unknown();
+    target = { value, comparator };
+  } else if (semantics.kind !== "minimize" && semantics.kind !== "maximize") return unknown();
+  const direction =
+    semantics.kind === "minimize" || target?.comparator === "<" || target?.comparator === "<="
+      ? "lower"
+      : semantics.kind === "maximize" || target?.comparator === ">" || target?.comparator === ">="
+        ? "higher"
+        : "none";
   const latestRecordIndex = snapshot.records.lastIndexOf(latest as never);
   const referenceValues = snapshot.records
     .slice(0, latestRecordIndex < 0 ? undefined : latestRecordIndex)
@@ -1195,18 +1257,27 @@ function classifyOutcome(snapshot: CoherentSessionSnapshot): DecisionPlan["outco
     .filter(isAcceptedReferenceRun)
     .map((record) => finiteNumber(record.metric))
     .filter((value): value is number => value != null);
-  if (referenceValues.length === 0) return { kind: "invalid" };
   const reference =
-    semantics.kind === "minimize" ? Math.min(...referenceValues) : Math.max(...referenceValues);
-  const improvement = semantics.kind === "minimize" ? reference - metric : metric - reference;
-  const minimumImprovement = finiteNumber(semantics.minimumImprovement) ?? 0;
+    referenceValues.length === 0
+      ? null
+      : direction === "lower"
+        ? Math.min(...referenceValues)
+        : Math.max(...referenceValues);
   const noise = isUnknownRecord(contract?.noise) ? contract.noise : null;
-  const tolerance = noise?.kind === "bounded" ? (finiteNumber(noise.tolerance) ?? 0) : 0;
-  if (improvement > 0 && improvement >= minimumImprovement && improvement > tolerance) {
-    return { kind: "improved" };
-  }
-  if (improvement < -tolerance) return { kind: "regressed" };
-  return { kind: "neutral" };
+  return project(
+    classifyResult(
+      {
+        kind: "metric",
+        value: metric,
+        reference,
+        direction,
+        minimumImprovement: finiteNumber(semantics.minimumImprovement) ?? 0,
+        tolerance: noise?.kind === "bounded" ? (finiteNumber(noise.tolerance) ?? 0) : 0,
+        target,
+      },
+      acceptance,
+    ),
+  );
 }
 
 function latestAcceptedCandidateRun(snapshot: CoherentSessionSnapshot): UnknownRecord | null {
@@ -1275,14 +1346,6 @@ function isAcceptedReferenceRun(record: UnknownRecord): boolean {
   if (record.status !== "keep" && record.status !== "measure") return false;
   if (record.evidenceStatus === "rejected" || record.evidenceStatus === "superseded") return false;
   return !isUnknownRecord(record.failure);
-}
-
-function thresholdSatisfied(metric: number, comparator: string, target: number): boolean {
-  if (comparator === "<") return metric < target;
-  if (comparator === "<=") return metric <= target;
-  if (comparator === "=") return metric === target;
-  if (comparator === ">=") return metric >= target;
-  return metric > target;
 }
 
 function finiteNumber(value: unknown): number | null {
