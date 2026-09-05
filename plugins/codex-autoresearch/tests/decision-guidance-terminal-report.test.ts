@@ -200,6 +200,19 @@ test("finalization-only blockers leave packet and parent dispositions ready", ()
   assert.equal(report.json.nextCommand, plan.action.command);
 });
 
+test("packet pauses are reported as blocked on full and compact surfaces", () => {
+  const plan = planFixture([decisionDiagnostic("no-learning-pause")]);
+  assert.equal(plan.loopDisposition.kind, "pause");
+  for (const state of [
+    { decisionPlan: plan },
+    { decisionPlanProjection: projectCompactDecisionPlan(plan) },
+  ]) {
+    const report = buildTerminalReport(state);
+    assert.equal(report.json.status, "blocked");
+    assert.equal(report.json.blocker, "no-learning-pause");
+  }
+});
+
 test("parent final-claim blockers own blocked terminal status", () => {
   const plan = planFixture([
     decisionDiagnostic("finalization-claim-blocked", {

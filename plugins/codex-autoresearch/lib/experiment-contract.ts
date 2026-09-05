@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { countsTowardPacketBudget } from "./benchmark/budget-contract.js";
+import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import type { CandidateOrigin, EvaluationAuthority, RunPurpose } from "./evidence-axes.js";
 export {
   parseEvidenceAxes,
@@ -19,7 +20,7 @@ import { normalizeRelativePaths } from "./literal-paths.js";
 import { appendJsonl, readJsonl, stateFromSessionRecords } from "./session-core.js";
 import {
   AUTORESEARCH_DASHBOARD_FILE,
-  AUTORESEARCH_RESEARCH_DIR,
+  AUTORESEARCH_OWNED_DIRS,
   AUTORESEARCH_SESSION_FILES,
 } from "./session-paths.js";
 import type { UnknownRecord } from "./types/json.js";
@@ -305,11 +306,6 @@ const DEFAULT_EVALUATOR_TIMEOUT_SECONDS = 600;
 const DEFAULT_CHECK_TIMEOUT_SECONDS = 300;
 const DEFAULT_METRIC_LIMIT = 512;
 const MAX_SUPPORTED_METRIC_LIMIT = 4096;
-const SESSION_OWNED_DIRS = [
-  AUTORESEARCH_RESEARCH_DIR,
-  "target/autoresearch",
-  ".autoresearch-cache",
-];
 
 class ContractFingerprintAuthorityError extends Error {
   readonly field: "candidateFingerprint" | "repository.treePolicy";
@@ -2331,7 +2327,7 @@ function acceptedEvidenceTreePolicyPaths(paths: string[], contract: ExperimentCo
     ".git",
     ...AUTORESEARCH_SESSION_FILES,
     AUTORESEARCH_DASHBOARD_FILE,
-    ...SESSION_OWNED_DIRS,
+    ...AUTORESEARCH_OWNED_DIRS,
   ];
   for (const evidencePath of normalized) {
     if (
@@ -2357,7 +2353,7 @@ function isSessionOwnedPath(filePath: string): boolean {
   return (
     AUTORESEARCH_SESSION_FILES.includes(filePath as (typeof AUTORESEARCH_SESSION_FILES)[number]) ||
     filePath === AUTORESEARCH_DASHBOARD_FILE ||
-    SESSION_OWNED_DIRS.some(
+    AUTORESEARCH_OWNED_DIRS.some(
       (directory) => filePath === directory || filePath.startsWith(`${directory}/`),
     )
   );
@@ -2737,7 +2733,15 @@ export function completedContractNoiseRepeats(
   currentRuns: UnknownRecord[],
   input: { candidateFingerprint: string; metric: number },
 ): number {
-  const priorRepeats = currentRuns.filter((run) => {
+  return contractNoiseSamples(contract, currentRuns, input).length;
+}
+
+export function contractNoiseSamples(
+  contract: ExperimentContract,
+  currentRuns: UnknownRecord[],
+  input: { candidateFingerprint: string; metric: number },
+): number[] {
+  const priorSamples = currentRuns.flatMap((run) => {
     const evidence = recordValue(run.contractEvaluationEvidence);
     if (
       evidence.contractDigest !== contract.contractDigest ||
@@ -2745,14 +2749,36 @@ export function completedContractNoiseRepeats(
       evidence.acceptedEvaluation !== true ||
       evidence.checksPassed !== true ||
       !isExactFiniteNumber(evidence.metric)
-    ) {
-      return false;
-    }
-    return contract.noise.kind !== "bounded"
-      ? evidence.metric === input.metric
-      : Math.abs(evidence.metric - input.metric) <= contract.noise.tolerance;
-  }).length;
-  return priorRepeats + 1;
+    )
+      return [];
+    return [evidence.metric];
+  });
+  return [...priorSamples, input.metric];
+}
+
+export function contractReferenceSamples(
+  contract: ExperimentContract,
+  currentRuns: UnknownRecord[],
+  referenceMetric: number | null,
+): number[] {
+  const matchingRuns = currentRuns.filter((run) => {
+    const evidence = recordValue(run.contractEvaluationEvidence);
+    return (
+      evidence.contractDigest === contract.contractDigest &&
+      evidence.metric === referenceMetric &&
+      evidence.acceptedEvaluation === true &&
+      evidence.checksPassed === true &&
+      typeof evidence.candidateFingerprint === "string"
+    );
+  });
+  const referenceRun = matchingRuns.find(isAcceptedCurrentRun) ?? matchingRuns[0];
+  const reference = referenceRun ? recordValue(referenceRun.contractEvaluationEvidence) : null;
+  if (!reference || referenceMetric == null) return [];
+  // The helper appends an in-flight sample; the reference cohort is entirely historical.
+  return contractNoiseSamples(contract, currentRuns, {
+    candidateFingerprint: String(reference.candidateFingerprint),
+    metric: referenceMetric,
+  }).slice(0, -1);
 }
 
 export function evaluateContractKeepEligibility(
@@ -2764,6 +2790,8 @@ export function evaluateContractKeepEligibility(
     acceptedEvaluation: boolean;
     checkOutcomes: ContractCheckOutcome[];
     completedRepeats: number;
+    noiseSamples?: number[];
+    referenceSamples?: number[];
     metric: number | null;
     referenceMetric: number | null;
   },
@@ -2804,18 +2832,80 @@ export function evaluateContractKeepEligibility(
   ) {
     reasons.push("Keep requires every authoritative check to pass.");
   }
-  const metricReason =
-    input.metric != null && Number.isFinite(input.metric)
-      ? metricComparisonFailureReason(
-          contract.metric,
-          contract.noise,
-          input.metric,
-          input.referenceMetric,
+  const samples = input.noiseSamples ?? (input.metric == null ? [] : [input.metric]);
+  const validSamples =
+    samples.length > 0 && samples.every(isExactFiniteNumber) && samples.at(-1) === input.metric;
+  const bounds = samples.reduce(
+    (range, sample) => ({
+      min: Math.min(range.min, sample),
+      max: Math.max(range.max, sample),
+    }),
+    { min: Infinity, max: -Infinity },
+  );
+  const spread = validSamples ? bounds.max - bounds.min : Infinity;
+  const repeatCount = validSamples ? samples.length : 0;
+  const referenceSamples = input.referenceSamples ?? [];
+  const validReference = referenceSamples.length > 0 && referenceSamples.every(isExactFiniteNumber);
+  const referenceBounds = referenceSamples.reduce(
+    (range, sample) => ({
+      min: Math.min(range.min, sample),
+      max: Math.max(range.max, sample),
+    }),
+    { min: Infinity, max: -Infinity },
+  );
+  const referenceSpread = validReference ? referenceBounds.max - referenceBounds.min : Infinity;
+  if (contract.noise.kind !== "deterministic" && contract.metric.kind !== "threshold") {
+    const requiredReferenceRepeats =
+      contract.noise.kind === "bounded"
+        ? contract.noise.repeats
+        : contract.noise.qualificationRepeats;
+    if (!validReference || referenceSamples.length < requiredReferenceRepeats) {
+      reasons.push(
+        `Baseline uncertainty is unknown. Record ${requiredReferenceRepeats} accepted reference measurements before keeping a noisy candidate.`,
+      );
+    }
+    if (
+      !Number.isFinite(referenceSpread) ||
+      (contract.noise.kind === "bounded" && referenceSpread > contract.noise.tolerance)
+    ) {
+      reasons.push("Reference sample spread exceeds or cannot establish the accepted noise bound.");
+    }
+  }
+  const observedSpread = Math.max(spread, validReference ? referenceSpread : 0);
+  const comparisonReference =
+    contract.noise.kind !== "deterministic" && validReference
+      ? contract.metric.kind === "maximize"
+        ? referenceBounds.max
+        : referenceBounds.min
+      : input.referenceMetric;
+  const noiseBound =
+    contract.noise.kind === "bounded"
+      ? contract.noise.tolerance
+      : contract.noise.kind === "deterministic"
+        ? 0
+        : spread;
+  if (!validSamples) reasons.push("Keep requires a finite complete candidate sample cohort.");
+  if (!Number.isFinite(spread) || spread > noiseBound)
+    reasons.push("Candidate sample spread exceeds the accepted noise bound.");
+  const comparisonNoise: NoiseModel =
+    contract.noise.kind === "unknown"
+      ? { kind: "bounded", tolerance: observedSpread, repeats: contract.noise.qualificationRepeats }
+      : contract.noise;
+  const metricReason = validSamples
+    ? (samples
+        .map((sample) =>
+          metricComparisonFailureReason(
+            contract.metric,
+            comparisonNoise,
+            sample,
+            comparisonReference,
+          ),
         )
-      : null;
+        .find((reason) => reason != null) ?? null)
+    : "Keep requires valid candidate measurements.";
   if (metricReason) reasons.push(metricReason);
   const qualification = noiseQualificationStatus(contract.noise, {
-    completedRepeats: input.completedRepeats,
+    completedRepeats: repeatCount,
     purpose: "candidate",
   });
   if (!qualification.keepEligible) {

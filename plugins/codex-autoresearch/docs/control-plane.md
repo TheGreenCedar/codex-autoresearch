@@ -72,7 +72,7 @@ The accepted `ExperimentContract` is the sole evaluator and checks authority. It
 
 Evidence records separate run purpose, evaluation authority, and candidate origin. A keep is authorized mechanically only for a candidate evaluated by the accepted contract, with accepted checks, metric comparison, and noise qualification satisfied. Manual observations and imported commits do not authorize a keep until evaluated under that contract.
 
-Learning defaults to `none`. Two eligible no-learning candidates or two failures in the same registered layer pause packet work unless the relevant precondition digest changes. Remaining budget never causes another packet to run, and a pause does not create fanout or a new segment.
+Learning defaults to `none`. Two eligible no-learning candidates or two failures in the same registered layer pause packet work unless the relevant precondition digest changes. Required, validated reference repeats do not count as new candidates, and required unchanged-candidate repeats count as one experiment. Surplus, failed, and malformed observations retain conservative limits. Remaining budget never causes another packet to run, and a pause does not create fanout or a new segment.
 
 ## Surface disagreement
 
@@ -83,3 +83,9 @@ Learning defaults to `none`. Two eligible no-learning candidates or two failures
 5. Rerun all affected readouts before continuing.
 
 Field details are listed in [Concepts](concepts.md#state-fields). Persistence and module ownership are documented in [Architecture](architecture.md).
+
+## Measured claims and repeat evidence
+
+Descriptions and next-action hints are explanatory text. They cannot satisfy product-grade or broad-improvement proof, and goal keywords cannot add domain-specific acceptance requirements. Ordinary review receipts describe the accepted measured result; a broader product claim remains unverified.
+
+Non-deterministic keep qualification uses the complete accepted candidate and reference cohorts. Both require repeated observations. Bounded noise must contain each observed range; unknown noise uses observed ranges conservatively and retains adverse samples. These ranges are sampled variability, not confidence intervals. The compatibility `confidence` number is a movement/history-MAD ratio, labeled “Movement / spread” in the dashboard.

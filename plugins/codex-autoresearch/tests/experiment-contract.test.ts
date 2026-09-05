@@ -5,6 +5,10 @@ import test from "node:test";
 
 import {
   contractCandidateFingerprintForWorkDir,
+  completedContractNoiseRepeats,
+  contractReferenceSamples,
+  evaluateContractKeepEligibility,
+  type ExperimentContract,
   contractStopStatus,
   createExecutionSpec,
   createExperimentContract,
@@ -1661,4 +1665,201 @@ test("explicit and separator evaluator sources must agree at acceptance", async 
       assert.ok(result.conflicts.some((conflict) => conflict.sources.includes("separator")));
     }
   });
+});
+
+function noiseFixture(noise: ExperimentContract["noise"]) {
+  return {
+    contractDigest: "contract",
+    noise,
+    metric: { kind: "minimize", minimumImprovement: 0 },
+    checks: [{ id: "check", execution: { executionDigest: "check-digest" } }],
+    keepPolicy: { authoritativeCheckIds: ["check"] },
+  } as unknown as ExperimentContract;
+}
+function noiseKeep(contract: ExperimentContract, samples: number[], referenceMetric = 100) {
+  return evaluateContractKeepEligibility(contract, {
+    purpose: "candidate",
+    evaluationAuthority: "accepted-contract",
+    candidateOrigin: { kind: "working-tree" },
+    acceptedEvaluation: true,
+    checkOutcomes: [{ id: "check", executionDigest: "check-digest", passed: true }],
+    completedRepeats: samples.length,
+    metric: samples.at(-1)!,
+    referenceMetric,
+    noiseSamples: samples,
+    referenceSamples: [referenceMetric, referenceMetric],
+  });
+}
+test("noise qualification includes adverse samples and accepts genuinely stable continuous repeats", () => {
+  const bounded = noiseFixture({ kind: "bounded", tolerance: 1, repeats: 2 });
+  const runs = [90, 150, 170, 200].map((metric) => ({
+    contractEvaluationEvidence: {
+      contractDigest: "contract",
+      candidateFingerprint: "candidate",
+      acceptedEvaluation: true,
+      checksPassed: true,
+      metric,
+    },
+  }));
+  assert.equal(
+    completedContractNoiseRepeats(bounded, runs, {
+      candidateFingerprint: "candidate",
+      metric: 90.1,
+    }),
+    5,
+  );
+  assert.equal(noiseKeep(bounded, [90, 150, 170, 200, 90.1]).eligible, false);
+  assert.equal(noiseKeep(bounded, [90, 90.1]).eligible, true);
+  const unknown = noiseFixture({ kind: "unknown", qualificationRepeats: 2 });
+  assert.equal(noiseKeep(unknown, [90, 90.1]).eligible, true);
+  assert.equal(noiseKeep(unknown, [90, 150, 90.1]).eligible, false);
+  assert.equal(noiseKeep(unknown, [99, 99.8]).eligible, false);
+  assert.equal(noiseKeep(unknown, [90]).eligible, false);
+});
+test("threshold keeps cannot hide failed repeats behind the last passing sample", () => {
+  const contract = noiseFixture({ kind: "bounded", tolerance: 2, repeats: 2 });
+  contract.metric = { kind: "threshold", comparator: "<=", target: 100 };
+  assert.equal(noiseKeep(contract, [101, 99]).eligible, false);
+});
+
+test("noisy keep requires a qualified full reference cohort", () => {
+  const contract = noiseFixture({ kind: "unknown", qualificationRepeats: 2 });
+  const base = {
+    purpose: "candidate" as const,
+    evaluationAuthority: "accepted-contract" as const,
+    candidateOrigin: { kind: "working-tree" as const },
+    acceptedEvaluation: true,
+    checkOutcomes: [{ id: "check", executionDigest: "check-digest", passed: true }],
+    completedRepeats: 2,
+    metric: 90.1,
+    referenceMetric: 100,
+    noiseSamples: [90, 90.1],
+  };
+  assert.equal(
+    evaluateContractKeepEligibility(contract, { ...base, referenceSamples: [] }).eligible,
+    false,
+  );
+  assert.equal(
+    evaluateContractKeepEligibility(contract, { ...base, referenceSamples: [100] }).eligible,
+    false,
+  );
+  assert.equal(
+    evaluateContractKeepEligibility(contract, { ...base, referenceSamples: [100, 100.1] }).eligible,
+    true,
+  );
+  assert.equal(
+    evaluateContractKeepEligibility(contract, { ...base, referenceSamples: [80, 100] }).eligible,
+    false,
+  );
+});
+
+test("reference cohort follows the accepted keep fingerprint and retains adverse measurements", () => {
+  const contract = noiseFixture({ kind: "unknown", qualificationRepeats: 2 });
+  const row = (metric: number, candidateFingerprint: string, status = "measure") => ({
+    status,
+    contractEvaluationEvidence: {
+      contractDigest: "contract",
+      candidateFingerprint,
+      acceptedEvaluation: true,
+      checksPassed: true,
+      metric,
+    },
+  });
+  assert.deepEqual(
+    contractReferenceSamples(
+      contract,
+      [row(100, "reference", "keep"), row(80, "reference"), row(100, "other")],
+      100,
+    ),
+    [100, 80],
+  );
+  assert.deepEqual(
+    contractReferenceSamples(contract, [row(100, "baseline"), row(100.1, "baseline")], 100),
+    [100, 100.1],
+  );
+  assert.deepEqual(contractReferenceSamples(contract, [], 100), []);
+});
+
+for (const scenario of ["notes refresh", "artifact overlap"]) {
+  test(`session document ownership protects contract tree policy: ${scenario}`, async () => {
+    await withNamedTempDir("experiment-contract", "document-ownership", async (dir) => {
+      await mkdir(path.join(dir, "src"), { recursive: true });
+      await writeFile(path.join(dir, "src", "seed.txt"), "seed\n");
+      await gitOk(dir, ["init"]);
+      await gitOk(dir, ["config", "user.email", "codex@example.test"]);
+      await gitOk(dir, ["config", "user.name", "Codex Test"]);
+      await gitOk(dir, ["add", "."]);
+      await gitOk(dir, ["commit", "-m", "initial"]);
+      const configEntry = {
+        type: "config",
+        name: "document ownership",
+        goal: "Measure performance",
+        metricName: "score",
+        bestDirection: "higher",
+      };
+      const config = {
+        benchmarkCommand: "node -e \"console.log('METRIC score=1')\"",
+        checksCommand: 'node -e "process.exit(0)"',
+        commitPaths: ["src"],
+        maxIterations: 3,
+      };
+      const initial = await deriveExperimentContract({
+        workDir: dir,
+        config,
+        entries: [configEntry],
+      });
+      assert.equal(initial.status, "derived");
+      if (initial.status !== "derived") return;
+      const accepted = {
+        type: "experiment-contract-accepted",
+        schemaVersion: 1,
+        eventId: `experiment-contract-accepted:0:${initial.contract.contractDigest}`,
+        source: "legacy-derivation",
+        segment: 0,
+        timestamp: new Date().toISOString(),
+        contract: initial.contract,
+      };
+      await mkdir(path.join(dir, ".autoresearch"), { recursive: true });
+      await writeFile(path.join(dir, ".autoresearch", "autoresearch.md"), "updated run notes\n");
+      const verification = await deriveExperimentContract({
+        workDir: dir,
+        config,
+        entries: [configEntry, accepted],
+        verifiedEvidencePaths:
+          scenario === "artifact overlap" ? [".autoresearch/autoresearch.md"] : [],
+      });
+      if (scenario === "notes refresh")
+        assert.equal(verification.status, "accepted", JSON.stringify(verification));
+      else {
+        assert.equal(verification.status, "invalid");
+        if (verification.status === "invalid")
+          assert.ok(
+            verification.conflicts.some((conflict) =>
+              /overlaps.*session-owned/.test(conflict.message),
+            ),
+          );
+      }
+    });
+  });
+}
+
+test("absolute threshold qualification uses candidate repeats without a reference", () => {
+  const contract = noiseFixture({ kind: "unknown", qualificationRepeats: 2 });
+  contract.metric = { kind: "threshold", comparator: "<=", target: 100 };
+  const input = {
+    purpose: "candidate" as const,
+    evaluationAuthority: "accepted-contract" as const,
+    candidateOrigin: { kind: "working-tree" as const },
+    acceptedEvaluation: true,
+    checkOutcomes: [{ id: "check", executionDigest: "check-digest", passed: true }],
+    completedRepeats: 2,
+    metric: 99,
+    referenceMetric: null,
+    noiseSamples: [99.1, 99],
+  };
+  assert.equal(evaluateContractKeepEligibility(contract, input).eligible, true);
+  assert.equal(
+    evaluateContractKeepEligibility(contract, { ...input, noiseSamples: [100.1, 99] }).eligible,
+    false,
+  );
 });

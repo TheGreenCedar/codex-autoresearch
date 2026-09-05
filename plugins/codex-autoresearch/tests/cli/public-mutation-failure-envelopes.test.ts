@@ -1,3 +1,4 @@
+import { resolveSessionPaths } from "../../lib/session-paths.js";
 import assert from "node:assert/strict";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -38,7 +39,7 @@ test("autoresearch CLI serializes the failed mutation protocol envelope", async 
     ]);
 
     assert.equal(result.code, 1, result.stderr);
-    await access(path.join(dir, "autoresearch.md"));
+    await access(resolveSessionPaths({ workDir: dir }).notesPath);
     const failure = parseFailureEnvelope(result.stderr, "autoresearch CLI");
     assertProtocolFailure(failure, "setup");
   });

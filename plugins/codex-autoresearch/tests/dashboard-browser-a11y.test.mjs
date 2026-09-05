@@ -590,6 +590,13 @@ async function runDashboardGeometryOperatorTask(browserExecutable) {
       ...(await dashboardModalEvidence(client, page.sessionId)),
     };
     validateDashboardGeometryEvidence(observations);
+    await pressKey(client, page.sessionId, "Escape");
+    await waitForFunction(
+      client,
+      page.sessionId,
+      "() => !document.querySelector('[role=\"dialog\"]')",
+      "The public showcase should show the chart without an overlay.",
+    );
     await captureScreenshot(client, page.sessionId, operatorDemoScreenshotPath);
     emitDashboardGeometryEvidence("pass", observations);
     console.log(`ARTIFACT dashboard_operator_demo_screenshot=${operatorDemoScreenshotPath}`);

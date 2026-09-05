@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import fs from "node:fs";
 
 export const AUTORESEARCH_LEDGER_FILE = "autoresearch.jsonl";
 export const AUTORESEARCH_CONFIG_FILE = "autoresearch.config.json";
@@ -10,6 +11,13 @@ export const AUTORESEARCH_LAST_RUN_FILE = "autoresearch.last-run.json";
 export const AUTORESEARCH_PROGRESS_FILE = "autoresearch.progress.json";
 export const AUTORESEARCH_PENDING_TRANSACTION_FILE = "autoresearch.pending-transaction.json";
 export const AUTORESEARCH_RESEARCH_DIR = "autoresearch.research";
+export const AUTORESEARCH_DOCUMENT_DIR = ".autoresearch";
+export const AUTORESEARCH_OWNED_DIRS = [
+  AUTORESEARCH_DOCUMENT_DIR,
+  AUTORESEARCH_RESEARCH_DIR,
+  "target/autoresearch",
+  ".autoresearch-cache",
+] as const;
 
 export const AUTORESEARCH_SESSION_FILES = [
   AUTORESEARCH_LEDGER_FILE,
@@ -54,7 +62,9 @@ export function resolveSessionPaths(input: ResolveSessionPathsInput = {}): Sessi
   const sessionCwd = path.resolve(input.sessionCwd || targetCwd);
   const sessionDir = targetCwd;
   const sessionFilePaths = AUTORESEARCH_SESSION_FILES.map((fileName) =>
-    path.join(sessionDir, fileName),
+    fileName === AUTORESEARCH_NOTES_FILE || fileName === AUTORESEARCH_IDEAS_FILE
+      ? documentPath(sessionDir, fileName)
+      : path.join(sessionDir, fileName),
   );
   const configPath = path.join(sessionCwd, AUTORESEARCH_CONFIG_FILE);
   const researchRoot = path.join(sessionDir, AUTORESEARCH_RESEARCH_DIR);
@@ -66,8 +76,8 @@ export function resolveSessionPaths(input: ResolveSessionPathsInput = {}): Sessi
     sessionDir,
     ledgerPath: path.join(sessionDir, AUTORESEARCH_LEDGER_FILE),
     configPath,
-    notesPath: path.join(sessionDir, AUTORESEARCH_NOTES_FILE),
-    ideasPath: path.join(sessionDir, AUTORESEARCH_IDEAS_FILE),
+    notesPath: documentPath(sessionDir, AUTORESEARCH_NOTES_FILE),
+    ideasPath: documentPath(sessionDir, AUTORESEARCH_IDEAS_FILE),
     researchRoot,
     dashboardExportPath,
     lastRunFallbackPath: path.join(sessionDir, AUTORESEARCH_LAST_RUN_FILE),
@@ -76,6 +86,17 @@ export function resolveSessionPaths(input: ResolveSessionPathsInput = {}): Sessi
     sessionFilePaths,
     clearTargets: [...sessionFilePaths, researchRoot, dashboardExportPath, configPath],
   };
+}
+
+function documentPath(root: string, name: string): string {
+  const legacy = path.join(root, name);
+  const compact = path.join(root, AUTORESEARCH_DOCUMENT_DIR, name);
+  if (fs.existsSync(legacy) && fs.existsSync(compact)) {
+    throw new Error(
+      `Conflicting session documents: ${legacy} and ${compact}. Keep one authoritative copy before continuing.`,
+    );
+  }
+  return fs.existsSync(legacy) ? legacy : compact;
 }
 
 export function researchDirPathForSession(workDir: string, slug: string): string {

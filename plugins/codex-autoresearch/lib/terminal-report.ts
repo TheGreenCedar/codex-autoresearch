@@ -114,6 +114,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
 
   const blocker = hasPlanAuthority
     ? planLoopDisposition?.kind === "blocked" ||
+      planLoopDisposition?.kind === "pause" ||
       planParentDisposition?.kind === "block-final-answer"
       ? decisionPlan
         ? decisionPlan.primaryBlockerCode || ""
@@ -171,6 +172,7 @@ export function buildTerminalReport(stateInput: unknown): TerminalReport {
   };
   const status: TerminalReportSummary["status"] = hasPlanAuthority
     ? planLoopDisposition?.kind === "blocked" ||
+      planLoopDisposition?.kind === "pause" ||
       planParentDisposition?.kind === "block-final-answer"
       ? "blocked"
       : planLoopDisposition?.kind === "complete"

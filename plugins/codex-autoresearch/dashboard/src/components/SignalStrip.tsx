@@ -18,7 +18,9 @@ interface SignalItem {
 }
 
 export function SignalStrip({ view, viewModel }: SignalStripProps) {
-  const signals = buildSignals(viewModel);
+  const signals = buildSignals(viewModel).filter(
+    (signal) => view === "audit" || signal.id === "evidence" || signal.id === "finalize",
+  );
   const trustItems = buildTrustItems(viewModel);
   return (
     <section

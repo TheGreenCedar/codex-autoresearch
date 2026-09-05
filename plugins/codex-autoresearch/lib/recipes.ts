@@ -56,9 +56,8 @@ const BUILT_IN_RECIPES: Recipe[] = [
     direction: "lower",
     benchmarkCommand:
       "node -e \"const {spawnSync}=require('node:child_process'); const c=process.platform==='win32'?'npm.cmd':'npm'; const r=spawnSync(c,['test'],{stdio:'inherit'}); process.exit(r.status ?? 1)\"",
-    checksCommand:
-      "node -e \"const {spawnSync}=require('node:child_process'); const c=process.platform==='win32'?'npm.cmd':'npm'; const r=spawnSync(c,['test'],{stdio:'inherit'}); process.exit(r.status ?? 1)\"",
-    scope: ["package.json", "tests"],
+    checksCommand: "",
+    scope: ["src"],
     caveats: ["Requires an npm test script."],
     tags: ["runtime", "node", "test"],
   },
@@ -69,8 +68,8 @@ const BUILT_IN_RECIPES: Recipe[] = [
     metricUnit: "s",
     direction: "lower",
     benchmarkCommand: "npx vitest run",
-    checksCommand: "npx vitest run",
-    scope: ["package.json", "src", "tests"],
+    checksCommand: "",
+    scope: ["src"],
     caveats: ["Requires Vitest to be available through npx or project dependencies."],
     tags: ["runtime", "frontend", "test"],
   },
@@ -81,8 +80,8 @@ const BUILT_IN_RECIPES: Recipe[] = [
     metricUnit: "s",
     direction: "lower",
     benchmarkCommand: "cargo test",
-    checksCommand: "cargo test",
-    scope: ["Cargo.toml", "src", "tests"],
+    checksCommand: "",
+    scope: ["src"],
     caveats: ["Requires Rust and Cargo."],
     tags: ["runtime", "rust", "test"],
   },
@@ -93,8 +92,8 @@ const BUILT_IN_RECIPES: Recipe[] = [
     metricUnit: "s",
     direction: "lower",
     benchmarkCommand: "go test ./...",
-    checksCommand: "go test ./...",
-    scope: ["go.mod", "go.sum", "pkg", "internal"],
+    checksCommand: "",
+    scope: ["pkg", "internal"],
     caveats: ["Requires Go and a module-aware test suite."],
     tags: ["runtime", "go", "test"],
   },
@@ -105,8 +104,8 @@ const BUILT_IN_RECIPES: Recipe[] = [
     metricUnit: "s",
     direction: "lower",
     benchmarkCommand: "python -m pytest",
-    checksCommand: "python -m pytest",
-    scope: ["pyproject.toml", "pytest.ini", "tests"],
+    checksCommand: "",
+    scope: ["src"],
     caveats: ["Requires pytest in the active Python environment."],
     tags: ["runtime", "python", "test"],
   },
@@ -117,8 +116,8 @@ const BUILT_IN_RECIPES: Recipe[] = [
     metricUnit: "s",
     direction: "lower",
     benchmarkCommand: "dotnet test --nologo",
-    checksCommand: "dotnet test --nologo",
-    scope: ["src", "tests"],
+    checksCommand: "",
+    scope: ["src"],
     caveats: ["Requires the .NET SDK and test projects discoverable from the working directory."],
     tags: ["runtime", "dotnet", "test"],
   },
@@ -142,12 +141,13 @@ const BUILT_IN_RECIPES: Recipe[] = [
     metricName: "bytes",
     metricUnit: "bytes",
     direction: "lower",
-    benchmarkCommand:
-      "node -e \"const fs=require('node:fs'); const p=process.env.AUTORESEARCH_BUNDLE_PATH||'dist'; let total=0; function walk(x){ if(!fs.existsSync(x)) return; const s=fs.statSync(x); if(s.isDirectory()) for(const f of fs.readdirSync(x)) walk(require('node:path').join(x,f)); else total+=s.size; } walk(p); console.log('METRIC bytes='+total);\"",
+    benchmarkCommand: bundleSizeCommand(),
     benchmarkPrintsMetric: true,
-    checksCommand: "npm run build",
-    scope: ["package.json", "src", "dist"],
-    caveats: ["Set AUTORESEARCH_BUNDLE_PATH when the bundle output is not dist."],
+    checksCommand: "",
+    scope: ["src"],
+    caveats: [
+      "Builds before measuring; missing, empty, or linked output fails. Supply independent behavior checks before accepting the contract. Set AUTORESEARCH_BUNDLE_PATH when output is not dist.",
+    ],
     tags: ["frontend", "build", "size"],
   },
   {
@@ -157,8 +157,8 @@ const BUILT_IN_RECIPES: Recipe[] = [
     metricUnit: "s",
     direction: "lower",
     benchmarkCommand: "npx tsc --noEmit",
-    checksCommand: "npx tsc --noEmit",
-    scope: ["tsconfig.json", "src"],
+    checksCommand: "",
+    scope: ["src"],
     caveats: ["Requires TypeScript in the project or through npx."],
     tags: ["build", "typescript"],
   },
@@ -182,7 +182,7 @@ const BUILT_IN_RECIPES: Recipe[] = [
     metricUnit: "MB",
     direction: "lower",
     benchmarkCommand:
-      "node -e \"console.log('METRIC rss_mb='+Math.round(process.memoryUsage().rss/1024/1024))\"",
+      "node -e \"console.error('Replace with the workload process and print METRIC rss_mb=<number>'); process.exit(1)\"",
     benchmarkPrintsMetric: true,
     checksCommand: "",
     scope: ["src", "scripts"],
@@ -212,11 +212,23 @@ const BUILT_IN_RECIPES: Recipe[] = [
       "node -e \"console.error('Replace with a command that prints METRIC seconds=<number>'); process.exit(1)\"",
     benchmarkPrintsMetric: true,
     checksCommand: "",
-    scope: ["src", "tests"],
+    scope: ["src"],
     caveats: ["Use this when no built-in recipe fits."],
     tags: ["custom", "safety"],
   },
 ];
+
+function bundleSizeCommand(): string {
+  const source = [
+    "const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');",
+    "const build=spawnSync(process.platform==='win32'?'npm.cmd':'npm',['run','build'],{stdio:'inherit',shell:process.platform==='win32'});",
+    "if(build.error||build.status!==0) process.exit(build.status||1);",
+    "const root=path.resolve(process.env.AUTORESEARCH_BUNDLE_PATH||'dist'); let total=0,files=0;",
+    "function walk(p){const s=fs.lstatSync(p); if(s.isSymbolicLink()) throw Error('Bundle output must not contain links'); if(s.isDirectory()){for(const f of fs.readdirSync(p)) walk(path.join(p,f));} else if(s.isFile()){total+=s.size;files++;} else throw Error('Bundle output must contain regular files');}",
+    "try{walk(root);if(!files||total===0) throw Error('Bundle output is empty');console.log('METRIC bytes='+total);}catch(error){console.error(error.message);process.exit(1);}",
+  ].join(" ");
+  return `node ${quoteCommandArg("-e")} ${quoteCommandArg(source)}`;
+}
 
 function quoteCommandArg(value: unknown): string {
   return `"${String(value).replace(/[\\"]/g, "\\$&")}"`;
@@ -247,7 +259,14 @@ export function recipeDefaultsFromRecipe(recipe: Recipe) {
     benchmarkPrintsMetric: Boolean(recipe.benchmarkPrintsMetric),
     checksCommand: recipe.checksCommand,
     filesInScope: recipe.scope,
-    constraints: recipe.caveats,
+    constraints: [
+      ...recipe.caveats,
+      ...(!recipe.checksCommand
+        ? [
+            "Supply independent correctness checks and protect their workload definitions before accepting this recipe.",
+          ]
+        : []),
+    ],
     recipeCatalogProvenance: recipe.provenance,
   };
 }

@@ -15,16 +15,14 @@ import {
   deriveExperimentContract,
 } from "./experiment-contract.js";
 import { currentState, listOption, pathExists, readConfig, readJsonl } from "./session-core.js";
-import { AUTORESEARCH_DASHBOARD_FILE, AUTORESEARCH_SESSION_FILES } from "./session-paths.js";
+import {
+  AUTORESEARCH_DASHBOARD_FILE,
+  AUTORESEARCH_OWNED_DIRS,
+  AUTORESEARCH_SESSION_FILES,
+} from "./session-paths.js";
 import type { UnknownRecord } from "./types/json.js";
 
 type CommandRecord = UnknownRecord;
-
-const AUTORESEARCH_OWNED_DIRS = [
-  "autoresearch.research",
-  "target/autoresearch",
-  ".autoresearch-cache",
-];
 
 export async function operatorWarningsForWorkDir(
   workDir: string,

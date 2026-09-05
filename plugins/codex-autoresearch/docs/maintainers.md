@@ -83,11 +83,13 @@ Session read-model budgets are reviewed product contracts. The 100-run fixture c
 
 For docs-only work, read the rendered Markdown and check the command text, then run `git diff --check` and the package gate. The package gate checks required files and local Markdown links; it does not judge whether the prose is any good.
 
-## Product evidence gate
+## Operator integration gate
 
 `npm run check` executes seven portable operator tasks through `scripts/operator-task-benchmark.mjs`: decision consistency across public readouts, invalid CLI rejection, installed-cache discovery, hostile-path finalization safety, the zero-run qualitative session journey, bounded default and mutation output, and long-history retention. Each task emits one machine-readable `EVIDENCE` record, followed by one reconciled `EVIDENCE_SUMMARY`. The independent `METRIC operator_task_failures=<count>` ceiling is zero; `--fail-on-failure` makes any failed case fail the product phase.
 
 Dashboard geometry is the separate browser operator task. It requires a real browser, so the required Chrome dashboard gate emits its own `EVIDENCE` and `EVIDENCE_SUMMARY` records instead of hiding a browser dependency inside the portable package check. Focused contract-integrity tests separately protect version and manifest agreement, package contents, documentation links, release wiring, and session-artifact invariants. Tests also feed each portable validator intentionally faulty raw observations and require the case-specific failure code, proving that representative defects are rejected rather than converted into a qualitative score.
+
+These scripted integration tasks do not compare optimization quality, cost, or intervention rates against plain Codex. Report that advantage only from a separate paired task evaluation with equal budgets and independently checked outcomes.
 
 This evidence is not proof of perfection, broad UX quality, manual screen-reader behavior, physical-device behavior, undiscovered defects, or every possible session. Ordinary qualitative research still uses `quality_gap`; `quality_gap=0` remains valid only for the accepted checklist in the current research round. The product gate uses `operator_task_failures` for its explicitly bounded cases.
 
@@ -111,7 +113,7 @@ Automation does not prove spoken output, physical-device behavior, or accessibil
 
 `dist/` and `assets/dashboard-build/` are generated and ignored in source. Release artifacts must include them.
 
-`npm run check` builds the runtime and dashboard, checks the generated assets, packs the plugin, extracts it, and smokes both the launcher and dashboard export. `prepack` is the single publish-time build path.
+`npm run check` runs compiled test suites sequentially with a separate bounded deadline for each suite; streamed failures include timeout causes. It builds the runtime and dashboard, checks the generated assets, packs the plugin, extracts it, and smokes both the launcher and dashboard export. `prepack` is the single publish-time build path.
 
 If a Git marketplace checkout lacks `dist/`, `scripts/bootstrap-runtime.mjs` downloads the matching GitHub release tarball and adjacent `codex-autoresearch-<version>.tgz.sha256`. Hydration requires `gh` and network access, verifies the checksum and release attestation for this repository's release workflow, validates every archive entry before extraction, checks package name/version, and only then hydrates the plugin cache. Hydration stages and verifies both the runtime and dashboard beside their targets, retains ownership-marked rollback directories until both installs succeed, and restores the prior pair if either install fails. There is no unverified fallback.
 
@@ -126,9 +128,13 @@ A release tarball must:
 
 ## Release flow
 
+CI has a 15-minute job limit. Linux runs the complete product, package, and browser gates. macOS and Windows run `npm run test:platform`: native shell and process behavior, session paths, runtime hydration, and scoped Git keep/discard, index-lock, and hook boundaries. The exhaustive platform-independent cases run on Linux.
+
+CI runs for pull requests into `dev` and pushes to `main`. Promotion does not start duplicate `dev` push and `main` pull-request runs. Release requires successful CI for the exact `main` commit, then independently builds, inspects, smokes, and attests the package; it does not repeat the source test matrix. Missing, failed, cancelled, or unrelated CI blocks publication.
+
 Do not push release tags by hand.
 
-After a synchronized version bump lands on `main`, the `Auto Release` workflow accepts only a strictly increasing stable SemVer and calls the reusable `Release` workflow. That workflow runs checks, builds through `prepack`, packs and extracts the artifact, refuses an existing tag, then creates the GitHub release and tag with the tarball and checksum.
+After a synchronized version bump lands on `main`, the `Auto Release` workflow accepts only a strictly increasing stable SemVer and calls the reusable `Release` workflow. That workflow verifies successful CI for its exact commit, builds through `prepack`, packs and extracts the artifact, refuses an existing tag, then creates the GitHub release and tag with the tarball and checksum.
 
 Use manual `Release` dispatch only as a recovery path with the package version. A manual prerelease is published with GitHub's prerelease flag and does not move `latest`. Manual downgrades are rejected too.
 

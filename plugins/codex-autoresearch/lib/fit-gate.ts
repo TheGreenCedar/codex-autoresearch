@@ -60,6 +60,13 @@ export interface LoopAction {
 export interface AskAction {
   kind: "clarify-fit";
   question: string;
+  discovery?: {
+    mode: "read-only";
+    fields: ContractField[];
+    maxFiles: number;
+    maxBytes: number;
+    accepted: false;
+  };
 }
 
 export type FitDecision =
@@ -73,7 +80,7 @@ export type FitDecision =
   | {
       disposition: "run-loop";
       mode: "full-loop";
-      sessionRelation: "matching" | "replacement-requested";
+      sessionRelation: "none" | "matching" | "replacement-requested";
       contract: ExperimentContractCandidate;
       nextAction: LoopAction;
     }
@@ -268,7 +275,9 @@ export function classifyFit({ prompt, session }: FitInput): FitDecision {
     return clarificationDecision("unrelated", missing, session.compatibilityConflicts);
   }
 
-  return clarificationDecision("none", missing, []);
+  return missing.length
+    ? clarificationDecision("none", missing, [])
+    : loopDecision("none", completeContract(request));
 }
 
 function directDecision(sessionRelation: "none" | "matching" | "unrelated"): FitDecision {
@@ -293,7 +302,7 @@ function directDecision(sessionRelation: "none" | "matching" | "unrelated"): Fit
 }
 
 function loopDecision(
-  sessionRelation: "matching" | "replacement-requested",
+  sessionRelation: "none" | "matching" | "replacement-requested",
   contract: ExperimentContractCandidate,
 ): FitDecision {
   return {
@@ -331,9 +340,23 @@ function clarificationDecision(
     conflicts,
     nextAction: {
       kind: "clarify-fit",
-      question: conflicts.length
-        ? "Continue the active session or explicitly replace it?"
-        : "Please provide the missing measured-loop contract fields.",
+      question:
+        conflicts.length || !missing.length
+          ? "Name the session to continue, or explicitly request a replacement contract."
+          : `Confirm the missing contract fields: ${missing.join(", ")}.`,
+      ...(sessionRelation === "none" || sessionRelation === "replacement-requested"
+        ? {
+            discovery: {
+              mode: "read-only" as const,
+              fields: missing.filter((field) =>
+                ["benchmark_command", "checks_command", "scope"].includes(field),
+              ),
+              maxFiles: 5,
+              maxBytes: 64 * 1024,
+              accepted: false as const,
+            },
+          }
+        : {}),
     },
   };
 }
@@ -395,6 +418,19 @@ function hasReplacementIntent(prompt: string, session: LegacySessionMetadata | n
 }
 
 function hasExplicitRepeatedMeasuredLoop(prompt: string): boolean {
+  const instructionText = prompt
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:Benchmark|Metric|Checks|Scope):/i.test(line))
+    .join("\n");
+  if (
+    /^\s*(?:explain|describe|review|critique|audit|summari[sz]e|how\b|why\b)/i.test(
+      instructionText,
+    ) ||
+    /\b(?:do not|don't|never)\s+(?:run|start|execute|perform|continue)\b/i.test(instructionText) ||
+    /\bread[ -]only\b/i.test(instructionText)
+  ) {
+    return false;
+  }
   const loopRequest =
     /\b(?:run(?:ning)?|continue|start|perform|execute|repeat(?:ed)?)\b[^.\n]{0,96}\b(?:loop|iterations?)\b/i.test(
       prompt,
@@ -403,7 +439,14 @@ function hasExplicitRepeatedMeasuredLoop(prompt: string): boolean {
     /\b(?:measured|measure|benchmark|metric|optimi[sz](?:e|ation)?|improv(?:e|ement))\b/i.test(
       prompt,
     );
-  return loopRequest && measured;
+  const boundedPluginRequest =
+    /^\s*(?:\/goal\s+)?@Codex Autoresearch\b/i.test(prompt) &&
+    /^Benchmark:\s*\S+/im.test(prompt) &&
+    /^Metric:\s*\S+/im.test(prompt) &&
+    /^Checks:\s*\S+/im.test(prompt) &&
+    /^Scope:\s*\S+/im.test(prompt) &&
+    /\bstop after\s+\d+\s+(?:attempts?|iterations?|runs?|packets?)\b/i.test(prompt);
+  return (loopRequest && measured) || boundedPluginRequest;
 }
 
 interface PromptContract {
@@ -566,7 +609,7 @@ function executableCommandText(
 
 function iterationCount(prompt: string): number | null {
   const match = prompt.match(
-    /\b(\d{1,4})\b(?=[^.\n]{0,64}\b(?:times|iterations?|runs?|packets?)\b)/i,
+    /\b(\d{1,4})\b(?=[^.\n]{0,64}\b(?:times|attempts?|iterations?|runs?|packets?)\b)/i,
   );
   return positiveInteger(match?.[1]);
 }

@@ -277,7 +277,8 @@ export function computeConfidence(runs: RunRecord[], direction: Direction | stri
   const med = median(values);
   const mad = median(values.map((value) => Math.abs(value - med)));
   if (mad === 0) return null;
-  return Math.abs(best - baseline) / mad;
+  const ratio = Math.abs(best - baseline) / mad;
+  return Number.isFinite(ratio) ? ratio : null;
 }
 
 export function currentState(workDir: string): SessionState {
@@ -375,6 +376,7 @@ export function stateFromSessionRecords(workDir: string, entries: LooseObject[])
     best,
     historicalBest: bestRunSummary(historicalBest),
     confidence,
+    confidenceStatistic: { kind: "movement-history-mad-ratio", isStatisticalConfidence: false },
     development: evidenceTrack(current, config.bestDirection),
     promotion: evidenceTrack(promotionRuns, config.bestDirection),
     evidenceRegistry,

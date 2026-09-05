@@ -28,3 +28,5 @@ tmp/
 /autoresearch.checks.sh
 /autoresearch.checks.ps1
 /autoresearch-dashboard.html
+
+/.autoresearch/

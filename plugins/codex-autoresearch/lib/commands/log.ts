@@ -26,7 +26,8 @@ import { benchmarkContractSnapshot } from "../benchmark/contract-snapshot.js";
 import { evaluateSecondaryMetricConstraints } from "../benchmark/multi-metric-constraints.js";
 import {
   acceptedExperimentContractForEvidenceValidation,
-  completedContractNoiseRepeats,
+  contractNoiseSamples,
+  contractReferenceSamples,
   contractCandidateFingerprintForWorkDir,
   contractDerivationError,
   deriveExperimentContract,
@@ -91,7 +92,7 @@ import {
 } from "../pending-log-transaction-store.js";
 import {
   AUTORESEARCH_DASHBOARD_FILE,
-  AUTORESEARCH_RESEARCH_DIR,
+  AUTORESEARCH_OWNED_DIRS,
   AUTORESEARCH_SESSION_FILES,
   resolveSessionPaths,
 } from "../session-paths.js";
@@ -104,11 +105,7 @@ import {
 
 const PENDING_LOG_TRANSACTION_CODE = "pending_log_transaction";
 const AUTORESEARCH_OWNED_FILES = [AUTORESEARCH_DASHBOARD_FILE];
-const AUTORESEARCH_OWNED_DIRS = [
-  AUTORESEARCH_RESEARCH_DIR,
-  "target/autoresearch",
-  ".autoresearch-cache",
-];
+
 const PLUGIN_ROOT = resolvePackageRoot(import.meta.url);
 
 export type LogTransactionStage =
@@ -318,10 +315,10 @@ export async function logExperiment(
         accepted.scope.editable,
       );
     }
-    const completedRepeats =
+    const noiseSamples =
       evaluatedMetric == null
-        ? 0
-        : completedContractNoiseRepeats(accepted, stateBefore.current, {
+        ? []
+        : contractNoiseSamples(accepted, stateBefore.current, {
             candidateFingerprint,
             metric: evaluatedMetric,
           });
@@ -331,7 +328,13 @@ export async function logExperiment(
       candidateOrigin,
       acceptedEvaluation,
       checkOutcomes,
-      completedRepeats,
+      completedRepeats: noiseSamples.length,
+      noiseSamples,
+      referenceSamples: contractReferenceSamples(
+        accepted,
+        stateBefore.current,
+        finiteMetric(stateBefore.best ?? stateBefore.baseline),
+      ),
       metric: evaluatedMetric,
       referenceMetric: finiteMetric(stateBefore.best ?? stateBefore.baseline),
     });
@@ -777,7 +780,7 @@ export async function appendSessionRunNote(
   state: UnknownRecord,
   messages: UnknownRecord = {},
 ): Promise<void> {
-  const filePath = path.join(workDir, "autoresearch.md");
+  const filePath = resolveSessionPaths({ workDir }).notesPath;
   if (!(await pathExists(filePath))) return;
   const startMarker = "<!-- AUTORESEARCH_RUN_LEDGER:START -->";
   const endMarker = "<!-- AUTORESEARCH_RUN_LEDGER:END -->";
