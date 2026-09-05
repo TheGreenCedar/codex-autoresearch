@@ -1,3 +1,4 @@
+import { buildOutcomeEvidenceRegistry } from "./evidence-registry.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { renderShellCommand } from "./command-rendering.js";
@@ -1557,6 +1558,14 @@ function compileOutcomeInvestigation(snapshot: CoherentSessionSnapshot): {
       ?.question ??
     [...state.investigations].reverse().find((item) => item.resolution === "active")?.question ??
     null;
+  const coverage = buildOutcomeEvidenceRegistry({
+    state,
+    input: snapshot.outcomeFacts?.input ?? null,
+    manifest: snapshot.outcomeFacts?.manifest,
+  });
+  const unresolvedCriteria = coverage.criteria
+    .filter((criterion) => criterion.status !== "satisfied")
+    .map((criterion) => criterion.id);
   const projection: OutcomeDecisionProjection = {
     id: state.contract.id,
     objective: state.contract.objective,
@@ -1564,8 +1573,11 @@ function compileOutcomeInvestigation(snapshot: CoherentSessionSnapshot): {
     question,
     executionId: outstanding?.id ?? null,
     remaining,
-    unresolvedCriteria: state.contract.criteria.map((criterion) => criterion.id),
-    delivery: { endpoint: state.contract.authorization.delivery, status: "pending" },
+    unresolvedCriteria,
+    delivery: {
+      endpoint: state.contract.authorization.delivery,
+      status: !drift && !unresolvedCriteria.length ? "ready" : "pending",
+    },
     inputDigest: snapshot.outcomeFacts?.input?.digest ?? null,
   };
   const messages: Partial<Record<DecisionDiagnosticCode, string>> = {

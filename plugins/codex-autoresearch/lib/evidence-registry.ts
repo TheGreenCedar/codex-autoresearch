@@ -256,3 +256,13 @@ function artifactExists(artifactPath: string, workDir: string) {
   const resolved = resolvePathInsideRootSync(workDir || process.cwd(), artifactPath);
   return resolved.inside && fs.existsSync(resolved.absolutePath);
 }
+
+export {
+  buildOutcomeEvidenceRegistry,
+  outcomeEvidenceDependencies,
+  currentOutcomeEvaluator,
+  readOutcomeDependencyManifest,
+  type OutcomeEvidenceRegistry,
+  type OutcomeDependencyManifest,
+  type CriterionDependencyIdentity,
+} from "./outcome-evidence.js";

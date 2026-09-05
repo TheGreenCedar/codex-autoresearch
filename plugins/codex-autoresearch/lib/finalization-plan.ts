@@ -1,3 +1,4 @@
+import { explicitProductRequirements } from "./product-claim-coverage.js";
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import {
@@ -150,6 +151,7 @@ export function buildFinalizationEvidenceState(
     evidence: evidenceTextFromRun(entry),
   }));
   const productClaimCoverage = buildProductClaimCoverage({
+    requirements: explicitProductRequirements(ledgerEntries),
     goal,
     acceptedEvidence: claimInputs.flatMap((input) => input.evidence),
   });

@@ -8,6 +8,8 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## Unreleased - 3.0 candidate
 
+- Track criterion-specific evidence applicability and preserve selected owned changes as immutable patches. Cached results do not add measurements; rejected candidates do not become accepted through artifact retention. Legacy drift reconciliation preserves both snapshots, and product proof requirements use explicit identities instead of goal wording.
+
 - Add the outcome command family, bounded action tickets, exact resume identities, and predicate observations without metrics. Linked investigations retain cumulative costs and immutable evaluator versions; ordinary benchmark sessions remain usable.
 
 - Separate valid observations, metric movement, target attainment, and code acceptance. Legacy learning prose no longer controls continuation; repeated failures honor the accepted limit and exact defect identity.

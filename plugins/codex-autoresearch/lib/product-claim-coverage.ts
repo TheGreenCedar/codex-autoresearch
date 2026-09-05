@@ -1,5 +1,3 @@
-import { isAcceptedCurrentRun } from "./evidence-registry.js";
-
 type LooseObject = Record<string, unknown>;
 
 export type ProductClaimMaturity = "experimental" | "development" | "product_grade";
@@ -23,20 +21,45 @@ export interface ProductClaimCoverage {
 export interface ProductClaimCoverageInput {
   goal?: string | null;
   acceptedEvidence?: string[];
+  requirements?: ProductProofRequirement[];
 }
 
-// Goal wording can request a claim, but cannot supply evidence or invent domain gates.
-const GENERIC_PRODUCT_CLAIM_PATTERN =
-  /\b(shippable|product[- ]grade|broad superiority|general superiority)\b/i;
+// Legacy prose remains history; only identified, explicit requirements can add gates.
+export function explicitProductRequirements(entries: LooseObject[]): ProductProofRequirement[] {
+  const value = [...entries]
+    .reverse()
+    .find(
+      (entry) => entry.type === "config" && Object.hasOwn(entry, "productProofRequirements"),
+    )?.productProofRequirements;
+  if (value === undefined) return [];
+  if (!Array.isArray(value))
+    throw new Error("Explicit product proof requirements must be an array.");
+  return value.map((item: unknown) => {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      !("id" in item) ||
+      typeof item.id !== "string" ||
+      !item.id.trim() ||
+      !("label" in item) ||
+      typeof item.label !== "string" ||
+      !item.label.trim() ||
+      !("requiredForProductGrade" in item) ||
+      typeof item.requiredForProductGrade !== "boolean"
+    )
+      throw new Error("Malformed explicit product proof requirement.");
+    return {
+      id: item.id,
+      label: item.label,
+      requiredForProductGrade: item.requiredForProductGrade,
+    };
+  });
+}
 
 export function buildFinalizationProductClaimCoverageFromLedger(
   entries: LooseObject[],
 ): ProductClaimCoverage {
-  const goal = latestSessionGoalFromLedger(entries);
-  const acceptedEvidence = entries
-    .filter(isAcceptedCurrentRun)
-    .flatMap((run) => evidenceTextFromRun(run));
-  return buildProductClaimCoverage({ goal, acceptedEvidence });
+  return buildProductClaimCoverage({ requirements: explicitProductRequirements(entries) });
 }
 
 export function productClaimCoverageFingerprintMaterial(
@@ -73,27 +96,19 @@ export function productClaimCoverageFingerprintMaterial(
 export function buildProductClaimCoverage(
   input: ProductClaimCoverageInput = {},
 ): ProductClaimCoverage {
-  const goal = String(input.goal || "");
-  const claimDetected = GENERIC_PRODUCT_CLAIM_PATTERN.test(goal);
-  const requirements: ProductProofRequirement[] = claimDetected
-    ? [
-        {
-          id: "independent_product_review",
-          label: "Independent review of the product claim",
-          requiredForProductGrade: true,
-        },
-      ]
-    : [];
+  const requirements = input.requirements ?? [];
+  const required = requirements.filter((item) => item.requiredForProductGrade);
+  const claimDetected = requirements.length > 0;
   // Accepted benchmark keeps authorize measured review work. They do not establish
   // product-wide correctness, representativeness, or release readiness.
   return {
     claimDetected,
     maturity: "experimental",
-    productGradeReady: !claimDetected,
+    productGradeReady: required.length === 0,
     requirements,
     coveredProof: [],
-    missingRequiredProof: requirements,
-    blockers: requirements.map(
+    missingRequiredProof: required,
+    blockers: required.map(
       (proof) =>
         `Product-grade evidence is missing: ${proof.label}. Finalize only the measured result and report the broader claim as unverified.`,
     ),
@@ -121,16 +136,6 @@ export function evidenceTextFromRun(run: LooseObject | null | undefined): string
     .flatMap((value) => (Array.isArray(value) ? value : [value]))
     .map((value) => String(value || "").trim())
     .filter(Boolean);
-}
-
-function latestSessionGoalFromLedger(entries: LooseObject[]): string {
-  let goal = "";
-  for (const entry of entries) {
-    if (entry?.type === "config" && Object.hasOwn(entry, "goal")) {
-      goal = String(entry.goal || "").trim();
-    }
-  }
-  return goal;
 }
 
 function recordValue(value: unknown): LooseObject {

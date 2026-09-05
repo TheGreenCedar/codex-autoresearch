@@ -80,6 +80,7 @@ export async function withOutcomeMutation<T>(
   cwd: string,
   operation: (state: OutcomeState, location: PrivateStateTarget) => Promise<T>,
   additionalLegacyWorktrees: string[] = [],
+  reconcileLegacy = false,
 ): Promise<T> {
   const ownedLegacyLock = currentSessionMutationLockContext()?.lockPath;
   const location = await outcomeStateLocation(cwd);
@@ -92,9 +93,14 @@ export async function withOutcomeMutation<T>(
       if (!state)
         throw new Error("No outcome has been accepted. Start an outcome with an explicit budget.");
       return await withLegacyLocks(
-        [...new Set([...state.contract.authorization.worktrees, ...additionalLegacyWorktrees])],
+        [
+          ...new Set([
+            ...state.history.flatMap((entry) => entry.contract.authorization.worktrees),
+            ...additionalLegacyWorktrees,
+          ]),
+        ],
         async () => {
-          await assertLegacyUnchanged(state);
+          if (!reconcileLegacy) await assertLegacyUnchanged(state);
           for (const worktree of state.contract.authorization.worktrees)
             await assertLegacyQuiescent(worktree);
           const result = await operation(state, location);
@@ -171,8 +177,12 @@ export async function startOutcome(
             investigations: [],
             executions: [],
             evidence: [],
+            candidateBases: [],
+            retainedPatches: [],
             evaluators: [],
             legacySources: sources,
+            legacyReconciliations: [],
+            legacyApplicability: legacyApplicability(sources),
             lifecycle: { kind: "active" },
             adoption: options.adopt
               ? {
@@ -204,6 +214,7 @@ export async function amendOutcome(
 ): Promise<OutcomeState> {
   outcomeString(authorization, "amendment authorization");
   outcomeString(reason, "amendment reason");
+  const reconciliation = outcomeObject(input, "outcome amendment").reconcileLegacy === true;
   const next = await canonicalContract(input);
   return await withOutcomeMutation(
     cwd,
@@ -218,7 +229,7 @@ export async function amendOutcome(
       if (state.reservations.some((item) => item.settlement.kind !== "measured"))
         throw new Error("Reconcile outstanding execution before changing its authorization.");
 
-      await assertLegacyUnchanged(state);
+      if (!reconciliation) await assertLegacyUnchanged(state);
       for (const worktree of next.authorization.worktrees) await assertLegacyQuiescent(worktree);
       const added = next.authorization.worktrees.filter(
         (worktree) => !state.contract.authorization.worktrees.includes(worktree),
@@ -238,6 +249,33 @@ export async function amendOutcome(
               "Added worktrees contain historical work without complete consumption telemetry.",
           },
         };
+      if (reconciliation) {
+        const worktrees = [
+          ...new Set([
+            ...state.history.flatMap((entry) => entry.contract.authorization.worktrees),
+            ...next.authorization.worktrees,
+          ]),
+        ];
+        for (const worktree of worktrees) await assertLegacyQuiescent(worktree);
+        const reconciled = (await Promise.all(worktrees.map(captureLegacySources))).flat();
+        state.legacyReconciliations.push({
+          at: new Date().toISOString(),
+          authorization,
+          reason,
+          sources: reconciled,
+        });
+        state.legacyApplicability.push(...legacyApplicability(reconciled));
+      } else {
+        state.legacyApplicability.push(...legacyApplicability(sources));
+        const previousGuard = state.legacyReconciliations.at(-1);
+        if (previousGuard && sources.length)
+          state.legacyReconciliations.push({
+            at: new Date().toISOString(),
+            authorization,
+            reason,
+            sources: [...previousGuard.sources, ...sources],
+          });
+      }
       state.contract = next;
       state.history.push({ contract: next, authorization, reason, at: new Date().toISOString() });
       state.lifecycle = { kind: "active" };
@@ -245,6 +283,7 @@ export async function amendOutcome(
       return state;
     },
     next.authorization.worktrees,
+    reconciliation,
   );
 }
 
@@ -485,7 +524,7 @@ async function captureLegacyPath(root: string, file: string): Promise<LegacySour
 }
 
 export async function assertLegacyUnchanged(state: OutcomeState): Promise<void> {
-  for (const source of state.legacySources) {
+  for (const source of state.legacyReconciliations.at(-1)?.sources ?? state.legacySources) {
     const owner = state.history
       .flatMap((entry) => entry.contract.authorization.worktrees)
       .find((cwd) => source.path.startsWith(`${cwd}${path.sep}`));
@@ -525,4 +564,17 @@ async function readSafeOptional(
   }
   await assertSafeWriteTarget(safeRoot, target);
   return await fsp.readFile(target);
+}
+
+function legacyApplicability(sources: LegacySource[]): OutcomeState["legacyApplicability"] {
+  return sources
+    .filter((source) => source.digest !== "missing")
+    .map((source) => ({
+      path: source.path,
+      digest: source.digest,
+      applicability: "unknown",
+      criterionIds: [],
+      reason:
+        "Imported history has no verified dependency mapping to current outcome criteria; establish a new observation before claiming coverage.",
+    }));
 }

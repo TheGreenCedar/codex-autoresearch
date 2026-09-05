@@ -51,3 +51,15 @@ Evaluator versions are immutable children of the outcome. Each identifies its cr
 Managed work reports its ticket's elapsed wall-clock interval. This is not host or provider telemetry. Model usage and monetary cost remain unknown, and managed observations remain internal claims until separately checked.
 
 `state`, `doctor`, `recommend-next`, and `finalize-preview` project the same decision, current question, remaining allowance, unresolved criteria, and delivery endpoint. The original short benchmark path remains available without an outcome document.
+
+## Evidence and selected code
+
+Coverage is attached to an identified criterion and an actual execution receipt. It checks the assessed subject, evaluator, fixtures, environment, correctness checks, criterion version, and any referenced evidence. Changed dependencies make an old result inapplicable; its historical validity and observation remain unchanged. Reusing an execution does not add another measurement. Applicable counterexamples remain visible and prevent positive coverage for that criterion.
+
+The default dependency set is the complete worktree input inventory. Narrower reuse requires an accepted `dependencySource` with a protected relative path, SHA-256 digest, and authority reference. The pinned JSON manifest has `schemaVersion: 1` and a `criteria` object keyed by criterion ID. Each entry lists `subject`, `evaluator`, `fixtures`, and `checks` paths. The subject list must be nonempty. A changed manifest requires an authorization amendment.
+
+An edit ticket saves the original contents of its authorized paths, including preexisting dirty work. Before discarding a candidate, its observation can include `retainPatch: {"id": "regression-test", "paths": ["src/regression.test.ts"]}`. This saves an immutable patch containing only owned changes to the selected paths. It does not accept the candidate or apply the patch. Later application needs a new bounded action, scope review, and current correctness evidence. Audit output exposes the retained patch identity and digest.
+
+Imported legacy sources have explicit unknown applicability and no criterion authority. If an older client changes them, review the drift and include `"reconcileLegacy": true` in an authorized amendment document. Reconciliation retains the original bytes and a new immutable snapshot, establishes a new drift guard, and leaves imported observations unproven. Active legacy writers and unresolved reservations still block this operation.
+
+Goal and learning prose cannot create or satisfy product-wide proof requirements. Legacy sessions can preserve explicitly identified `productProofRequirements` in configuration records; governed outcomes use their accepted criteria. Benchmark keeps alone do not establish a broader product claim.

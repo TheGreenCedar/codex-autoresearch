@@ -1,3 +1,5 @@
+import { captureCandidateBase, createOwnedCandidatePatch } from "./outcome-artifacts.js";
+import { outcomeEvidenceDependencies, readOutcomeDependencyManifest } from "./evidence-registry.js";
 import { randomUUID } from "node:crypto";
 import fsp from "node:fs/promises";
 import {
@@ -135,6 +137,10 @@ async function prepareOutcomeAction(cwd: string, id: string): Promise<ExecutionR
         throw new Error("Action reservation expired during input preparation.");
       receipt.input = fingerprint;
       assertBoundedRetry(current, receipt);
+      const base = await captureCandidateBase(cwd, receipt.action, fingerprint);
+      if (base) current.candidateBases.push(base);
+      if (Date.now() - Date.parse(reservation.reservedAt) >= receipt.action.seconds * 1000)
+        throw new Error("Action reservation expired during artifact preparation.");
       receipt.status =
         receipt.action.mode === "managed"
           ? { kind: "ticket", issuedAt: new Date().toISOString() }
@@ -263,6 +269,7 @@ export async function logOutcomeObservation(
   cwd: string,
   value: unknown,
 ): Promise<InvestigationEvidence> {
+  cwd = await fsp.realpath(cwd);
   const input = outcomeObject(value, "observation record");
   const id = outcomeId(input.id, "evidence ID");
   const executionId = outcomeId(input.executionId, "execution ID");
@@ -277,6 +284,7 @@ export async function logOutcomeObservation(
     return existing;
   }
   const fingerprint = await captureOutcomeInputs(cwd, receiptBefore.action.environment);
+  const manifest = await readOutcomeDependencyManifest(priorState, cwd);
   return await withOutcomeMutation(cwd, async (state) => {
     const receipt = requiredExecution(state, executionId);
     if (!receipt.input) throw new Error("Action input provenance is missing.");
@@ -292,6 +300,41 @@ export async function logOutcomeObservation(
       true,
     );
     assertEvidenceReferences(state, evidenceRefs);
+    if (input.retainPatch != null) {
+      if (receipt.status.kind !== "ticket")
+        throw new Error("Capture selected code before completing the owning edit ticket.");
+      const request = outcomeObject(input.retainPatch, "retained patch request");
+      const patchId = outcomeId(request.id, "patch ID");
+      if (state.retainedPatches.some((patch) => patch.id === patchId))
+        throw new Error("Retained patch identity already exists.");
+      const paths = outcomeStrings(request.paths, "retained patch paths");
+      if (
+        !receipt.action.effects.includes("edit") ||
+        paths.some((file) => !pathInsideScope(file, receipt.action.paths))
+      )
+        throw new Error("Selected patch exceeds its owning edit ticket.");
+      const reservation = state.reservations.find((item) => item.id === receipt.id)!;
+      const seconds =
+        receipt.action.seconds - (Date.now() - Date.parse(reservation.reservedAt)) / 1000;
+      const patch = await createOwnedCandidatePatch(
+        cwd,
+        state,
+        fingerprint,
+        paths,
+        seconds,
+        receipt.id,
+      );
+      state.retainedPatches.push({
+        id: patchId,
+        executionId: receipt.id,
+        worktree: receipt.worktree,
+        paths: patch.paths,
+        inputDigest: fingerprint.digest,
+        digest: patch.digest,
+        createdAt: new Date().toISOString(),
+        disposition: "retained-only",
+      });
+    }
     if (receipt.status.kind === "ticket") {
       if (input.completed !== true)
         throw new Error(
@@ -370,12 +413,7 @@ export async function logOutcomeObservation(
       relation,
       result: receipt.result,
       dependencies: {
-        subject: fingerprint.digest,
-        evaluator: evaluator?.digest ?? hashOutcomeValue(null),
-        fixtures: fingerprint.digest,
-        environment: fingerprint.environment,
-        checks: hashOutcomeValue(evaluator?.checkArgv ?? []),
-        criterion: hashOutcomeValue(criterion),
+        ...outcomeEvidenceDependencies(state, fingerprint, criterionId, manifest, evaluator),
         evidence: evidenceRefs,
       },
       historicalValidity: receipt.result.validity,

@@ -1,3 +1,4 @@
+import { readOutcomeDependencyManifest } from "./evidence-registry.js";
 import { captureOutcomeInputs } from "./outcome-inputs.js";
 import { assertLegacyUnchanged } from "./outcome-store.js";
 import {
@@ -179,6 +180,7 @@ export async function collectSessionDecisionFacts(
         snapshot.outcome.contract.authorization.environments[0];
       outcomeFacts = {
         input: await captureOutcomeInputs(snapshot.workDir, environment),
+        manifest: await readOutcomeDependencyManifest(snapshot.outcome, snapshot.workDir),
         drift: null,
       };
     } catch (error) {

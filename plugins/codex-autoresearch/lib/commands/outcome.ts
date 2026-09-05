@@ -110,6 +110,8 @@ export async function maybeOutcomeReadout(args: UnknownRecord): Promise<UnknownR
       ? {
           investigations: loaded.snapshot.outcome!.investigations,
           evidence: loaded.snapshot.outcome!.evidence,
+          retainedPatches: loaded.snapshot.outcome!.retainedPatches,
+          legacyApplicability: loaded.snapshot.outcome!.legacyApplicability,
           executions: loaded.snapshot.outcome!.executions.map(
             ({ token: _token, ...receipt }) => receipt,
           ),

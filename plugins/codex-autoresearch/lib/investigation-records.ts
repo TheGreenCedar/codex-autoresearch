@@ -1,3 +1,4 @@
+import type { CriterionDependencyIdentity } from "./outcome-evidence.js";
 import {
   OUTCOME_EFFECTS,
   hashOutcomeValue,
@@ -69,6 +70,7 @@ export interface ActionSpecification {
 export interface InputFingerprint {
   digest: string;
   files: Record<string, string>;
+  links: Record<string, string>;
   environment: string;
 }
 
@@ -119,15 +121,7 @@ export interface InvestigationEvidence {
   text: string;
   relation: "supports" | "contradicts" | "inconclusive";
   result: ResultSemantics;
-  dependencies: {
-    subject: string;
-    evaluator: string;
-    fixtures: string;
-    environment: string;
-    checks: string;
-    criterion: string;
-    evidence: string[];
-  };
+  dependencies: CriterionDependencyIdentity & { evidence: string[] };
   historicalValidity: "valid" | "invalid" | "unknown";
   limitations: string[];
   provenance: "operator-observation" | "worker" | "github-actions";
@@ -300,11 +294,22 @@ export function parseInputFingerprint(value: unknown): InputFingerprint {
   const files = Object.fromEntries(
     Object.entries(entries).map(([file, digest]) => [file, outcomeDigest(digest)]),
   );
+  const links = Object.fromEntries(
+    Object.entries(outcomeObject(input.links, "input links")).map(([file, target]) => {
+      const relative = outcomeString(target, "input link target");
+      if (
+        normalizeRelativePaths([file, relative], "input link paths").length !== 2 ||
+        !Object.hasOwn(files, file)
+      )
+        throw new Error("Input link identity is outside its file inventory.");
+      return [file, relative];
+    }),
+  );
   const environment = outcomeDigest(input.environment, "environment fingerprint");
   const digest = outcomeDigest(input.digest, "input digest");
-  if (digest !== hashOutcomeValue({ files, environment }))
+  if (digest !== hashOutcomeValue({ files, links, environment }))
     throw new Error("Input fingerprint does not match its inventory.");
-  return { files, environment, digest };
+  return { files, links, environment, digest };
 }
 
 export function parseExecutionStatus(value: unknown): ExecutionStatus {
@@ -440,6 +445,7 @@ export function parseInvestigationEvidence(value: unknown): InvestigationEvidenc
     ),
     result: parseResult(input.result),
     dependencies: {
+      source: outcomeDigest(dependencies.source),
       subject: outcomeDigest(dependencies.subject),
       evaluator: outcomeDigest(dependencies.evaluator),
       fixtures: outcomeDigest(dependencies.fixtures),

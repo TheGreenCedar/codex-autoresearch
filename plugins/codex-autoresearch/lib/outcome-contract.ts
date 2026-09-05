@@ -1,3 +1,9 @@
+import {
+  parseCandidateBase,
+  parseRetainedCodePatch,
+  type CandidateBase,
+  type RetainedCodePatch,
+} from "./outcome-artifacts.js";
 import { createHash } from "node:crypto";
 import {
   parseInvestigation,
@@ -61,6 +67,7 @@ export interface OutcomeContract {
   };
   budget: OutcomeBudget;
   confirmation: ConfirmationAuthority | null;
+  dependencySource: { path: string; digest: string; authorityReference: string } | null;
   digest: string;
 }
 
@@ -97,7 +104,22 @@ export interface OutcomeState {
   executions: ExecutionReceipt[];
   evidence: InvestigationEvidence[];
   evaluators: OutcomeEvaluator[];
+  candidateBases: CandidateBase[];
+  retainedPatches: RetainedCodePatch[];
   legacySources: LegacySource[];
+  legacyReconciliations: Array<{
+    at: string;
+    authorization: string;
+    reason: string;
+    sources: LegacySource[];
+  }>;
+  legacyApplicability: Array<{
+    path: string;
+    digest: string;
+    applicability: "unknown";
+    criterionIds: string[];
+    reason: string;
+  }>;
   lifecycle: { kind: "active" } | { kind: "stopped-unmet"; at: string; reason: string };
   adoption: null | {
     priorConsumption: { kind: "unknown"; reason: string };
@@ -271,6 +293,28 @@ export function parseOutcomeContract(value: unknown): OutcomeContract {
   const worktrees = outcomeStrings(authorization.worktrees, "authorized worktrees");
   if (worktrees.some((cwd) => !path.isAbsolute(cwd)))
     throw new Error("Authorized worktree paths must be absolute.");
+  let dependencySource: OutcomeContract["dependencySource"] = null;
+  if (input.dependencySource != null) {
+    const source = outcomeObject(input.dependencySource, "dependency source");
+    const [sourcePath] = normalizeRelativePaths(
+      [outcomeString(source.path, "dependency source path")],
+      "dependency source",
+    );
+    if (
+      !protectedPaths.some(
+        (scope) => scope === "." || scope === sourcePath || sourcePath.startsWith(`${scope}/`),
+      )
+    )
+      throw new Error("Trusted dependency source must be in the accepted protected scope.");
+    dependencySource = {
+      path: sourcePath,
+      digest: outcomeDigest(source.digest),
+      authorityReference: outcomeString(
+        source.authorityReference,
+        "dependency authority reference",
+      ),
+    };
+  }
   const contract: Omit<OutcomeContract, "digest"> = {
     schemaVersion: 3,
     id: outcomeId(input.id, "outcome.id"),
@@ -293,6 +337,7 @@ export function parseOutcomeContract(value: unknown): OutcomeContract {
     },
     budget: parseOutcomeBudget(input.budget),
     confirmation: parseConfirmationAuthority(input.confirmation),
+    dependencySource,
   };
   const digest = hashOutcomeValue(contract);
   if (input.digest != null && input.digest !== digest)
@@ -414,29 +459,37 @@ export function parseOutcomeState(value: unknown): OutcomeState {
   }
   if (!Array.isArray(input.legacySources))
     throw new Error("Legacy source guard is required, including absent sources.");
-  const legacySources = input.legacySources.map((value) => {
-    const source = outcomeObject(value, "legacy source");
-    const bytesBase64 =
-      source.bytesBase64 === null
-        ? null
-        : typeof source.bytesBase64 === "string"
-          ? source.bytesBase64
-          : (() => {
-              throw new Error("Legacy bytes must be encoded text.");
-            })();
-    const digest = outcomeString(source.digest, "legacy digest");
-    if (
-      digest !==
-      (bytesBase64 === null
-        ? "missing"
-        : createHash("sha256").update(Buffer.from(bytesBase64, "base64")).digest("hex"))
-    )
-      throw new Error("Legacy import bytes do not match their digest.");
+  const legacySources = input.legacySources.map(parseLegacySource);
+  if (input.legacyReconciliations !== undefined && !Array.isArray(input.legacyReconciliations))
+    throw new Error("Legacy reconciliation history must be an array.");
+  const legacyReconciliations = (input.legacyReconciliations ?? []).map((value: unknown) => {
+    const entry = outcomeObject(value, "legacy reconciliation");
+    if (!Array.isArray(entry.sources)) throw new Error("Reconciled source snapshots are required.");
     return {
-      kind: outcomeEnum(source.kind, ["file", "directory"], "legacy source kind"),
-      path: outcomeString(source.path, "legacy path"),
-      digest,
-      bytesBase64,
+      at: outcomeTimestamp(entry.at, "reconciliation time"),
+      authorization: outcomeString(entry.authorization, "reconciliation authorization"),
+      reason: outcomeString(entry.reason, "reconciliation reason"),
+      sources: entry.sources.map(parseLegacySource),
+    };
+  });
+  if (input.legacyApplicability !== undefined && !Array.isArray(input.legacyApplicability))
+    throw new Error("Legacy applicability must be explicit mappings.");
+  const legacyApplicability = (input.legacyApplicability ?? []).map((value: unknown) => {
+    const entry = outcomeObject(value, "legacy applicability");
+    if (
+      entry.applicability !== "unknown" ||
+      !Array.isArray(entry.criterionIds) ||
+      entry.criterionIds.length
+    )
+      throw new Error(
+        "Legacy imports cannot supply new criterion authority without a new validated observation.",
+      );
+    return {
+      path: outcomeString(entry.path, "legacy path"),
+      digest: outcomeString(entry.digest, "legacy digest"),
+      applicability: "unknown" as const,
+      criterionIds: [],
+      reason: outcomeString(entry.reason, "legacy applicability reason"),
     };
   });
   const state: OutcomeState = {
@@ -468,7 +521,15 @@ export function parseOutcomeState(value: unknown): OutcomeState {
       },
       "evaluators",
     ),
+    candidateBases: parseRecords(input.candidateBases, parseCandidateBase, "candidate bases"),
+    retainedPatches: parseRecords(
+      input.retainedPatches,
+      parseRetainedCodePatch,
+      "retained patches",
+    ),
     legacySources,
+    legacyReconciliations,
+    legacyApplicability,
     lifecycle: parsedLifecycle,
     adoption,
   };
@@ -483,6 +544,20 @@ export function parseOutcomeState(value: unknown): OutcomeState {
       throw new Error("Execution does not match its durable reservation.");
     if (!state.investigations.some((item) => item.id === execution.action.investigation.id))
       throw new Error("Execution refers to an unknown investigation.");
+  }
+  for (const artifact of [...state.candidateBases, ...state.retainedPatches]) {
+    const execution = state.executions.find((entry) => entry.id === artifact.executionId);
+    if (
+      !execution ||
+      execution.worktree !== artifact.worktree ||
+      artifact.paths.some(
+        (file) =>
+          !execution.action.paths.some(
+            (scope) => scope === "." || file === scope || file.startsWith(`${scope}/`),
+          ),
+      )
+    )
+      throw new Error("Candidate artifact exceeds its owning execution scope.");
   }
   for (const evidence of state.evidence) {
     if (!state.executions.some((execution) => execution.id === evidence.executionId))
@@ -507,4 +582,30 @@ function parseRecords<T extends { id: string }>(
   if (new Set(records.map((record) => record.id)).size !== records.length)
     throw new Error(`Duplicate ${label} identities.`);
   return records;
+}
+
+function parseLegacySource(value: unknown): LegacySource {
+  const source = outcomeObject(value, "legacy source");
+  const bytesBase64 =
+    source.bytesBase64 === null
+      ? null
+      : typeof source.bytesBase64 === "string"
+        ? source.bytesBase64
+        : (() => {
+            throw new Error("Legacy bytes must be encoded text.");
+          })();
+  const digest = outcomeString(source.digest, "legacy digest");
+  if (
+    digest !==
+    (bytesBase64 === null
+      ? "missing"
+      : createHash("sha256").update(Buffer.from(bytesBase64, "base64")).digest("hex"))
+  )
+    throw new Error("Legacy import bytes do not match their digest.");
+  return {
+    kind: outcomeEnum(source.kind, ["file", "directory"], "legacy source kind"),
+    path: outcomeString(source.path, "legacy path"),
+    digest,
+    bytesBase64,
+  };
 }

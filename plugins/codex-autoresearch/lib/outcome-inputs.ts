@@ -26,6 +26,7 @@ export async function captureOutcomeInputs(
 ): Promise<InputFingerprint> {
   const root = await fsp.realpath(cwd);
   const files: Record<string, string> = {};
+  const links: Record<string, string> = {};
   let entries = 0;
   let bytes = 0;
   const collect = async (relative: string): Promise<void> => {
@@ -47,6 +48,7 @@ export async function captureOutcomeInputs(
       )
         throw new Error(`Build input link escapes the visible worktree: ${relative}`);
       files[relative] = hashOutcomeValue({ kind: "symlink", target: await fsp.readlink(absolute) });
+      links[relative] = local.split(path.sep).join("/");
       return;
     }
     if (before.isDirectory()) {
@@ -101,8 +103,9 @@ export async function captureOutcomeInputs(
   });
   return {
     files,
+    links,
     environment: environmentDigest,
-    digest: hashOutcomeValue({ files, environment: environmentDigest }),
+    digest: hashOutcomeValue({ files, links, environment: environmentDigest }),
   };
 }
 

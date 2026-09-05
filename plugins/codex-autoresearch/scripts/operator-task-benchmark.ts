@@ -182,6 +182,8 @@ const observationValidators: Record<
       governed.conclusion !== "refuted" ||
       governed.remainingActions !== 1 ||
       governed.status !== "active" ||
+      governed.criterionCovered !== false ||
+      governed.deliveryStatus !== "pending" ||
       governed.legacyLedgerExists !== false
     )
       failCase(
@@ -570,6 +572,9 @@ async function governedInvestigation(
     conclusion: nestedRecord(logged, "evidence", "result").conclusion,
     remainingActions: nestedRecord(read, "investigation", "remaining").actions,
     status: nestedRecord(read, "investigation").status,
+    criterionCovered: asRecord((read.criterionCoverage as unknown[])[0], "criterion coverage")
+      .covered,
+    deliveryStatus: nestedRecord(read, "delivery").status,
     legacyLedgerExists: await fsp.access(path.join(cwd, "autoresearch.jsonl")).then(
       () => true,
       () => false,

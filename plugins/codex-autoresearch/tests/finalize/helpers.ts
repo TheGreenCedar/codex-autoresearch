@@ -287,6 +287,15 @@ export async function writeCompleteFinalizationEvidenceFixture(
     assert.equal(commitMatches(keptPayload.experiment?.commit, targetCommit), true);
   }
   const ledger = await readExistingLedger(ledgerPath);
+  if (legacyConfig?.productProofRequirements) {
+    const configRecord = ledger.find((record) => record.type === "config");
+    assert.ok(configRecord);
+    configRecord.productProofRequirements = legacyConfig.productProofRequirements;
+    await fsp.writeFile(
+      ledgerPath,
+      ledger.map((record) => JSON.stringify(record)).join("\n") + "\n",
+    );
+  }
   const acceptance = ledger.find((record) => record?.type === "experiment-contract-accepted");
   assert.ok(acceptance);
   return { acceptance, targetCommit };
@@ -383,6 +392,13 @@ export async function createEvidencePlanFixture(root, name, options = {}) {
     [
       JSON.stringify({
         type: "config",
+        productProofRequirements: [
+          {
+            id: "independent_product_review",
+            label: "Independent review of the product claim",
+            requiredForProductGrade: true,
+          },
+        ],
         goal: "Deliver a shippable correctness improvement.",
       }),
       JSON.stringify({
