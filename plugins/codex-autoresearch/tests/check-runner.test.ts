@@ -7,8 +7,12 @@ import path from "node:path";
 import test from "node:test";
 
 import { resolveSpawnCommand, runCommand } from "../scripts/check-runner.js";
+import { runPhase } from "../lib/checks/check-common.js";
 import { terminateProcessTree } from "../lib/runner.js";
-import { PRODUCT_PHASE_TIMEOUT_SECONDS } from "../lib/checks/product-phase.js";
+import {
+  PRODUCT_PHASE_TIMEOUT_SECONDS,
+  PRODUCT_TEST_SCRIPTS,
+} from "../lib/checks/product-phase.js";
 import {
   dashboardExportAssetIssues,
   dashboardGeneratedDemoExport,
@@ -22,6 +26,29 @@ import { runProcess } from "./helpers/process.js";
 
 test("product gate keeps a bounded native-suite deadline", () => {
   assert.equal(PRODUCT_PHASE_TIMEOUT_SECONDS, process.platform === "win32" ? 4_800 : 1_800);
+});
+
+test("product gate runs every compiled suite separately in the package order", async () => {
+  const packageJson = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
+  assert.deepEqual(packageJson.scripts["test:compiled"].split(/\s+/), [
+    "run-s",
+    ...PRODUCT_TEST_SCRIPTS,
+  ]);
+  for (const script of PRODUCT_TEST_SCRIPTS)
+    assert.equal(typeof packageJson.scripts[script], "string");
+});
+
+test("streamed check failures expose the runner timeout reason", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "log", (line: string) => lines.push(line));
+  const passed = await runPhase(
+    "timeout-fixture",
+    [["waiting-command", process.execPath, ["-e", "setInterval(() => {}, 1000)"]]],
+    { streamOutput: true, timeoutSeconds: 1 },
+  );
+  assert.equal(passed, false);
+  assert.ok(lines.includes("fail waiting-command"));
+  assert.ok(lines.some((line) => line.includes("Command timed out after 1 seconds.")));
 });
 
 test("finalizer test gate caps Git fixture concurrency without weakening default case deadlines", async () => {
@@ -219,7 +246,10 @@ test("npm resolver keeps non-Windows bare npm fallback", async () => {
     platform: "linux",
   });
 
-  assert.deepEqual(resolved, { command: "npm", args: ["run", "test:compiled"] });
+  assert.deepEqual(resolved, {
+    command: "npm",
+    args: ["run", "test:compiled"],
+  });
 });
 
 test("demo export asset parity rejects a stale inline dashboard script", () => {

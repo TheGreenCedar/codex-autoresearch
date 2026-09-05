@@ -11,10 +11,25 @@ import { resolveNpmCommand } from "./npm-command.js";
 
 export const PRODUCT_PHASE_TIMEOUT_SECONDS = process.platform === "win32" ? 4_800 : 1_800;
 
+export const PRODUCT_TEST_SCRIPTS = [
+  "test:compiled:cli",
+  "test:compiled:dashboard",
+  "test:compiled:finalize",
+  "test:compiled:process",
+  "test:compiled:core",
+] as const;
+
 export async function runProductPhase(): Promise<boolean> {
   let productChecks: CommandSpec[];
+  let testChecks: CommandSpec[];
   try {
-    productChecks = await productCheckCommands();
+    productChecks = productCheckCommands();
+    testChecks = await Promise.all(
+      PRODUCT_TEST_SCRIPTS.map(async (script): Promise<CommandSpec> => {
+        const npmTest = await resolveNpmCommand(["run", script]);
+        return [script, npmTest.command, npmTest.args];
+      }),
+    );
   } catch (error) {
     console.log("\n== product ==");
     console.log("fail npm-resolution");
@@ -22,7 +37,10 @@ export async function runProductPhase(): Promise<boolean> {
     return false;
   }
   const [operatorEvidence, ...remainingChecks] = productChecks;
-  const options = { streamOutput: true, timeoutSeconds: PRODUCT_PHASE_TIMEOUT_SECONDS };
+  const options = {
+    streamOutput: true,
+    timeoutSeconds: PRODUCT_PHASE_TIMEOUT_SECONDS,
+  };
   console.log("\n== operator task evidence ==");
   const evidenceResult = await runCommand(operatorEvidence, options);
   try {
@@ -34,16 +52,18 @@ export async function runProductPhase(): Promise<boolean> {
     console.log(indent(errorMessage(error)));
     return false;
   }
-  return await runPhase("product", remainingChecks, options);
+  if (!(await runPhase("product", remainingChecks, options))) return false;
+  for (const testCheck of testChecks) {
+    if (!(await runPhase(testCheck[0], [testCheck], options))) return false;
+  }
+  return true;
 }
 
-async function productCheckCommands(): Promise<CommandSpec[]> {
-  const npmTest = await resolveNpmCommand(["run", "test:compiled"]);
+function productCheckCommands(): CommandSpec[] {
   return [
     ["operator-task-evidence", node, ["scripts/operator-task-benchmark.mjs", "--fail-on-failure"]],
     ["command-surface-map", node, ["dist/scripts/command-surface-map.mjs"]],
     ["help:autoresearch", node, ["scripts/autoresearch.mjs", "--help"]],
     ["help:finalize", node, ["scripts/finalize-autoresearch.mjs", "--help"]],
-    ["tests", npmTest.command, npmTest.args],
   ];
 }

@@ -8,6 +8,8 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 ## 2.9.0 - 2026-09-05
 
+- Run verification suites with separate bounded deadlines and report timeout causes, so a slow Windows suite does not consume the time allowed for later suites.
+
 Measured loops now have a clearer first run, stricter repeat evidence, and a simpler handoff. Existing sessions keep working with their current note paths; new sessions put notes and ideas in `.autoresearch/`.
 
 - The documented first run now starts a fresh measured session. Missing benchmark, checks, and scope can be proposed from bounded read-only discovery before acceptance.
@@ -635,6 +637,7 @@ The result is less ceremony before useful work and far fewer ways for a loop to 
 - Continued the simplification sweep by sharing verification runners and temp cleanup, extracting finalization plan helpers and focused CLI command modules, centralizing evidence status taxonomy, splitting dashboard chart/details/modal surfaces, and rendering weighted metric formulas from configured weights.
 
 ### Fixed
+
 - Refreshed the v2 documentation map, glossary, workflow diagrams, finalization wording, troubleshooting rows, and public README so they describe the current operator checklist, watchdog, lane, runtime-provenance, packet-diagnostic, evidence-status, and audit/operate dashboard behavior.
 - Scrubbed branch-specific finalization warnings from public showcase dashboard exports and added release-gate checks so demo snapshots cannot ship with transient source-branch warnings.
 - Made the documented `scripts/finalize-autoresearch.mjs` launcher hydrate the matching release runtime like the main CLI launcher, and added package smoke coverage for it.

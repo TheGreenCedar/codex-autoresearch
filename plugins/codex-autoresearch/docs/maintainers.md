@@ -113,7 +113,7 @@ Automation does not prove spoken output, physical-device behavior, or accessibil
 
 `dist/` and `assets/dashboard-build/` are generated and ignored in source. Release artifacts must include them.
 
-`npm run check` builds the runtime and dashboard, checks the generated assets, packs the plugin, extracts it, and smokes both the launcher and dashboard export. `prepack` is the single publish-time build path.
+`npm run check` runs compiled test suites sequentially with a separate bounded deadline for each suite; streamed failures include timeout causes. Hosted Windows jobs have a 120-minute ceiling to accommodate native Git fixture overhead. It builds the runtime and dashboard, checks the generated assets, packs the plugin, extracts it, and smokes both the launcher and dashboard export. `prepack` is the single publish-time build path.
 
 If a Git marketplace checkout lacks `dist/`, `scripts/bootstrap-runtime.mjs` downloads the matching GitHub release tarball and adjacent `codex-autoresearch-<version>.tgz.sha256`. Hydration requires `gh` and network access, verifies the checksum and release attestation for this repository's release workflow, validates every archive entry before extraction, checks package name/version, and only then hydrates the plugin cache. Hydration stages and verifies both the runtime and dashboard beside their targets, retains ownership-marked rollback directories until both installs succeed, and restores the prior pair if either install fails. There is no unverified fallback.
 

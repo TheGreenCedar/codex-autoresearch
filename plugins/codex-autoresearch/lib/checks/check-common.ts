@@ -36,6 +36,9 @@ export async function runPhase(
   for (const result of results) {
     const marker = result.code === 0 ? "ok" : "fail";
     console.log(`${marker} ${result.label}`);
+    if (result.timedOut && options.streamOutput) {
+      console.log(indent(`Command timed out after ${options.timeoutSeconds ?? 300} seconds.`));
+    }
     if (
       !options.streamOutput &&
       (result.code !== 0 || process.env.CODEX_AUTORESEARCH_CHECK_VERBOSE === "1")
