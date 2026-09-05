@@ -10,6 +10,7 @@ Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older e
 
 - Deliver a complete owned, checked patch or an answer after current criterion coverage. Integrated and deployed endpoints require accepted targets and actual provider proof; retained subsets remain unaccepted. Terminal and dashboard share outcome, allowance, evidence, and delivery state.
 - Include a disabled comparison protocol and receipt collector for separately funded pilot and scoring studies. No model-driven comparisons or stable 3.0 release are included.
+- Keep outcome dashboard exports outside assessed candidate inputs. Windows cleanup rejects replacement process identities and retains uncertain exposure.
 
 - Run bounded process actions in a durable packaged worker and reconnect without duplicate launches. GitHub Actions confirmation binds immutable candidates and evaluator authority to verified receipts, preserves disclosure history, and distinguishes provider usage from local observation and evaluator independence.
 

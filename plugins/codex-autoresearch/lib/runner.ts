@@ -916,7 +916,8 @@ async function terminateWindowsTree(
     snapshot = await windowsProcessTreeSnapshot(pid, [], true, signal);
     if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
   }
-  const gracefulCode = await taskkill(pid, false, signal);
+  const originalRoot = snapshot.entries.find((entry) => entry.pid === pid);
+  const gracefulCode = originalRoot ? await taskkill(pid, false, signal) : null;
   if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
   let remainingPids = await waitForPidsGone(snapshot.trackedPids, PROCESS_TREE_GRACE_MS, signal);
   if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
@@ -934,10 +935,9 @@ async function terminateWindowsTree(
   }
   const refreshed = await windowsProcessTreeSnapshot(pid, snapshot.entries, false, signal);
   if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
-  const originalRoot = snapshot.entries.find((entry) => entry.pid === pid);
   const refreshedRoot = refreshed.entries.find((entry) => entry.pid === pid);
   const rootIdentityChanged = Boolean(
-    refreshedRoot && originalRoot && refreshedRoot.started !== originalRoot.started,
+    refreshedRoot && (!originalRoot || refreshedRoot.started !== originalRoot.started),
   );
   const second = !rootIdentityChanged
     ? refreshed
@@ -950,7 +950,10 @@ async function terminateWindowsTree(
       };
   const entries = mergeProcessEntries(snapshot.entries, second.entries);
   const trackedPids = entries.map((entry) => entry.pid);
-  const forcedCode = rootIdentityChanged ? null : await taskkill(pid, true, signal);
+  const forcedCode =
+    originalRoot && refreshedRoot && !rootIdentityChanged
+      ? await taskkill(pid, true, signal)
+      : null;
   if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");
   const forcedRemaining = await waitForPidsGone(trackedPids, PROCESS_TREE_GRACE_MS, signal);
   if (signal?.aborted) return abortedTermination(pid, "windows-taskkill-tree");

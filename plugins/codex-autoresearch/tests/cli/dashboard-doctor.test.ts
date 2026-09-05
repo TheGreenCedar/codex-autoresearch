@@ -215,15 +215,18 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
     assert.match(String(dashboardPlan.contractDigest), /^[a-f0-9]{64}$/);
     assert.match(String(dashboardPlan.evaluatorIdentity), /^primary@[a-f0-9]{64}$/);
     assert.ok(acceptedCheckIdentities(dashboardPlan).length > 0);
-    assert.equal((dashboardAction as UnknownRecord).kind, "pause-packets");
-    assert.equal(dashboardPlan.primaryBlockerCode, "no-learning-pause");
-    assert.equal(capabilityStatus(dashboardPlan, "run-packet"), "blocked");
+    assert.equal((dashboardAction as UnknownRecord).kind, (statePlan.action as UnknownRecord).kind);
+    assert.notEqual(dashboardPlan.primaryBlockerCode, "no-learning-pause");
+    assert.equal(capabilityStatus(dashboardPlan, "run-packet"), "allowed");
     assert.equal(capabilityStatus(dashboardPlan, "authorize-keep"), "allowed");
     assert.equal(capabilityStatus(dashboardPlan, "transition-segment"), "allowed");
     assert.equal(capabilityStatus(dashboardPlan, "finalize"), "blocked");
-    assert.equal((dashboardPlan.loopDisposition as UnknownRecord).kind, "pause");
+    assert.equal(
+      (dashboardPlan.loopDisposition as UnknownRecord).kind,
+      (statePlan.loopDisposition as UnknownRecord).kind,
+    );
     assert.equal((dashboardPlan.parentDisposition as UnknownRecord).kind, "hand-back");
-    assert.ok(requiredEvidenceCodes(dashboardPlan).includes("no-learning-pause"));
+    assert.ok(!requiredEvidenceCodes(dashboardPlan).includes("no-learning-pause"));
     assert.ok(requiredEvidenceCodes(dashboardPlan).includes("finalization-blocked"));
     assert.equal(dashboardPlan.outcome, "regressed");
     assert.equal((dashboardPlan.learning as UnknownRecord).kind, "none");
@@ -234,7 +237,7 @@ test("dashboard renders an operator readout from ASI and failures", async () => 
     assert.equal(payload.viewModel.nextBestAction.safeAction || "", "");
     assert.match(payload.viewModel.aiSummary.happened.join(" "), /runs/);
     assert.match(payload.viewModel.aiSummary.plan.join(" "), /slower and harder to read/i);
-    assert.match(payload.viewModel.aiSummary.plan.join(" "), /no learning pause/i);
+    assert.doesNotMatch(payload.viewModel.aiSummary.plan.join(" "), /no learning pause/i);
     assert.equal(payload.viewModel.experimentMemory.latestNextAction, "avoid parser inlining");
     assert.equal(payload.viewModel.portfolio.families.length > 0, true);
     assert.equal(

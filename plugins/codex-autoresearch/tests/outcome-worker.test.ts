@@ -155,9 +155,10 @@ test("worker refuses changed prepared inputs and records actual invalid output s
 
 test("a successful parent cannot release exposure while an unrefed descendant is alive", async () => {
   await withTempDir("worker", "orphan-descendant", async (cwd) => {
+    // Windows needs detached=true for the orphan to survive its Node parent.
     const action = await fixture(
       cwd,
-      `const fs = require('node:fs'); const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 100)'], { stdio: 'ignore' }); child.unref(); fs.writeFileSync('src/descendant.txt', String(child.pid)); console.log('AUTORESEARCH_OBSERVATION {"kind":"predicate","observed":"satisfied"}');`,
+      `const fs = require('node:fs'); const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 100)'], { stdio: 'ignore', detached: process.platform === 'win32' }); child.unref(); fs.writeFileSync('src/descendant.txt', String(child.pid)); console.log('AUTORESEARCH_OBSERVATION {"kind":"predicate","observed":"satisfied"}');`,
     );
     await nominateOutcomeAction(cwd, action);
     await launchOutcomeWorker(cwd, "A1");

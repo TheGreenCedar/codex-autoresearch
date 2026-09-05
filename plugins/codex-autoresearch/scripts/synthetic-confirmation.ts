@@ -92,7 +92,7 @@ if (mode === "prepare") {
     effects: ["execute"],
     paths: [],
     environment: "synthetic-github",
-    seconds: 600,
+    seconds: 570,
     mode: "github-actions",
     argv: [],
     evidenceRefs: [],
@@ -112,7 +112,7 @@ if (mode === "prepare") {
     },
   });
   let receipt = await dispatchOutcomeConfirmation(cwd, "A1");
-  const until = Date.now() + 570_000;
+  const until = Date.now() + 540_000;
   while (!terminalExecution(receipt) && Date.now() < until) {
     await delay(10_000);
     receipt = await reconcileOutcomeConfirmation(cwd, "A1");
