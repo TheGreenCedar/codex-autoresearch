@@ -292,7 +292,7 @@ test("typed failure layer preconditions reach the real ledger and pause repeated
   });
 });
 
-test("failed accepted logs without typed failure evidence conservatively vote as invalid no-learning", async () => {
+test("untyped failures remain invalid without inventing continuation gates", async () => {
   await withTempDir("untyped-failure-log", async (dir) => {
     const script = [
       "const fs=require('node:fs')",
@@ -345,7 +345,8 @@ test("failed accepted logs without typed failure evidence conservatively vote as
     assert.equal(plan.failures.layer, null);
     assert.equal(plan.failures.consecutive, 0);
     assert.equal(plan.outcome.kind, "invalid");
-    assert.equal(plan.requiredEvidence.diagnosticCodes.includes("no-learning-pause"), true);
+    assert.equal(plan.requiredEvidence.diagnosticCodes.includes("no-learning-pause"), false);
+    assert.equal(plan.capabilities["run-packet"], "allowed");
     assert.equal(plan.requiredEvidence.diagnosticCodes.includes("same-layer-failure-pause"), false);
   });
 });

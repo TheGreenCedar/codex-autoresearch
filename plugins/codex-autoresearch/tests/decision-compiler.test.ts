@@ -303,7 +303,7 @@ test("capability diagnostics remain scoped instead of becoming global packet bra
   }
 });
 
-test("two consecutive eligible no-learning candidates pause packets without changing segment", () => {
+test("legacy learning history does not authorize or pause packet continuation", () => {
   const records = [
     candidateRecord({
       run: 1,
@@ -320,11 +320,11 @@ test("two consecutive eligible no-learning candidates pause packets without chan
   const plan = compileDecisionPlan(snapshotFixture({ records }), []);
 
   assert.equal(plan.learning.consecutiveNoLearningCandidates, 2);
-  assert.equal(plan.capabilities["run-packet"], "blocked");
-  assert.equal(plan.primaryBlockerCode, "no-learning-pause");
-  assert.equal(plan.action.kind, "pause-packets");
+  assert.equal(plan.capabilities["run-packet"], "allowed");
+  assert.equal(plan.primaryBlockerCode, null);
+  assert.equal(plan.action.kind, "run-packet");
   assert.equal(plan.action.kind === "segment-transition", false);
-  assert.equal(plan.loopDisposition.kind, "pause");
+  assert.equal(plan.loopDisposition.kind, "continue");
   assert.equal(plan.capabilities["transition-segment"], "allowed");
 });
 
@@ -382,8 +382,8 @@ test("accepted crash and checks failures without proven external metadata stay c
   assert.equal(plan.learning.consecutiveNoLearningCandidates, 2);
   assert.equal(plan.outcome.kind, "invalid");
   assert.equal(plan.failures.consecutive, 0);
-  assert.equal(plan.primaryBlockerCode, "no-learning-pause");
-  assert.equal(plan.capabilities["run-packet"], "blocked");
+  assert.equal(plan.primaryBlockerCode, null);
+  assert.equal(plan.capabilities["run-packet"], "allowed");
 });
 
 test("causal or discriminating learning requires evidence and an explicitly changed belief", () => {
@@ -516,7 +516,9 @@ test("outcome is calculated from accepted metric semantics instead of an operato
     }),
     [],
   );
-  assert.equal(threshold.outcome.kind, "improved");
+  assert.equal(threshold.outcome.kind, "uncompared");
+  assert.equal(threshold.outcome.validity, "valid");
+  assert.equal(threshold.outcome.attainment, "satisfied");
 
   const neutral = compileDecisionPlan(
     snapshotFixture({
@@ -706,13 +708,19 @@ test("same-layer failure counting validates exhaustive precondition identities a
       run: 2,
       failure: {
         layer: "evaluator",
-        code: "metric",
+        code: "exit",
         preconditions: evaluatorPreconditions,
       },
     }),
   ];
   const plan = compileDecisionPlan(
-    snapshotFixture({ records, evaluatorIdentity: "eval-a@digest-a" }),
+    snapshotFixture({
+      records: [
+        acceptedContractRecord({ stopPolicy: { repeatedFailures: { limit: 2 } } }),
+        ...records,
+      ],
+      evaluatorIdentity: "eval-a@digest-a",
+    }),
     [],
   );
   assert.equal(plan.failures.layer, "evaluator");
@@ -739,7 +747,7 @@ test("same-layer failure counting validates exhaustive precondition identities a
           run: 2,
           failure: {
             layer: "evaluator",
-            code: "metric",
+            code: "exit",
             preconditions: {
               ...evaluatorPreconditions,
               acceptedEvaluatorExecutionDigest: "digest-b",
@@ -968,9 +976,9 @@ test("noise qualification repeats do not masquerade as independent no-learning c
     }),
     [],
   );
-  assert.equal(distinct.primaryBlockerCode, "no-learning-pause");
+  assert.equal(distinct.primaryBlockerCode, null);
 });
-test("surplus repeats and malformed qualification evidence retain no-learning limits", () => {
+test("surplus repeats remain historical and cannot create narrative continuation authority", () => {
   const contract = acceptedContractRecord({ noise: { kind: "bounded", repeats: 2, tolerance: 1 } });
   const cases = [
     [
@@ -1004,6 +1012,50 @@ test("surplus repeats and malformed qualification evidence retain no-learning li
     assert.equal(
       compileDecisionPlan(snapshotFixture({ records: [contract, ...records] }), [])
         .primaryBlockerCode,
-      "no-learning-pause",
+      null,
     );
+});
+
+test("accepted failure allowances use exact defect identities and ignore fabricated learning", () => {
+  const failure = {
+    layer: "evaluator",
+    code: "exit",
+    preconditions: {
+      acceptedEvaluatorIdentity: "eval-a",
+      acceptedEvaluatorExecutionDigest: "digest-a",
+      preconditionEpoch: "epoch-a",
+    },
+  };
+  const candidates = [
+    candidateRecord({ run: 1, failure }),
+    candidateRecord({
+      run: 2,
+      failure,
+      learning: {
+        kind: "causal",
+        changedBelief: "Claimed repaired",
+        evidence: ["fabricated-receipt"],
+      },
+    }),
+  ];
+  const compile = (limit: number, records = candidates) =>
+    compileDecisionPlan(
+      snapshotFixture({
+        evaluatorIdentity: "eval-a@digest-a",
+        records: [
+          acceptedContractRecord({ stopPolicy: { repeatedFailures: { limit } } }),
+          ...records,
+        ],
+      }),
+      [],
+    );
+  assert.equal(compile(2).primaryBlockerCode, "same-layer-failure-pause");
+  assert.equal(compile(3).primaryBlockerCode, null);
+  assert.equal(
+    compile(2, [
+      candidates[0],
+      candidateRecord({ run: 2, failure: { ...failure, code: "missing-fixture" } }),
+    ]).failures.consecutive,
+    1,
+  );
 });

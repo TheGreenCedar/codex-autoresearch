@@ -63,7 +63,7 @@ Use `--from-last` rather than copying a metric out of the terminal. If inline JS
 
 Detailed output stores that structured experiment note in the `asi` field. It should say what Codex expected, what the evidence showed, why a rejected path should stay rejected, and what experiment would be sensible next. Learning defaults to `none`; `causal` or `discriminating` requires evidence and a concrete changed belief.
 
-Every mutation returns a precondition decision, a mutation receipt, and a resulting decision. The resulting plan decides what happens next. A budget stop or no-learning pause can block packets while permitting direct completion; a pending transaction blocks unsafe session mutation and session-dependent final claims.
+Every mutation returns a precondition decision, a mutation receipt, and a resulting decision. The resulting plan decides what happens next. A budget stop or accepted retry-limit pause can block packets while permitting direct work; a pending transaction blocks unsafe session mutation and session-dependent final claims.
 
 If `log` is interrupted, rerun the exact same arguments. Its version-2 receipt verifies completed commit and ledger stages, resumes tracked and untracked cleanup independently, and converges to at most one commit and one ledger event. Different arguments reject while the receipt is pending.
 
@@ -126,7 +126,9 @@ node scripts/autoresearch.mjs gap-decide --cwd <project> --research-slug <slug> 
 
 Raw checkbox edits stay provisional. `gap-decide` appends the evidence-bearing acceptance decision for a stable gap ID. Closing the accepted checklist ends that round. Read `researchIntegrity` and its missing-proof warnings before deciding whether the larger question is finished or needs another discovery round.
 
-Two eligible no-learning candidates or two failures in the same registered layer pause packet work unless that failure class's relevant preconditions changed. A pause hands control back to direct work and never starts fanout. If a person later approves fanout, `research-fanout --dry-run` can propose independent scouts. Scout commands run only when their parsed argv matches the strict Git read-only allowlist; Git porcelain is post-run detection, not containment. An implementation lane needs a separate worktree or an explicit write scope, neither of which contains arbitrary process or outside-root effects. The parent session still owns the accepted contract and keep/discard decision.
+Repeated execution failures pause packet work at the accepted contract's `repeatedFailures.limit`. The count follows the same failure code and relevant preconditions; changing learning notes does not reset it. Legacy no-learning prose does not create an automatic pause. A pause returns control to direct work and never starts fanout.
+
+If a person later approves fanout, `research-fanout --dry-run` can propose independent scouts. Scout commands run only when their parsed argv matches the strict Git read-only allowlist; Git porcelain is post-run detection, not containment. An implementation lane needs a separate worktree or an explicit write scope, neither of which contains arbitrary process or outside-root effects. The parent session still owns the accepted contract and keep/discard decision.
 
 ## Use the dashboard when it helps
 

@@ -316,7 +316,7 @@ test("recommend-next compact returns the state plan and its capability-scoped ha
   });
 });
 
-test("recommend-next pauses packets after two accepted no-learning candidates without auto-transition", async () => {
+test("recommend-next preserves history without imposing a universal two-candidate pause", async () => {
   await withTempDir("plateau-pivot-command", async (dir) => {
     const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=10')"`;
     const checks = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)"`;
@@ -365,12 +365,13 @@ test("recommend-next pauses packets after two accepted no-learning candidates wi
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     const plan = projectedPlan(payload);
-    assert.equal(plan.primaryBlockerCode, "no-learning-pause");
-    assert.equal((plan.action as UnknownRecord).kind, "pause-packets");
+    assert.notEqual(plan.primaryBlockerCode, "no-learning-pause");
     assert.equal((plan.learning as UnknownRecord).consecutiveNoLearningCandidates, 2);
-    assert.equal(capabilityStatus(plan, "run-packet"), "blocked");
+    assert.equal(capabilityStatus(plan, "run-packet"), "allowed");
     assert.equal(capabilityStatus(plan, "transition-segment"), "allowed");
     assert.doesNotMatch(String(payload.commands?.primary || ""), /(?:lane-runner|new-segment)/);
+    const next = await runCli(["next", "--cwd", dir]);
+    assert.equal(next.code, 0, next.stderr);
   });
 });
 

@@ -1,3 +1,4 @@
+import { formatCliJson } from "./cli-json.js";
 import {
   approvalRequirementsFromLaneResults,
   approvalRequirementFromLane,
@@ -623,7 +624,7 @@ function compactMetricSemanticsWarning(value: unknown): ReadModelRecord | null {
 }
 
 export function projectionBudget(value: unknown): ProjectionBudget {
-  const serialized = JSON.stringify(value, null, 2);
+  const serialized = formatCliJson(value);
   const bytes = Buffer.byteLength(serialized, "utf8");
   return {
     bytes,

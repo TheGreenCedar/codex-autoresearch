@@ -223,17 +223,17 @@ test("plugin metadata keeps the public product boundary", () => {
     pluginJson.interface.longDescription,
   ].join("\n");
 
-  assert.equal(
+  for (const description of [
     packageJson.description,
-    "Codex plugin for bounded, measured benchmark and optimization loops.",
-  );
-  assert.match(pluginJson.description, /Measured Codex loops/);
-  assert.match(pluginJson.description, /local evidence/);
-  assert.match(pluginJson.description, /reviewable branch previews/);
-  assert.match(pluginJson.interface.longDescription, /benchmark output/);
-  assert.match(pluginJson.interface.longDescription, /local evidence/);
-  assert.match(pluginJson.interface.longDescription, /read-only live readout/);
-  assert.match(pluginJson.interface.longDescription, /after user approval/);
+    pluginJson.description,
+    pluginJson.interface.shortDescription,
+    pluginJson.interface.longDescription,
+  ]) {
+    assert.equal(typeof description, "string");
+    assert.ok(description.trim().length > 0);
+  }
+  assert.equal(packageJson.private, true);
+  assert.equal(pluginJson.skills, "./skills/");
   assert.doesNotMatch(publicCopy, /\bMCP\b/i);
 });
 

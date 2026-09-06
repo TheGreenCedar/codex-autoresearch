@@ -1,3 +1,4 @@
+import { OutcomeSummary } from "./OutcomeSummary";
 import { STATUS_LABELS, TONES } from "../constants";
 import { recordFrom } from "../model";
 import { useCopyText } from "../hooks/useCopyText";
@@ -17,6 +18,8 @@ export function DecisionRail({
   const action = (viewModel.nextBestAction || {}) as NextBestAction;
   const summary = recordFrom(viewModel.decisionEnvelopeSummary);
   const decisionPlan = recordFrom(viewModel.decisionPlanProjection);
+  const outcome = recordFrom(decisionPlan.investigation);
+  const hasOutcome = typeof outcome.id === "string";
   const operatorDecision = operatorDecisionFor({ action, decisionPlan, readout, summary });
   const chips = evidenceChipsFor(viewModel, action, readout);
   const reportCopy = useCopyText();
@@ -67,6 +70,8 @@ export function DecisionRail({
               <dd id="decision-next-command">
                 {operatorDecision.command ? (
                   <code translate="no">{operatorDecision.command}</code>
+                ) : outcome.status === "satisfied" ? (
+                  "No further command required."
                 ) : (
                   "Redacted here. Continue in the CLI."
                 )}
@@ -74,12 +79,18 @@ export function DecisionRail({
             </div>
           </dl>
         </div>
+        {typeof outcome.id === "string" ? (
+          <OutcomeSummary
+            projection={outcome}
+            audit={auditView ? (viewModel.investigationAudit ?? {}) : null}
+          />
+        ) : null}
         <details className="decision-details" open={auditView}>
           <summary>{auditView ? "Canonical decision details" : "Why this action"}</summary>
           <div className="decision-envelope-card">
             <span>Canonical decision</span>
             <strong>{String(summary.title || action.title || "Next action")}</strong>
-            <em>{canonicalDecisionMeta(summary)}</em>
+            <em>{hasOutcome ? String(summary.kind) : canonicalDecisionMeta(summary)}</em>
           </div>
           <dl
             className="operator-decision-summary decision-plan-audit"
@@ -94,48 +105,85 @@ export function DecisionRail({
               </div>
             ))}
           </dl>
-          <div
-            className="evidence-chips"
-            id="decision-evidence-chips"
-            aria-label="Decision evidence"
-          >
-            {chips.map((chip) => (
-              <span
-                className={`evidence-chip ${chip.tone || "neutral"} evidence-${chip.status}`}
-                data-evidence-status={chip.status}
-                key={`${chip.label}-${chip.value}`}
+          {!hasOutcome ? (
+            <>
+              {" "}
+              <div
+                className="evidence-chips"
+                id="decision-evidence-chips"
+                aria-label="Decision evidence"
               >
-                <strong>{chip.label}</strong>
-                <em>{chip.value}</em>
-              </span>
-            ))}
-          </div>
-          <div className="readout-facts">
-            <span className="readout-label">Best result so far</span>
-            <strong id="best-kept-detail">
-              {readout.bestRun?.description || "No kept result yet."}
-            </strong>
-            <span className="readout-label">Most recent setback</span>
-            <strong id="recent-failure-detail">
-              {readout.latestFailure?.description || "No recent failure."}
-            </strong>
-          </div>
-          <div className="decision-list" aria-label="Recent decision history">
-            {railItems.map((item) => (
-              <div className={`decision-item ${item.tone}`} key={`${item.id}-${item.title}`}>
-                <span>{item.id}</span>
-                <strong>{item.title}</strong>
-                {item.id === "Start" ? <span aria-hidden="true">. </span> : null}
-                <em>{item.detail}</em>
+                {chips.map((chip) => (
+                  <span
+                    className={`evidence-chip ${chip.tone || "neutral"} evidence-${chip.status}`}
+                    data-evidence-status={chip.status}
+                    key={`${chip.label}-${chip.value}`}
+                  >
+                    <strong>{chip.label}</strong>
+                    <em>{chip.value}</em>
+                  </span>
+                ))}
               </div>
-            ))}
-          </div>
+              <div className="readout-facts">
+                <span className="readout-label">Best result so far</span>
+                <strong id="best-kept-detail">
+                  {readout.bestRun?.description || "No kept result yet."}
+                </strong>
+                <span className="readout-label">Most recent setback</span>
+                <strong id="recent-failure-detail">
+                  {readout.latestFailure?.description || "No recent failure."}
+                </strong>
+              </div>
+              <div className="decision-list" aria-label="Recent decision history">
+                {railItems.map((item) => (
+                  <div className={`decision-item ${item.tone}`} key={`${item.id}-${item.title}`}>
+                    <span>{item.id}</span>
+                    <strong>{item.title}</strong>
+                    {item.id === "Start" ? <span aria-hidden="true">. </span> : null}
+                    <em>{item.detail}</em>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <dl className="operator-decision-summary">
+              <div>
+                <dt>Runtime</dt>
+                <dd>{String(viewModel.outcomeRuntime?.pluginVersion ?? "unknown")}</dd>
+              </div>
+              <div>
+                <dt>Runtime comparison</dt>
+                <dd>{String(viewModel.outcomeRuntime?.status ?? "unknown")}</dd>
+              </div>
+            </dl>
+          )}
           <DecisionCopyActions
             reportCopied={reportCopy.copied}
             handoffCopied={handoffCopy.copied}
-            copyReport={() => reportCopy.copy(userReportFor(viewModel, readout, action))}
+            copyReport={() =>
+              reportCopy.copy(
+                hasOutcome
+                  ? JSON.stringify(
+                      {
+                        investigation: outcome,
+                        resolvedDecision: viewModel.decisionPlanProjection,
+                      },
+                      null,
+                      2,
+                    )
+                  : userReportFor(viewModel, readout, action),
+              )
+            }
             copyHandoff={() =>
-              handoffCopy.copy(JSON.stringify(viewModel.handoffPacket || {}, null, 2))
+              handoffCopy.copy(
+                JSON.stringify(
+                  hasOutcome
+                    ? { investigation: outcome, resolvedDecision: viewModel.decisionPlanProjection }
+                    : viewModel.handoffPacket || {},
+                  null,
+                  2,
+                ),
+              )
             }
           />
         </details>
@@ -185,6 +233,7 @@ function operatorDecisionFor({
 }
 
 function operatorStatus(decisionPlan: Record<string, unknown>) {
+  if (recordFrom(decisionPlan.investigation).status === "satisfied") return "Satisfied";
   const loop = recordFrom(decisionPlan.loopDisposition);
   const parent = recordFrom(decisionPlan.parentDisposition);
   if (loop.kind === "blocked" || parent.kind === "block-final-answer") return "Blocked";

@@ -352,7 +352,7 @@ function isExpectedRuntimeArchiveFile(name) {
   if (name === "assets/template.html") return true;
   if (/^dist\/lib\/.+\.mjs$/.test(name)) return true;
   if (
-    /^dist\/scripts\/(?:autoresearch|check|check-runner|finalize-autoresearch|operator-task-benchmark)\.mjs$/.test(
+    /^dist\/scripts\/(?:autoresearch|check|check-runner|outcome-worker|comparison-harness|finalize-autoresearch|operator-task-benchmark)\.mjs$/.test(
       name,
     )
   ) {

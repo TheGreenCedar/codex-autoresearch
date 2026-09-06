@@ -17,7 +17,7 @@ Confirm that:
 If the `DecisionPlan` blocks `run-packet`, follow its bounded action instead of spending another packet.
 Prefer a smaller workload or task slice over increasing a timeout just to make a run finish.
 
-Do not run a third equivalent attempt after two no-learning packets or two same-layer failures unless the registered relevant precondition digest changed. A pause hands control back to direct work; it does not start fanout or a new segment.
+Stop repeated execution failures at the accepted contract's `repeatedFailures.limit`. Count failures with the same code and registered relevant preconditions; changing prose does not change that identity. Legacy no-learning notes do not create an automatic pause. A pause hands control back to direct work; it does not start fanout or a new segment.
 
 ## Recover the failed layer
 

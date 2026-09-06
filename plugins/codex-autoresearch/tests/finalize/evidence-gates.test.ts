@@ -108,6 +108,13 @@ testWithTempRoot(
         JSON.stringify({
           type: "config",
           name: "semantic retrieval",
+          productProofRequirements: [
+            {
+              id: "independent_product_review",
+              label: "Independent review of the product claim",
+              requiredForProductGrade: true,
+            },
+          ],
           goal: "Deliver a shippable lazy semantic retrieval performance improvement.",
           metricName: "seconds",
           bestDirection: "lower",

@@ -11,7 +11,8 @@ test("prose cannot authorize a broad product claim", () => {
       goal: "Deliver a shippable product",
       acceptedEvidence: [evidence],
     });
-    assert.equal(coverage.productGradeReady, false);
+    assert.equal(coverage.claimDetected, false);
+    assert.deepEqual(coverage.requirements, []);
     assert.notEqual(coverage.maturity, "product_grade");
     assert.deepEqual(coverage.coveredProof, []);
   }
@@ -30,4 +31,15 @@ test("ordinary goals do not invent domain or finalization requirements", () => {
     assert.deepEqual(coverage.requirements, []);
     assert.deepEqual(coverage.blockers, []);
   }
+});
+
+test("explicit requirements remain unmet by narrative benchmark evidence", () => {
+  const coverage = buildProductClaimCoverage({
+    requirements: [
+      { id: "independent-review", label: "Independent review", requiredForProductGrade: true },
+    ],
+    acceptedEvidence: ["Independent review passed"],
+  });
+  assert.equal(coverage.productGradeReady, false);
+  assert.equal(coverage.missingRequiredProof[0].id, "independent-review");
 });

@@ -1,7 +1,7 @@
 {
   "name": "codex-autoresearch",
-  "version": "2.9.0",
-  "description": "Measured Codex loops with benchmark output, local evidence, live readouts, and reviewable branch previews.",
+  "version": "3.0.0",
+  "description": "Bounded Codex investigations and measured loops with durable evidence and verified delivery.",
   "author": {
     "name": "Albert Najjar",
     "email": "albertnajjar@outlook.com",
@@ -10,15 +10,25 @@
   "homepage": "https://github.com/TheGreenCedar/codex-autoresearch",
   "repository": "https://github.com/TheGreenCedar/codex-autoresearch",
   "license": "Apache-2.0",
-  "keywords": ["codex", "autoresearch", "experiments", "benchmark", "optimization"],
+  "keywords": [
+    "codex",
+    "autoresearch",
+    "experiments",
+    "benchmark",
+    "optimization"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex Autoresearch",
-    "shortDescription": "Run measured Codex loops with local evidence",
-    "longDescription": "Codex Autoresearch gives Codex one guided workflow for bounded measured loops: define the goal and scope, validate benchmark output, keep local evidence, resume context across sessions, inspect progress in a read-only live readout, and preview reviewable branches after user approval.",
+    "shortDescription": "Investigate within a budget and retain evidence",
+    "longDescription": "Run short benchmark loops or explicitly governed investigations. Keep accepted scope and cumulative budgets through failed hypotheses, repairs, and confirmation. Inspect a read-only dashboard and deliver an owned patch or verified result with its evidence.",
     "developerName": "Albert Najjar",
     "category": "Coding",
-    "capabilities": ["Interactive", "Read", "Write"],
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
     "websiteURL": "https://github.com/TheGreenCedar/codex-autoresearch",
     "privacyPolicyURL": "https://github.com/TheGreenCedar/codex-autoresearch/blob/main/plugins/codex-autoresearch/docs/privacy.md",
     "termsOfServiceURL": "https://github.com/TheGreenCedar/codex-autoresearch/blob/main/plugins/codex-autoresearch/docs/terms.md",
@@ -30,6 +40,8 @@
     "brandColor": "#0F8F88",
     "composerIcon": "./assets/icon.svg",
     "logo": "./assets/logo.svg",
-    "screenshots": ["./assets/showcase/dashboard-demo.png"]
+    "screenshots": [
+      "./assets/showcase/dashboard-demo.png"
+    ]
   }
 }

@@ -1,6 +1,6 @@
 # Trust and safety
 
-The point of Autoresearch is not to produce more numbers. It is to keep the number, the code, and the claim attached to the same experiment. Most of the safety rules exist because one of those three can drift while the others still look convincing.
+Autoresearch keeps each result attached to the code and experiment that produced it. A changed benchmark, stale packet, or different installed runtime can break that connection even when the reported number looks convincing.
 
 ## What the plugin can change
 

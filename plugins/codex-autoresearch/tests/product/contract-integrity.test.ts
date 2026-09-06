@@ -166,10 +166,10 @@ test("release workflows preserve executable package and browser safeguards", asy
     );
     assert.ok(uploadStep, `${workflowName} cross-browser upload step is missing`);
     assert.equal(yamlScalarValues(uploadStep, "if")[0], "runner.os == 'Linux' && always()");
-    assert.equal(
-      yamlScalarValues(uploadStep, "path")[0],
+    assert.deepEqual(yamlScalarValues(uploadStep, "path")[0].split("\n"), [
       "plugins/codex-autoresearch/tmp/dashboard-cross-browser/",
-    );
+      "plugins/codex-autoresearch/tmp/dashboard-outcome/",
+    ]);
     assert.equal(yamlScalarValues(uploadStep, "if-no-files-found")[0], "warn");
   }
   const releaseScripts = yamlScalarValues(releasePublishJob, "run");

@@ -110,8 +110,38 @@ const DECISION_PLAN_SCHEMA: JsonSchema = closedObjectSchema({
     failureLayer: nullableEnumStringSchema(FAILURE_LAYERS),
     failurePreconditions: stringListSchema(),
   }),
+  investigation: {
+    oneOf: [
+      { type: "null" },
+      closedObjectSchema({
+        id: stringValueSchema(),
+        objective: stringValueSchema(),
+        status: enumStringSchema(["active", "blocked", "satisfied", "stopped-unmet"]),
+        question: { type: ["string", "null"] },
+        executionId: { type: ["string", "null"] },
+        inputDigest: { type: ["string", "null"] },
+        remaining: closedObjectSchema({
+          actions: { type: ["integer", "null"], minimum: 0 },
+          executionSeconds: { type: ["number", "null"], minimum: 0 },
+          deadline: { type: ["string", "null"] },
+          unknownExecutions: { type: "integer", minimum: 0 },
+        }),
+        unresolvedCriteria: stringListSchema(),
+        delivery: closedObjectSchema({
+          endpoint: enumStringSchema(["answer", "patch", "integrated", "deployed"]),
+          status: enumStringSchema(["pending", "ready", "delivered"]),
+        }),
+      }),
+    ],
+  },
   outcome: closedObjectSchema({
     kind: enumStringSchema([...DECISION_OUTCOME_KINDS]),
+    execution: enumStringSchema(["completed", "failed", "unknown"]),
+    validity: enumStringSchema(["valid", "invalid", "unknown"]),
+    conclusion: enumStringSchema(["supported", "refuted", "inconclusive"]),
+    movement: enumStringSchema(["improved", "regressed", "neutral", "unknown"]),
+    attainment: enumStringSchema(["satisfied", "unsatisfied", "unknown", "not-assessed"]),
+    codeAcceptance: enumStringSchema(["accepted", "rejected", "unassessed"]),
   }),
   learning: closedObjectSchema({
     latest: {

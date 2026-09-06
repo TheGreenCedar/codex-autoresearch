@@ -43,6 +43,8 @@ const ALLOWED_PACKAGED_DIST_SCRIPTS = new Set([
   "dist/scripts/autoresearch.mjs",
   "dist/scripts/check.mjs",
   "dist/scripts/check-runner.mjs",
+  "dist/scripts/outcome-worker.mjs",
+  "dist/scripts/comparison-harness.mjs",
   "dist/scripts/finalize-autoresearch.mjs",
   "dist/scripts/operator-task-benchmark.mjs",
 ]);
@@ -97,6 +99,8 @@ export async function runPackageArtifactCheck() {
       "dist/scripts/autoresearch.mjs",
       "dist/scripts/check.mjs",
       "dist/scripts/check-runner.mjs",
+      "dist/scripts/outcome-worker.mjs",
+      "dist/scripts/comparison-harness.mjs",
       "dist/scripts/finalize-autoresearch.mjs",
       "dist/scripts/operator-task-benchmark.mjs",
       "dist/lib/checks/check-common.mjs",
@@ -795,10 +799,69 @@ async function runPackageSmokeCommands(extractDir: string) {
     }
   }
 
+  const outcomeSmoke = await runExtractedOutcomeSmoke(packageDir, extractDir);
+  if (!outcomeSmoke.ok) return outcomeSmoke;
+
   const dashboardSmoke = await runExtractedPackageDashboardExportSmoke(packageDir, extractDir);
   if (!dashboardSmoke.ok) return dashboardSmoke;
 
   return { ok: true, error: "" };
+}
+
+async function runExtractedOutcomeSmoke(packageDir: string, extractDir: string) {
+  const script = `
+    import assert from 'node:assert/strict';
+    import fs from 'node:fs/promises';
+    import path from 'node:path';
+    import { pathToFileURL } from 'node:url';
+    import { setTimeout as delay } from 'node:timers/promises';
+    const [packageDir, cwd] = process.argv.slice(1);
+    const load = (name) => import(pathToFileURL(path.join(packageDir, 'dist/lib', name + '.mjs')).href);
+    const { startOutcome, readOutcome } = await load('outcome-store');
+    const { nominateOutcomeAction } = await load('investigation-workflow');
+    const { launchOutcomeWorker } = await load('outcome-worker');
+    await fs.mkdir(cwd);
+    await startOutcome(cwd, {
+      id: 'packed-worker', objective: 'Verify the extracted worker',
+      criteria: [{ id: 'compatible', description: 'Synthetic predicate', authority: 'internal', subject: 'candidate' }],
+      authorization: { reference: 'package-smoke', worktrees: [cwd], editable: ['src'], protected: [], effects: ['execute'], environments: ['local'], delivery: 'answer' },
+      budget: { actions: 1, executionSeconds: 20 }
+    });
+    await nominateOutcomeAction(cwd, {
+      id: 'A1', investigation: { id: 'H1', question: 'Does the packaged worker execute?', intervention: 'Run fixed synthetic predicate', distinguishingObservations: ['satisfied', 'counterexample'], evidenceRefs: [], retryAllowance: 1 },
+      purpose: 'experiment', effects: ['execute'], paths: [], environment: 'local', seconds: 20, mode: 'process', argv: [], evidenceRefs: [],
+      evaluator: { id: 'packed-evaluator', criterionIds: ['compatible'], environment: 'local', method: { kind: 'predicate' }, repeats: 1,
+        argv: [process.execPath, '-e', "console.log('AUTORESEARCH_OBSERVATION ' + JSON.stringify({kind: 'predicate', observed: 'satisfied'}))"], checkArgv: [process.execPath, '-e', 'process.exit(0)'] }
+    });
+    await launchOutcomeWorker(cwd, 'A1');
+    const deadline = Date.now() + 15000;
+    let receipt;
+    do {
+      receipt = (await readOutcome(cwd)).executions[0];
+      if (receipt.status.kind === 'completed') break;
+      if (Date.now() > deadline) throw new Error('Extracted worker failed to complete: ' + receipt.status.kind);
+      await delay(50);
+    } while (true);
+    assert.equal(receipt.result.validity, 'valid');
+    assert.equal(receipt.result.attainment, 'satisfied');
+    console.log('packed-worker-completed');
+  `;
+  const worker = await runCommand([
+    "package-runtime-smoke:outcome-worker",
+    node,
+    ["--input-type=module", "-e", script, packageDir, path.join(extractDir, "outcome-smoke")],
+  ]);
+  if (worker.code !== 0) return { ok: false, error: worker.stdout + worker.stderr };
+  const comparison = await runCommand([
+    "package-runtime-smoke:comparison-disabled",
+    node,
+    [path.join(packageDir, "dist/scripts/comparison-harness.mjs")],
+  ]);
+  if (comparison.code !== 0) return { ok: false, error: comparison.stdout + comparison.stderr };
+  const disabled = JSON.parse(comparison.stdout);
+  return disabled.enabled === false && disabled.modelRunsStarted === 0
+    ? { ok: true, error: "" }
+    : { ok: false, error: "Extracted comparison harness did not default to disabled." };
 }
 
 async function runExtractedPackageDashboardExportSmoke(packageDir: string, extractDir: string) {

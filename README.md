@@ -2,14 +2,18 @@
 
 # Codex Autoresearch
 
-### Give Codex a benchmark, a boundary, and a memory.
+### Improve code through repeatable experiments.
 
 **[Install](#install)** - **[Try it](#try-it)** - **[How it works](#how-it-works)** - **[Dashboard](#dashboard)** - **[Docs](#docs)**
 </div>
 
 Codex Autoresearch helps improve local code against a repeatable benchmark. Give it a workload, correctness checks, an edit boundary, and a time budget. It records the baseline, evaluates small changes, and leaves a reviewable patch with the evidence behind it.
 
-Use it for bounded performance or resource-use experiments: faster tests, lower build time, less memory, or higher throughput on a defined workload. Reviews, documentation, product research, and one-off fixes stay ordinary Codex work.
+Use it for bounded performance or resource-use experiments: faster tests, lower build time, less memory, or higher throughput on a defined workload. Reviews, documentation, product research, and one-off fixes normally stay ordinary Codex work.
+
+Version 3.0 also supports investigations where you know the outcome you want but have not settled on a method. You accept the objective, allowed changes, evidence requirements, and budget once. Preparation, failed attempts, repairs, confirmation, and delivery all use that same allowance. Goals without a numeric metric can use explicit conditions and counterexamples. See [Bounded investigations](plugins/codex-autoresearch/docs/investigations.md), or use the short benchmark path below.
+
+The 3.0 release is based on engineering verification. No model-driven comparison has been run, so it makes no claim of better outcomes or lower cost than ordinary Codex or 2.9.0. The optional [comparison protocol and collection harness](plugins/codex-autoresearch/docs/comparative-evaluation.md) stays disabled unless a study receives a separate budget.
 
 ![Codex Autoresearch dashboard with synthetic example measurements](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
 
@@ -88,7 +92,7 @@ METRIC seconds=12.34
 
 The primary metric decides whether the result moved in the right direction. Checks protect correctness. Secondary metrics can catch known tradeoffs such as lower runtime with much higher memory use.
 
-Autoresearch stores the durable session record in the target project. In a Git repository, transient packet state lives under `.git/autoresearch/`; outside Git it falls back to local worktree files. Read surfaces load those sources coherently, and state, doctor, recommendations, finalization, and the dashboard project the same decision rather than recomputing policy independently.
+Autoresearch stores the session record in the target project. In a Git repository, temporary packet state lives under `.git/autoresearch/`; outside Git it falls back to local worktree files. State, doctor, recommendations, finalization, and the dashboard all use the same snapshot and decision. They retry if the sources change during a read.
 
 Some commands can change Git state. Keeping a result can create a commit limited to configured paths. Discards, crashes, and failed checks can clean up the configured or explicitly supplied experiment paths. A plain measurement never stages, commits, or reverts anything. Finalization begins with a read-only preview, and review branches are created only after approval. The details are in [Trust](plugins/codex-autoresearch/docs/trust.md).
 

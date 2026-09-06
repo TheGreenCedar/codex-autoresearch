@@ -1,3 +1,4 @@
+import { explicitProductRequirements } from "./product-claim-coverage.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -355,6 +356,7 @@ export function stateFromSessionRecords(workDir: string, entries: LooseObject[])
   const confidence = computeConfidence(current, config.bestDirection);
   const evidenceRegistry = buildEvidenceRegistry({ runs: current, workDir });
   const productClaimCoverage = buildProductClaimCoverage({
+    requirements: explicitProductRequirements(entries),
     goal: config.goal,
     acceptedEvidence: current
       .filter((run) => isAcceptedCurrentRun(run))
