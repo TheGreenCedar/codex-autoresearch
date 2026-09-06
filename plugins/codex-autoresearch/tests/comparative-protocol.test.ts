@@ -91,6 +91,14 @@ function fixture(stage = "pilot") {
   return { accepted, schedule, receipts };
 }
 
+test("comparison accepts the stable 3.0 artifact without changing its pinned identity", () => {
+  const input = protocol();
+  input.arms["candidate-3.0"].version = "3.0.0";
+  const accepted = parseComparisonProtocol(input);
+  assert.equal(accepted.arms["candidate-3.0"].version, "3.0.0");
+  assert.equal(accepted.arms["candidate-3.0"].runtimeDigest, "3".repeat(64));
+});
+
 test("comparison requires a separate explicit budget and fixed sealed schedule", () => {
   assert.throws(
     () => parseComparisonProtocol({ ...protocol(), authorization: null }),

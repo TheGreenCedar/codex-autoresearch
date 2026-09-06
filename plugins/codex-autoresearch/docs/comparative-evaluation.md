@@ -1,6 +1,6 @@
 # Comparative evaluation protocol
 
-The 3.0 candidate has no demonstrated advantage over ordinary Codex or released 2.9.0. Engineering checks and the public synthetic GitHub fixture establish implementation behavior. Comparative benefit and stable release require a separately funded study.
+Version 3.0 has no demonstrated advantage over ordinary Codex or released 2.9.0. Its release is based on engineering checks and the synthetic GitHub integration fixture. A comparison study is optional and requires a separate budget before any model runs. This protocol governs comparative claims, not permission to publish a release.
 
 The comparison tool prepares a fixed, randomized schedule and collects signed host receipts and blinded assessments. It does not start models. The accepted host runs the trials and must enforce the same total allowance for each task in each comparison group, called an arm. The collector pairs each task's results across arms for the independently preregistered analysis. It does not decide whether the candidate is better; its own conclusion stays inconclusive.
 
@@ -12,7 +12,7 @@ The comparison tool prepares a fixed, randomized schedule and collects signed ho
 4. Execute the sealed schedule on the accepted host. Keep the arm mapping private from assessors and present outputs under the generated opaque trial IDs.
 5. Collect signed usage and outcome receipts, then apply the pinned analysis to paired task-level results. A task is the independent sampling unit; repeated seeds are averaged within its arm. Report infeasible-task handling separately. Unresolved uncertainty remains inconclusive.
 
-To pass, the candidate must produce more verified outcomes on uncertain tasks, avoid increasing cost per verified success, require less work from the operator, and meet the preregistered noninferiority margin on simple benchmarks. Test all four requirements against both ordinary Codex and released 2.9.0. Report intervals and failures, including total cost when no output succeeds. With zero successes, cost per success has no finite value. Passing only some requirements does not pass the comparative release gate.
+To pass, the candidate must produce more verified outcomes on uncertain tasks, avoid increasing cost per verified success, require less work from the operator, and meet the preregistered noninferiority margin on simple benchmarks. Test all four requirements against both ordinary Codex and released 2.9.0. Report intervals and failures, including total cost when no output succeeds. With zero successes, cost per success has no finite value. Passing only some requirements does not establish the full comparative benefit claim.
 
 ## Harness
 
@@ -37,7 +37,7 @@ The protocol has `schemaVersion: 1`, an ID, stage (`pilot` or `scoring`), one mo
 - `aggregatePerTaskArm`: `seconds`, `tokens`, and `costUsd` shared across all seeds, preparation, failures, reviews, interventions, recovery, and handoff for that task/arm.
 - `tasks`: unique IDs, kind (`uncertain`, `simple`, or `infeasible`), independent author reference, input digest, and sealing time.
 - `seeds`: the fixed seed identities.
-- `arms`: exactly `ordinary-codex`, `released-2.9.0`, and `candidate-3.0`, each with a version and SHA-256 runtime fingerprint. Pin actual released 2.9.0 and the exact 3.0 prerelease artifact; a branch name is insufficient.
+- `arms`: exactly `ordinary-codex`, `released-2.9.0`, and `candidate-3.0`, each with a version and SHA-256 runtime fingerprint. Pin actual released 2.9.0 and the exact stable or prerelease 3.0 artifact; a branch name is insufficient.
 - `hostAuthority`: the accepted host reference, Ed25519 public key in PEM format, and reference to its actual aggregate-budget enforcement.
 - `assessmentAuthority`: a distinct blinded assessor reference and Ed25519 public key.
 - `preregistration` for scoring: a registry reference, SHA-256 analysis artifact digest, and simple-task noninferiority margin between zero and one.
@@ -52,4 +52,4 @@ A host payload binds `trialId`, `protocolDigest`, `model`, `environmentDigest`, 
 
 An assessor payload binds `trialId`, `protocolDigest`, and `artifactDigest`, with boolean `verifiedOutcome` and `infeasibleHandled` judgments. It must not contain the arm, runtime identity, or model. The assessment authority separately retains the factual evidence for each judgment. Infeasible tasks are not ordinary delivery failures: score the correctness of the infeasibility conclusion and handoff independently.
 
-The collector rejects mismatched actual conditions, missing accounting phases, duplicate receipts, substituted outputs, incomplete schedules, exposed arm fields, and aggregate overages. Its output retains the fixed protocol identity and paired task results. Funding the scoring study, applying the preregistered analysis, and deciding stable release remain explicit later decisions.
+The collector rejects mismatched actual conditions, missing accounting phases, duplicate receipts, substituted outputs, incomplete schedules, exposed arm fields, and aggregate overages. Its output retains the fixed protocol identity and paired task results. Funding the scoring study, applying the preregistered analysis, and accepting comparative claims remain separate decisions.

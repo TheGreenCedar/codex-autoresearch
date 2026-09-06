@@ -11,9 +11,9 @@ Codex Autoresearch helps improve local code against a repeatable benchmark. Give
 
 Use it for bounded performance or resource-use experiments: faster tests, lower build time, less memory, or higher throughput on a defined workload. Reviews, documentation, product research, and one-off fixes normally stay ordinary Codex work.
 
-The **3.0 prerelease candidate** also supports investigations where you know the outcome you want but have not settled on a method. You accept the objective, allowed changes, evidence requirements, and budget once. Preparation, failed attempts, repairs, confirmation, and delivery all use that same allowance. Goals without a numeric metric can use explicit conditions and counterexamples. See [Bounded investigations](plugins/codex-autoresearch/docs/investigations.md), or use the short benchmark path below.
+Version 3.0 also supports investigations where you know the outcome you want but have not settled on a method. You accept the objective, allowed changes, evidence requirements, and budget once. Preparation, failed attempts, repairs, confirmation, and delivery all use that same allowance. Goals without a numeric metric can use explicit conditions and counterexamples. See [Bounded investigations](plugins/codex-autoresearch/docs/investigations.md), or use the short benchmark path below.
 
-Stable 3.0 requires a separate release decision. This candidate includes a disabled [comparison protocol and collection harness](plugins/codex-autoresearch/docs/comparative-evaluation.md). No model-driven comparison has been run and no comparative benefit is established.
+The 3.0 release is based on engineering verification. No model-driven comparison has been run, so it makes no claim of better outcomes or lower cost than ordinary Codex or 2.9.0. The optional [comparison protocol and collection harness](plugins/codex-autoresearch/docs/comparative-evaluation.md) stays disabled unless a study receives a separate budget.
 
 ![Codex Autoresearch dashboard with synthetic example measurements](plugins/codex-autoresearch/assets/showcase/dashboard-demo.png)
 

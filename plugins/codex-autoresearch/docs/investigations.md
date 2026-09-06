@@ -14,7 +14,7 @@ Imported evidence stays historical until it has been checked against an explicit
 
 ## Release status
 
-The 3.0 candidate requires engineering verification and a separate comparative evaluation before stable release. Its comparison harness must not start model-driven trials without an accepted trial budget. No improvement over ordinary Codex or 2.9 is established by the implementation itself.
+The 3.0 release is based on engineering verification. No model-driven comparison was run, and improvement over ordinary Codex or 2.9.0 remains unproven. The optional comparison harness requires a separate accepted trial budget.
 
 ## Start and continue
 

@@ -1,6 +1,6 @@
 {
   "name": "codex-autoresearch",
-  "version": "3.0.0-rc.1",
+  "version": "3.0.0",
   "description": "Bounded Codex investigations and measured loops with durable evidence and verified delivery.",
   "author": {
     "name": "Albert Najjar",

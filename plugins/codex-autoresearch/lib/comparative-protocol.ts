@@ -102,9 +102,10 @@ export function parseComparisonProtocol(value: unknown): ComparisonProtocol {
   if (
     Object.keys(rawArms).length !== 3 ||
     arms["released-2.9.0"].version !== "2.9.0" ||
-    !arms["candidate-3.0"].version.startsWith("3.0.0-")
+    (arms["candidate-3.0"].version !== "3.0.0" &&
+      !arms["candidate-3.0"].version.startsWith("3.0.0-"))
   )
-    throw new Error("Compare ordinary Codex, released 2.9.0, and an identified 3.0 prerelease.");
+    throw new Error("Compare ordinary Codex, released 2.9.0, and an identified 3.0 artifact.");
   const host = outcomeObject(input.hostAuthority, "host telemetry authority"),
     assessor = outcomeObject(input.assessmentAuthority, "blinded assessment authority");
   const key = (value: unknown, label: string) => {
@@ -418,7 +419,7 @@ export function collectComparison(
         "simple benchmark noninferiority",
       ],
       requirement:
-        "Apply the independently preregistered analysis to these paired task-level results. Unresolved uncertainty remains inconclusive; this collector does not authorize a stable release.",
+        "Apply the independently preregistered analysis to these paired task-level results. Unresolved uncertainty remains inconclusive; this collector does not establish comparative benefit.",
     },
   };
 }
