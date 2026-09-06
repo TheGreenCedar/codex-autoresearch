@@ -158,18 +158,47 @@ test("a successful parent cannot release exposure while an unrefed descendant is
     // Windows needs detached=true for the orphan to survive its Node parent.
     const action = await fixture(
       cwd,
-      `const fs = require('node:fs'); const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 100)'], { stdio: 'ignore', detached: process.platform === 'win32' }); child.unref(); fs.writeFileSync('src/descendant.txt', String(child.pid)); console.log('AUTORESEARCH_OBSERVATION {"kind":"predicate","observed":"satisfied"}');`,
+      `const fs = require('node:fs'); const child = require('node:child_process').spawn(process.execPath, ['-e', "setInterval(() => { if (require('node:fs').existsSync('src/stop-descendant.txt')) process.exit(0); }, 100)"], { stdio: 'ignore', detached: process.platform === 'win32' }); child.unref(); fs.writeFileSync('src/descendant.txt', String(child.pid)); console.log('AUTORESEARCH_OBSERVATION {"kind":"predicate","observed":"satisfied"}');`,
     );
     await nominateOutcomeAction(cwd, action);
     await launchOutcomeWorker(cwd, "A1");
-    const receipt = await waitFor(cwd, (entry) =>
-      ["failed", "unknown"].includes(entry.status.kind),
-    );
-    assert.notEqual(receipt.result?.validity, "valid");
-    const pid = Number(await fsp.readFile(path.join(cwd, "src", "descendant.txt"), "utf8"));
-    const child = await inspectProcessIdentity(pid);
-    assert.equal(child.proven, true);
-    assert.equal(child.identity, null);
+    let descendantPid: number | undefined;
+    try {
+      const receipt = await waitFor(cwd, (entry) =>
+        ["failed", "unknown"].includes(entry.status.kind),
+      );
+      assert.notEqual(receipt.result?.validity, "valid");
+      descendantPid = Number(await fsp.readFile(path.join(cwd, "src", "descendant.txt"), "utf8"));
+      const child = await inspectProcessIdentity(descendantPid);
+      const state = (await readOutcome(cwd))!;
+      if (receipt.status.kind === "unknown") {
+        // Failed ownership queries cannot promise cleanup or release the reservation.
+        assert.equal(outcomeUsage(state).unknownExecutions, 1);
+        assert.equal(outcomeUsage(state).reservedSeconds, action.seconds);
+        await assert.rejects(
+          nominateOutcomeAction(cwd, { ...action, id: "A2" }),
+          /existing action/,
+        );
+        const resumed = await launchOutcomeWorker(cwd, "A1");
+        assert.equal(resumed.worker?.launchId, receipt.worker?.launchId);
+        assert.equal((await readOutcome(cwd))!.executions.length, 1);
+        assert.equal(outcomeUsage((await readOutcome(cwd))!).unknownExecutions, 1);
+      } else {
+        assert.equal(child.proven, true);
+        assert.equal(child.identity, null);
+        assert.equal(outcomeUsage(state).reservedSeconds, 0);
+      }
+    } finally {
+      // The fixture asks its own child to exit, without targeting a possibly reused PID.
+      await fsp.writeFile(path.join(cwd, "src", "stop-descendant.txt"), "stop");
+      if (descendantPid !== undefined) {
+        for (let attempt = 0; attempt < 20; attempt++) {
+          const child = await inspectProcessIdentity(descendantPid);
+          if (child.proven && child.identity === null) break;
+          await delay(100);
+        }
+      }
+    }
   });
 });
 
