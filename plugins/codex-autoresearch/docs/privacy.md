@@ -6,13 +6,13 @@ Codex Autoresearch has no hosted backend, account, or product telemetry of its o
 
 The target project may contain:
 
-- `autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.config.json`
+- `.autoresearch/autoresearch.md`, `autoresearch.jsonl`, and `autoresearch.config.json`
 - benchmark and checks wrappers
-- `autoresearch.ideas.md`
+- `.autoresearch/autoresearch.ideas.md`
 - `autoresearch.research/<slug>/`
 - static dashboard exports
 
-In Git repositories, current packet state and interrupted-log receipts live under `.git/autoresearch/`. Outside Git, they fall back to `autoresearch.last-run.json`, `autoresearch.progress.json`, and `autoresearch.pending-transaction.json` in the worktree. A Git repository falls back only when the private store is genuinely unwritable; conflicting copies fail closed. Setup does not add or edit `.gitattributes` to hide these files.
+Existing sessions may still use root-level `autoresearch.md` and `autoresearch.ideas.md`. In Git repositories, current packet state and interrupted-log receipts live under `.git/autoresearch/`. Outside Git, they fall back to `autoresearch.last-run.json`, `autoresearch.progress.json`, and `autoresearch.pending-transaction.json` in the worktree. A Git repository falls back only when the private store is genuinely unwritable; conflicting copies fail closed. Setup does not add or edit `.gitattributes` to hide these files.
 
 These records can include command names, relative paths, metric values, output excerpts, structured experiment notes, artifact names, and summaries of what Codex tried. A static dashboard export contains a snapshot of the same kind of information.
 

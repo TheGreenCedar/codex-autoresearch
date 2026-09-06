@@ -554,6 +554,7 @@ testWithTempRoot(
       root,
       "experimental-completion-authority",
       "Deliver a shippable lazy semantic retrieval performance improvement.",
+      true,
     );
     const groupsPath = path.join(root, "experimental-completion-authority.groups.json");
     const planned = await run(
@@ -888,7 +889,12 @@ async function generateFinalizerPlan(repo: string, output: string, goal: string)
   return { planned, plan: JSON.parse(await fsp.readFile(output, "utf8")) };
 }
 
-async function createCompletionAuditFixture(root: string, name: string, goal = "") {
+async function createCompletionAuditFixture(
+  root: string,
+  name: string,
+  goal = "",
+  explicitProductReview = false,
+) {
   const repo = path.join(root, name);
   await fsp.mkdir(repo, { recursive: true });
   await git(["init", "-b", "main"], repo);
@@ -907,6 +913,20 @@ async function createCompletionAuditFixture(root: string, name: string, goal = "
     ...(goal ? { goal } : {}),
     scope: ["src"],
   });
+  if (explicitProductReview)
+    await fsp.appendFile(
+      path.join(repo, "autoresearch.jsonl"),
+      JSON.stringify({
+        type: "config",
+        productProofRequirements: [
+          {
+            id: "independent_product_review",
+            label: "Independent review of the product claim",
+            requiredForProductGrade: true,
+          },
+        ],
+      }) + "\n",
+    );
   return { repo, sourceHead, ...authority };
 }
 

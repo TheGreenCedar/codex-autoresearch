@@ -36,6 +36,7 @@ const DECISION_PLAN_FIELDS = [
   "evaluatorIdentity",
   "requiredEvidence",
   "outcome",
+  "investigation",
   "learning",
   "failures",
 ] as const;
@@ -387,7 +388,12 @@ function checkDecisionPlanSchema(
     );
   }
 
-  const outcome = checkClosedObject(properties.outcome, `${path}.outcome`, ["kind"], violations);
+  const outcome = checkClosedObject(
+    properties.outcome,
+    `${path}.outcome`,
+    ["kind", "execution", "validity", "conclusion", "movement", "attainment", "codeAcceptance"],
+    violations,
+  );
   if (outcome) {
     checkString(outcome.kind, `${path}.outcome.kind`, violations, DECISION_OUTCOME_KINDS);
   }

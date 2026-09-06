@@ -145,6 +145,21 @@ export async function runCommandDecisionProtocol<T>({
     loadDecision,
   });
   assertExpectedRoute(command, "precondition", expectedWorkDir, precondition.snapshot.workDir);
+  if (
+    (commandArgs.actionFile ||
+      commandArgs.action_file ||
+      commandArgs.resume ||
+      commandArgs.observationFile ||
+      commandArgs.observation_file) &&
+    !precondition.snapshot.outcome
+  )
+    throw new Error(
+      "An accepted outcome with an explicit resource budget is required before governed work.",
+    );
+  if (precondition.snapshot.outcome && !["outcome", "next", "log"].includes(command))
+    throw new Error(
+      "This outcome uses versioned authority. Use outcome, next, and log; legacy session mutation is not permitted.",
+    );
   assertMutationCapability(command, commandArgs, precondition.plan, precondition.snapshot);
   await assertAcceptedContractCommandCompatibility(command, commandArgs, precondition);
   await acceptCompleteLegacyContract(command, commandArgs, precondition);
@@ -237,7 +252,13 @@ async function assertAcceptedContractCommandCompatibility(
   commandArgs: Readonly<Record<string, unknown>>,
   precondition: Extract<CanonicalSessionDecisionResult, { ok: true }>,
 ): Promise<void> {
-  if (command !== "next" || !precondition.snapshot.semanticFacts.contractDigest) return;
+  if (
+    command === "outcome" ||
+    precondition.snapshot.outcome ||
+    command !== "next" ||
+    !precondition.snapshot.semanticFacts.contractDigest
+  )
+    return;
   try {
     await acceptedExperimentContractForMutation({
       workDir: precondition.snapshot.workDir,
@@ -261,6 +282,7 @@ async function acceptCompleteLegacyContract(
   commandArgs: Readonly<Record<string, unknown>>,
   precondition: Extract<CanonicalSessionDecisionResult, { ok: true }>,
 ): Promise<void> {
+  if (command === "outcome" || precondition.snapshot.outcome) return;
   const capability = decisionCapabilityForCommand(command, commandArgs, {
     config: precondition.snapshot.config,
   });

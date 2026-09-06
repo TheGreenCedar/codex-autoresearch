@@ -1214,7 +1214,7 @@ async function draftGroupsPlan(args: CliArgs, cwd: string): Promise<FinalizePlan
     product_grade_issue: productGradeIssue,
     product_grade_summary: productGradeIssue
       ? "Experimental review branch only: product-grade proof is missing."
-      : "Product-grade proof is complete for the recorded claim coverage.",
+      : "Review covers the recorded benchmark result; broader product readiness is unverified.",
     groups,
   };
   return {
@@ -1717,7 +1717,7 @@ async function hydratePlanProductClaimCoverage(
       product_grade_issue: productGradeIssue,
       product_grade_summary: productGradeIssue
         ? "Experimental review branch only: product-grade proof is missing."
-        : "Product-grade proof is complete for the recorded claim coverage.",
+        : "Review covers the recorded benchmark result; broader product readiness is unverified.",
     };
   }
   await assertPlanProductClaimCoverage(config, cwd);

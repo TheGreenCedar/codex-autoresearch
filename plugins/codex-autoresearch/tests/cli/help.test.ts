@@ -51,12 +51,12 @@ test("full help preserves advanced and maintainer commands", () => {
 test("full help documents fixed-control rerun overrides on guarded commands", () => {
   const help = renderCliHelp({ all: true });
   for (const command of ["run", "next", "doctor", "benchmark-inspect", "benchmark-lint"]) {
-    const usageLine = help
+    const usageLines = help
       .split("\n")
-      .find((line) => line.includes(`node scripts/autoresearch.mjs ${command} --cwd <project>`));
+      .filter((line) => line.includes(`node scripts/autoresearch.mjs ${command} --cwd <project>`));
 
-    assert.ok(usageLine, `${command} usage line should be present`);
-    assert.match(usageLine, /--allow-fixed-control-rerun/);
+    assert.ok(usageLines.length, `${command} usage line should be present`);
+    assert.ok(usageLines.some((line) => line.includes("--allow-fixed-control-rerun")));
   }
 });
 

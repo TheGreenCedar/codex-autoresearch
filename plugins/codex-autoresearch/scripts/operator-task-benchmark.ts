@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { setTimeout as delay } from "node:timers/promises";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
@@ -6,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isResultSemantics } from "../lib/result-semantics.js";
 import { PLUGIN_VERSION } from "../lib/plugin-version.js";
 import { defaultCommandShell, renderShellCommand } from "../lib/command-rendering.js";
 import { resolvePackageRoot } from "../lib/runtime-paths.js";
@@ -173,6 +175,25 @@ const observationValidators: Record<
         "First-use routing did not produce an actionable unaccepted contract.",
       );
     }
+    const governed = asRecord(observations.governed, "governed investigation");
+    if (
+      governed.ticketId !== "A1" ||
+      governed.resumedId !== "A1" ||
+      governed.validity !== "valid" ||
+      governed.conclusion !== "refuted" ||
+      governed.remainingActions !== 2 ||
+      governed.deliveredStatus !== "satisfied" ||
+      governed.deliveredEndpoint !== "delivered" ||
+      governed.deliveryReceiptId !== "D1" ||
+      governed.status !== "active" ||
+      governed.criterionCovered !== false ||
+      governed.deliveryStatus !== "pending" ||
+      governed.legacyLedgerExists !== false
+    )
+      failCase(
+        "decision-consistency",
+        "Governed investigation lost its reservation, observation, or legacy isolation.",
+      );
     const terminalPlans = asRecordArray(observations.terminalPlans, "terminal decision plans");
     const dashboardPlan = asRecord(observations.dashboardPlan, "dashboard decision plan");
     const [terminalPlan] = terminalPlans;
@@ -184,7 +205,8 @@ const observationValidators: Record<
           !string(plan.generationId) ||
           !string(plan.phase) ||
           !string(plan.actionKind) ||
-          !string(plan.commandDigest),
+          !string(plan.commandDigest) ||
+          !isResultSemantics(plan.result),
       ) ||
       new Set(terminalPlans.map((plan) => JSON.stringify(plan))).size !== 1 ||
       JSON.stringify(dashboardPlan) !== JSON.stringify(terminalPlan) ||
@@ -442,8 +464,214 @@ async function decisionConsistency(root: string): Promise<Record<string, unknown
   return {
     terminalPlans,
     dashboardPlan,
+    governed: await governedInvestigation(root, env),
     firstUse,
     dashboardCommandOmitted: !string(nestedRecord(plans[3], "action").command),
+  };
+}
+
+async function governedInvestigation(
+  root: string,
+  env: NodeJS.ProcessEnv,
+): Promise<Record<string, unknown>> {
+  const cwd = path.join(root, "governed-investigation");
+  await fsp.mkdir(cwd);
+  await fsp.mkdir(path.join(cwd, "checks"));
+  await fsp.writeFile(
+    path.join(cwd, "checks/evaluate.cjs"),
+    `console.log('AUTORESEARCH_OBSERVATION {"kind":"predicate","observed":"satisfied"}');`,
+  );
+  const contractFile = path.join(root, "outcome-contract.json");
+  const actionFile = path.join(root, "outcome-action.json");
+  const observationFile = path.join(root, "outcome-observation.json");
+  await fsp.writeFile(
+    contractFile,
+    JSON.stringify({
+      id: "operator-outcome",
+      objective: "Assess synthetic compatibility",
+      criteria: [
+        {
+          id: "compatibility",
+          description: "Fixture output matches",
+          authority: "internal",
+          subject: "candidate",
+        },
+      ],
+      authorization: {
+        reference: "operator-test-budget",
+        worktrees: [cwd],
+        editable: ["src"],
+        protected: ["checks"],
+        effects: ["inspect", "execute"],
+        environments: ["local"],
+        delivery: "answer",
+      },
+      budget: { actions: 3 },
+    }),
+  );
+  await fsp.writeFile(
+    actionFile,
+    JSON.stringify({
+      id: "A1",
+      investigation: {
+        id: "H1",
+        question: "Does the synthetic example match?",
+        intervention: "Inspect its output",
+        distinguishingObservations: ["match", "counterexample"],
+        evidenceRefs: [],
+      },
+      purpose: "experiment",
+      effects: ["inspect"],
+      paths: [],
+      environment: "local",
+      seconds: 30,
+      mode: "managed",
+      argv: [],
+      evidenceRefs: [],
+      evaluator: {
+        id: "predicate-v1",
+        criterionIds: ["compatibility"],
+        method: { kind: "predicate" },
+        repeats: 1,
+        argv: [],
+        checkArgv: [],
+        environment: "local",
+      },
+    }),
+  );
+  await fsp.writeFile(
+    observationFile,
+    JSON.stringify({
+      id: "E1",
+      executionId: "A1",
+      criterionId: "compatibility",
+      text: "Synthetic counterexample",
+      completed: true,
+      observation: { observed: "counterexample" },
+      resolution: "refuted",
+    }),
+  );
+  expectJsonSuccess(
+    await runNode(
+      cli,
+      ["outcome", "start", "--cwd", cwd, "--contract-file", contractFile],
+      pluginRoot,
+      env,
+    ),
+  );
+  const next = expectJsonSuccess(
+    await runNode(cli, ["next", "--cwd", cwd, "--action-file", actionFile], pluginRoot, env),
+  );
+  const resumed = expectJsonSuccess(
+    await runNode(cli, ["next", "--cwd", cwd, "--resume", "A1"], pluginRoot, env),
+  );
+  const logged = expectJsonSuccess(
+    await runNode(
+      cli,
+      ["log", "--cwd", cwd, "--observation-file", observationFile],
+      pluginRoot,
+      env,
+    ),
+  );
+  const read = expectJsonSuccess(await runNode(cli, ["state", "--cwd", cwd], pluginRoot, env));
+  const action = JSON.parse(await fsp.readFile(actionFile, "utf8"));
+  const confirmedAction = {
+    ...action,
+    id: "A2",
+    investigation: {
+      ...action.investigation,
+      id: "H2",
+      question: "Does the executable fixture establish compatibility?",
+      evidenceRefs: ["E1"],
+    },
+    mode: "process",
+    effects: ["execute"],
+    evaluator: {
+      ...action.evaluator,
+      id: "predicate-v2",
+      argv: [process.execPath, "checks/evaluate.cjs"],
+      checkArgv: [process.execPath, "-e", "process.exit(0)"],
+    },
+  };
+  await fsp.writeFile(actionFile, JSON.stringify(confirmedAction));
+  let execution = expectJsonSuccess(
+    await runNode(cli, ["next", "--cwd", cwd, "--action-file", actionFile], pluginRoot, env),
+  );
+  const until = Date.now() + 15000;
+  while (nestedRecord(execution, "execution", "status").kind !== "completed") {
+    if (Date.now() >= until) throw new Error("Governed operator worker did not complete.");
+    await delay(100);
+    execution = expectJsonSuccess(
+      await runNode(cli, ["next", "--cwd", cwd, "--resume", "A2"], pluginRoot, env),
+    );
+  }
+  await fsp.writeFile(
+    observationFile,
+    JSON.stringify({
+      id: "E2",
+      executionId: "A2",
+      criterionId: "compatibility",
+      text: "Actual executable fixture passed",
+    }),
+  );
+  expectJsonSuccess(
+    await runNode(
+      cli,
+      ["log", "--cwd", cwd, "--observation-file", observationFile],
+      pluginRoot,
+      env,
+    ),
+  );
+  await fsp.writeFile(
+    actionFile,
+    JSON.stringify({
+      ...confirmedAction,
+      id: "A3",
+      purpose: "delivery",
+      mode: "managed",
+      effects: ["inspect"],
+      evaluator: null,
+    }),
+  );
+  expectJsonSuccess(
+    await runNode(cli, ["next", "--cwd", cwd, "--action-file", actionFile], pluginRoot, env),
+  );
+  await fsp.writeFile(
+    observationFile,
+    JSON.stringify({
+      id: "D1",
+      executionId: "A3",
+      delivery: { answer: "The executable fixture established compatibility." },
+    }),
+  );
+  const delivered = expectJsonSuccess(
+    await runNode(
+      cli,
+      ["log", "--cwd", cwd, "--observation-file", observationFile],
+      pluginRoot,
+      env,
+    ),
+  );
+  const completed = expectJsonSuccess(
+    await runNode(cli, ["finalize-preview", "--cwd", cwd], pluginRoot, env),
+  );
+  return {
+    deliveredStatus: nestedRecord(completed, "investigation").status,
+    deliveredEndpoint: nestedRecord(completed, "delivery").status,
+    deliveryReceiptId: nestedRecord(delivered, "delivery").id,
+    ticketId: nestedRecord(next, "actionTicket").id,
+    resumedId: nestedRecord(resumed, "execution").id,
+    validity: nestedRecord(logged, "evidence", "result").validity,
+    conclusion: nestedRecord(logged, "evidence", "result").conclusion,
+    remainingActions: nestedRecord(read, "investigation", "remaining").actions,
+    status: nestedRecord(read, "investigation").status,
+    criterionCovered: asRecord((read.criterionCoverage as unknown[])[0], "criterion coverage")
+      .covered,
+    deliveryStatus: nestedRecord(read, "delivery").status,
+    legacyLedgerExists: await fsp.access(path.join(cwd, "autoresearch.jsonl")).then(
+      () => true,
+      () => false,
+    ),
   };
 }
 
@@ -460,6 +688,7 @@ function publicPlanFacts(plan: Record<string, unknown>): Record<string, unknown>
     contractDigest: plan.contractDigest,
     evaluatorIdentity: plan.evaluatorIdentity,
     commandDigest: action.commandDigest,
+    result: plan.result,
   };
 }
 

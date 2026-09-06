@@ -107,7 +107,7 @@ node scripts/autoresearch.mjs export --cwd examples/demo-session --output tmp/au
 
 `npm run test:dashboard:cross-browser` is the smaller release gate for the same built fixture in Playwright Chromium, Firefox, and WebKit. It runs the browsers sequentially, covers served and static modes, live refresh, chart keyboard selection, modal focus restoration, computed reduced-motion styles, forced colors, 200%/400% equivalent reflow, emulated touch taps and target geometry, and long-ledger pagination, then replaces the screenshots under `tmp/dashboard-cross-browser/` with evidence from the current run. Install its package-locked engines with `npx playwright install chromium firefox webkit`; CI installs their Linux system dependencies and uploads the ignored screenshots.
 
-Automation does not prove spoken output, physical-device behavior, or accessibility compliance. Before release, record the date, OS, browser and version, fixture and delivery mode, screen reader and version, and pass/fail/needs-follow-up plus the actual announcement for chart help, changed selection, modal context, and restored focus. Record Windows High Contrast, 200% and 400% zoom/reflow, and one touch-device or realistic touch-emulation result separately. Link that evidence from the release issue; do not turn an unrecorded or partial pass into a compliance claim.
+Automation does not prove spoken output, physical-device behavior, or accessibility compliance. For manual accessibility validation, record the date, OS, browser and version, fixture and delivery mode, screen reader and version, and the actual announcements for chart help, changed selection, modal context, and restored focus. Record Windows High Contrast, 200% and 400% zoom/reflow, and touch-device or realistic touch-emulation results separately. Link completed observations from the release record and name any checks that were not performed. Releases based on automated engineering checks must not claim manual accessibility validation or compliance.
 
 ## Package shape and runtime hydration
 
@@ -183,3 +183,8 @@ Update these together:
 - tests or docs that intentionally display or assert the version
 
 After release, inspect the installed versioned cache before treating source and installed behavior as the same runtime.
+
+
+Version 3.0 packages the internal outcome worker and comparison collector. Changes to either entrypoint must stay synchronized with package contents, bootstrap archive validation, and extracted-runtime smoke. Native platform checks include outcome worker cancellation and recovery. The CI workflow's synthetic round trip uploads a fixed candidate, dispatches the same workflow's bounded evaluator, and verifies the returned run and artifact. Its proof explicitly excludes evaluator independence and product usefulness.
+
+Run no model-driven pilot or scoring trials as part of engineering verification. The [comparison protocol](comparative-evaluation.md) requires a separate budget and accepted host before any trial execution. Version 3.0 is released on engineering verification. Comparative advantage remains unproven until a separately authorized study establishes it.

@@ -317,7 +317,7 @@ test("state --json exposes bounded ledgerHealth for large gaps without repairing
   });
 });
 
-test("state exposes missing product claim coverage for shippable retrieval work", async () => {
+test("state exposes explicit missing product proof despite narrative success claims", async () => {
   await withTempDir("product-claim-coverage-state", async (dir) => {
     await writeFile(
       path.join(dir, "autoresearch.jsonl"),
@@ -326,6 +326,13 @@ test("state exposes missing product claim coverage for shippable retrieval work"
           type: "config",
           name: "semantic retrieval",
           goal: "Deliver a shippable lazy semantic retrieval performance improvement.",
+          productProofRequirements: [
+            {
+              id: "independent_product_review",
+              label: "Independent product review",
+              requiredForProductGrade: true,
+            },
+          ],
           metricName: "seconds",
           bestDirection: "lower",
         }),
@@ -334,7 +341,7 @@ test("state exposes missing product claim coverage for shippable retrieval work"
           metric: 20,
           status: "keep",
           evidenceStatus: "accepted",
-          description: "Sidecar safety fails closed and foreground embedding work can be bounded.",
+          description: "Independent product review passed",
         }),
       ].join("\n") + "\n",
     );
@@ -351,7 +358,7 @@ test("state exposes missing product claim coverage for shippable retrieval work"
   });
 });
 
-test("finalize-preview json exposes missing product-grade claim coverage", async () => {
+test("finalize-preview exposes explicit missing product proof", async () => {
   await withTempDir("product-claim-coverage-finalize-preview", async (dir) => {
     await git(dir, ["init", "-b", "main"]);
     await git(dir, ["config", "user.email", "codex@example.invalid"]);
@@ -377,6 +384,13 @@ test("finalize-preview json exposes missing product-grade claim coverage", async
           type: "config",
           name: "semantic retrieval",
           goal: "Deliver a shippable lazy semantic retrieval performance improvement.",
+          productProofRequirements: [
+            {
+              id: "independent_product_review",
+              label: "Independent product review",
+              requiredForProductGrade: true,
+            },
+          ],
           metricName: "seconds",
           bestDirection: "lower",
         }),
@@ -384,7 +398,7 @@ test("finalize-preview json exposes missing product-grade claim coverage", async
           run: 1,
           status: "keep",
           metric: 1,
-          description: "Bound foreground embedding work.",
+          description: "Independent product review passed",
           evidence: "foreground embedding work can be bounded",
           commit: kept,
         }),

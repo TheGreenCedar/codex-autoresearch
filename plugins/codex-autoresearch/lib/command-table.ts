@@ -354,6 +354,14 @@ export const commandTable = [
     audience: "default",
     handler: "recommendNext",
     outputFields: [
+      "investigation",
+      "result",
+      "criterionCoverage",
+      "delivery",
+      "evidenceCount",
+      "investigations",
+      "evidence",
+      "executions",
       "ok",
       "workDir",
       "action",
@@ -836,12 +844,44 @@ export const commandTable = [
     },
   },
   {
+    name: "outcome",
+    cliCommand: "outcome",
+    handler: "outcomeCommand",
+    actionPolicy: "state_mutation",
+    decisionProtocol: "session-mutation",
+    category: "happy_path",
+    audience: "default",
+    defaultHelp: true,
+    outputFields: ["ok", "workDir", "outcomeId", "revision", "authorization", "budget"],
+    help: [
+      "node scripts/autoresearch.mjs outcome start|adopt --cwd <project> --contract-file <outcome.json>",
+      "node scripts/autoresearch.mjs outcome amend --cwd <project> --contract-file <outcome.json> --authorization <reference> --reason <text>",
+      "node scripts/autoresearch.mjs outcome stop --cwd <project> --reason <text>",
+    ],
+    description:
+      "Accept, adopt, amend, or stop an outcome with explicit cumulative resources and authorized scope.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        working_dir: { type: "string" },
+        action: { type: "string", enum: ["start", "adopt", "amend", "stop"] },
+        contract_file: { type: "string" },
+        authorization: { type: "string" },
+        reason: { type: "string" },
+      },
+      required: ["working_dir"],
+    },
+  },
+  {
     name: "next_experiment",
     cliCommand: "next",
     actionPolicy: "process_start",
     decisionProtocol: "session-mutation",
-    decisionCapability: "run-packet",
+    resolveDecisionCapability: (args) => (args.resume ? null : "run-packet"),
     recoveryForDiagnostics: [
+      "outcome-ticket",
+      "outcome-outstanding",
+      "outcome-budget-exhausted",
       "stale-packet",
       "packet-status-authority-invalid",
       "legacy-contract-acceptance-required",
@@ -852,6 +892,8 @@ export const commandTable = [
     handler: "nextExperiment",
     outputFields: [
       "ok",
+      "execution",
+      "actionTicket",
       "workDir",
       "doctor",
       "run",
@@ -874,6 +916,7 @@ export const commandTable = [
     ],
     defaultHelp: true,
     help: [
+      "node scripts/autoresearch.mjs next --cwd <project> --action-file <action.json> | --resume <execution-id>",
       "node scripts/autoresearch.mjs next --cwd <project> [--compact] [--command <cmd>|--command-file <path>] [--packet-env-file <path>] [--packet-env-mode minimal|inherit] [--timeout-seconds <n>] [--allow-fixed-control-rerun]",
     ],
     description:
@@ -883,6 +926,9 @@ export const commandTable = [
       properties: {
         ...PACKET_RUN_PROPERTIES,
         compact: { type: "boolean" },
+        action_file: { type: "string" },
+        resume: { type: "string" },
+        cancel: { type: "boolean" },
       },
       required: ["working_dir"],
     },
@@ -936,17 +982,27 @@ export const commandTable = [
     category: "happy_path",
     audience: "default",
     handler: "logExperiment",
-    outputFields: ["ok", "workDir", "experiment", "continuation"],
+    outputFields: [
+      "ok",
+      "workDir",
+      "experiment",
+      "continuation",
+      "evidence",
+      "delivery",
+      "artifact",
+    ],
     defaultHelp: true,
     help: [
+      "node scripts/autoresearch.mjs log --cwd <project> --observation-file <observation.json>",
       "node scripts/autoresearch.mjs log --cwd <project> (--metric <n>|--from-last) --status keep|discard|crash|checks_failed|measure --description <text> [--metrics <json>|--metrics-file <path>] [--asi <json>|--asi-json-file <path>] [--learning <json>|--learning-json-file <path>] [--failure <json>|--failure-json-file <path>] [--evidence-status accepted|rejected|provisional|superseded] [--commit <hash>] [--commit-paths <paths>] [--allow-add-all] [--revert-paths <paths>]",
     ],
     description:
-      "Append an experiment result, keep/commit or discard/revert changes, then return whether the active loop should immediately continue.",
+      "Record a governed observation or delivery from observation_file, or log a benchmark result with keep/discard handling and continuation guidance.",
     inputSchema: {
       type: "object",
       properties: {
         working_dir: { type: "string" },
+        observation_file: { type: "string" },
         commit: { type: "string" },
         metric: { type: "number" },
         status: {
@@ -973,7 +1029,8 @@ export const commandTable = [
         allow_dirty_revert: { type: "boolean" },
         from_last: { type: "boolean" },
       },
-      required: ["working_dir", "description"],
+      required: ["working_dir"],
+      anyOf: [{ required: ["description"] }, { required: ["observation_file"] }],
     },
   },
   {
@@ -984,6 +1041,14 @@ export const commandTable = [
     audience: "default",
     handler: "publicState",
     outputFields: [
+      "investigation",
+      "result",
+      "criterionCoverage",
+      "delivery",
+      "evidenceCount",
+      "investigations",
+      "evidence",
+      "executions",
       "ok",
       "workDir",
       "runs",
@@ -1157,6 +1222,14 @@ export const commandTable = [
     audience: "default",
     handler: "finalizePreview",
     outputFields: [
+      "investigation",
+      "result",
+      "criterionCoverage",
+      "delivery",
+      "evidenceCount",
+      "investigations",
+      "evidence",
+      "executions",
       "ok",
       "ready",
       "warnings",
@@ -1441,7 +1514,8 @@ export const commandTable = [
         aliases: ["progressStderr", "progress_stderr"],
       },
     ],
-    description: "Write a self-contained fallback HTML snapshot for autoresearch.jsonl.",
+    description:
+      "Write a self-contained read-only dashboard snapshot. Governed outcome exports stay in private artifact storage; output names resolve within that exports directory.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1500,6 +1574,14 @@ export const commandTable = [
     audience: "default",
     handler: "doctorSession",
     outputFields: [
+      "investigation",
+      "result",
+      "criterionCoverage",
+      "delivery",
+      "evidenceCount",
+      "investigations",
+      "evidence",
+      "executions",
       "ok",
       "workDir",
       "config",

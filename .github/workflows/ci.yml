@@ -1,6 +1,17 @@
 name: CI
+run-name: ${{ inputs.autoresearch_confirmation == 'true' && format('autoresearch-confirmation:{0}', fromJSON(inputs.confirmation).attempt_id) || format('CI {0}', github.ref_name) }}
 
 on:
+  workflow_dispatch:
+    inputs:
+      autoresearch_confirmation:
+        description: Run the fixed synthetic confirmation protocol
+        type: string
+        default: 'false'
+      confirmation:
+        description: Serialized adapter nomination
+        type: string
+        default: '{}'
   push:
     branches:
       - main
@@ -15,11 +26,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.autoresearch_confirmation == 'true' && github.run_id || 'ordinary' }}
   cancel-in-progress: true
 
 jobs:
   workflow-policy:
+    if: inputs.autoresearch_confirmation != 'true'
     name: Workflow policy
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -83,7 +95,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dashboard-cross-browser-${{ github.run_attempt }}
-          path: plugins/codex-autoresearch/tmp/dashboard-cross-browser/
+          path: |
+            plugins/codex-autoresearch/tmp/dashboard-cross-browser/
+            plugins/codex-autoresearch/tmp/dashboard-outcome/
           if-no-files-found: warn
           retention-days: 14
 
@@ -92,3 +106,82 @@ jobs:
 
       - name: Run finalizer launcher smoke test
         run: node scripts/finalize-autoresearch.mjs --help
+
+  synthetic-roundtrip:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: workflow-policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: write
+    defaults:
+      run:
+        working-directory: plugins/codex-autoresearch
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+      - run: npm ci --prefer-offline --no-audit
+      - run: npm run build:node
+      - name: Set synthetic paths
+        run: |
+          echo "AUTORESEARCH_SYNTHETIC_CWD=$RUNNER_TEMP/autoresearch-synthetic-subject" >> "$GITHUB_ENV"
+          echo "AUTORESEARCH_SYNTHETIC_OUTPUT=$RUNNER_TEMP/autoresearch-synthetic-output" >> "$GITHUB_ENV"
+      - run: node dist/scripts/synthetic-confirmation.mjs prepare
+      - id: candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: autoresearch-synthetic-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/autoresearch-synthetic-output/candidate.json
+          retention-days: 7
+          if-no-files-found: error
+      - run: node dist/scripts/synthetic-confirmation.mjs parent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTORESEARCH_WORKFLOW_REVISION: ${{ github.event.pull_request.head.sha }}
+          AUTORESEARCH_WORKFLOW_REF: ${{ github.head_ref }}
+          AUTORESEARCH_CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.artifact-id }}
+          AUTORESEARCH_CANDIDATE_ARTIFACT_DIGEST: ${{ steps.candidate.outputs.artifact-digest }}
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: autoresearch-synthetic-roundtrip-${{ github.run_id }}
+          path: ${{ runner.temp }}/autoresearch-synthetic-output/roundtrip.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  synthetic-confirmation:
+    if: github.event_name == 'workflow_dispatch' && inputs.autoresearch_confirmation == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        working-directory: plugins/codex-autoresearch
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+      - run: npm ci --prefer-offline --no-audit
+      - run: npm run build:node
+      - name: Set confirmation paths
+        run: |
+          echo "AUTORESEARCH_SYNTHETIC_CWD=$RUNNER_TEMP/autoresearch-confirmation-subject" >> "$GITHUB_ENV"
+          echo "AUTORESEARCH_SYNTHETIC_OUTPUT=$RUNNER_TEMP/autoresearch-confirmation-output" >> "$GITHUB_ENV"
+      - run: node dist/scripts/synthetic-confirmation.mjs confirm
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTORESEARCH_CONFIRMATION_INPUT: ${{ inputs.confirmation }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: autoresearch-confirmation-${{ fromJSON(inputs.confirmation).attempt_id }}
+          path: ${{ runner.temp }}/autoresearch-confirmation-output/receipt.json
+          retention-days: 14
+          if-no-files-found: error

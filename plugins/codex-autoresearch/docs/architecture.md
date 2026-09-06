@@ -161,3 +161,10 @@ New notes and ideas share `.autoresearch/`; existing root documents remain autho
 Current-tree finalization is a separate recovery contract. It packages an explicitly reviewed clean non-session branch diff when commit-level keep evidence no longer describes the work. The whole diff becomes the review unit, so its plan, file set, exclusions, claim evidence, and approval must be checked directly.
 
 The contracts shared by these surfaces are listed in [Control plane](control-plane.md).
+
+
+## Governed outcomes
+
+Versioned outcome state uses the repository's existing private-state root and a shared lock across authorized worktrees. Immutable evaluator children, action reservations, execution receipts, dependency-aware evidence, retained candidate patches, and delivery receipts feed the existing decision compiler. Its outcome projection is the authority for terminal, dashboard, and finalization readouts.
+
+The packaged outcome worker owns process observation independently of the CLI. The GitHub adapter reconciles one durable nomination and validates remote receipts. Both feed the same cumulative ledger; uncertainty retains exposure. Delivery validates criterion coverage and the actual requested endpoint through a CLI transaction. The dashboard projects these records and performs no mutations. See [investigations](investigations.md) for trust and execution limits and [comparative evaluation](comparative-evaluation.md) for the separate study boundary.

@@ -225,6 +225,8 @@ export function buildDashboardViewModel(context: DashboardContext) {
     setup: setupPlan,
     guidedSetup,
     decisionPlanProjection: state.decisionPlanProjection || null,
+    investigationAudit: state.investigationAudit || null,
+    outcomeRuntime: state.investigationAudit ? state.runtimeProvenance || null : null,
     decisionEnvelope,
     decisionEnvelopeSummary,
     experimentEconomics: state.experimentEconomics || decisionEnvelope?.experimentEconomics || null,

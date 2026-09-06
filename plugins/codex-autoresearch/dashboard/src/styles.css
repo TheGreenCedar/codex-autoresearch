@@ -3252,3 +3252,28 @@ p {
 .dark-theme .recharts-area.trendArea path:first-child {
   fill: url(#trendAreaGradientDark);
 }
+
+.outcome-summary {
+  border-top: 1px solid var(--line, #d8dfdf);
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+}
+.outcome-summary h3 {
+  font-size: clamp(1.25rem, 2vw, 1.7rem);
+  margin: 0.5rem 0 1rem;
+  overflow-wrap: anywhere;
+}
+.outcome-records {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.outcome-records table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.outcome-records th,
+.outcome-records td {
+  text-align: left;
+  padding: 0.65rem;
+  border-bottom: 1px solid var(--line, #d8dfdf);
+}

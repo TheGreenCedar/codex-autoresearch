@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Find the broken layer before repeating the command. A retry with the same preconditions usually produces the same mess, only older.
+Find the broken layer before repeating the command. Check what failed and whether the relevant inputs have changed.
 
 ## Fit and session routing
 
@@ -9,7 +9,7 @@ Find the broken layer before repeating the command. A retry with the same precon
 | Architecture, docs, UX, product, research, or one-shot repair starts inventing benchmarks | Fit routing | Run `prompt-plan` once and follow `continue-direct`. Use the direct evidence capsule; create no session state. |
 | Explicit loop request starts with missing evaluator, checks, metric semantics, or scope | Contract completeness | Follow `needs-user` and ask only for the exact missing fields. Do not scan for plausible defaults. |
 | A vaguely similar prompt resumes or replaces an active session | Session relation | Treat unknown compatibility as unrelated. Matching requires repository, checkout, goal, metric, evaluator, checks, and scope agreement; replacement requires explicit intent. |
-| A paused loop keeps proposing more packets or fanout | Learning or failure stop | Continue the bounded parent task directly. Two eligible no-learning candidates or same-layer failures block another equivalent packet until relevant preconditions change. |
+| A paused loop keeps proposing more packets or fanout | Accepted stop policy | Follow the current decision and continue direct work when allowed. Repeated failures pause at the accepted `repeatedFailures.limit`; changing notes does not change the failure identity. |
 
 ## Install and runtime
 
@@ -72,7 +72,7 @@ Find the broken layer before repeating the command. A retry with the same precon
 | `quality_gap=0` appears to finish everything | Checklist scope is being overread | Read `researchIntegrity`, open proof gaps, and promotion status; start another discovery round when the question is still open. |
 | Packet state reports conflicting private stores | Both `.git/autoresearch/` and worktree fallback files exist | Inspect both copies and preserve the authoritative one; do not delete or merge them blindly. Rerun setup or the blocked mutation after the conflict is resolved. |
 | An older Codex task contains a bounded decision | Session evidence has not been imported | Run `session-forensics --cwd <project> --session-jsonl <path> --research-slug <slug> --dry-run`. |
-| Loop keeps running without learning | Stop-policy violation | Stop packets after two eligible no-learning candidates. Continue directly, rescope with the user, or explicitly accept a replacement contract; do not automatically fan out or transition. |
+| Loop repeats the same failure past its accepted limit | Stop-policy violation | Stop packets at `repeatedFailures.limit` for the same failure code and relevant preconditions. Continue directly, rescope with the user, or explicitly accept a replacement contract; do not automatically fan out or transition. Legacy learning notes do not decide whether work continues. |
 | Watchdog fires | No meaningful progress in the quiet window | Inspect active work, finalize useful keeps, or rescope. |
 | `lane-runner` rejects a scout command | Pre-execution command policy | Scout commands must match the strict Git read-only argv allowlist. There is no non-Git override; use an implementation lane with a separate worktree or declared write scope, and remember that neither provides process/filesystem containment. |
 | Primary metric must change | Session semantics changed | Use `new-segment`; do not edit the ledger by hand. |

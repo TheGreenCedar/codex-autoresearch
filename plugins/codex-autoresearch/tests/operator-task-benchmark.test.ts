@@ -21,6 +21,14 @@ const plan = {
   contractDigest: "contract-a",
   evaluatorIdentity: "evaluator-a",
   commandDigest: "command-a",
+  result: {
+    execution: "completed",
+    validity: "valid",
+    conclusion: "inconclusive",
+    movement: "improved",
+    attainment: "unsatisfied",
+    codeAcceptance: "unassessed",
+  },
 };
 const repoSnapshot = {
   head: "abc123\n",
@@ -37,6 +45,20 @@ const validObservations: Record<OperatorTaskCase, Record<string, unknown>> = {
     terminalPlans: Array.from({ length: 3 }, () => ({ ...plan })),
     dashboardPlan: { ...plan },
     dashboardCommandOmitted: true,
+    governed: {
+      ticketId: "A1",
+      resumedId: "A1",
+      validity: "valid",
+      conclusion: "refuted",
+      remainingActions: 2,
+      criterionCovered: false,
+      deliveryStatus: "pending",
+      deliveredStatus: "satisfied",
+      deliveredEndpoint: "delivered",
+      deliveryReceiptId: "D1",
+      status: "active",
+      legacyLedgerExists: false,
+    },
     firstUse: {
       completeDisposition: "run-loop",
       completeSessionRelation: "none",
@@ -255,3 +277,20 @@ function evidence(caseName: OperatorTaskCase, observations: Record<string, unkno
     observations,
   };
 }
+
+test("operator evidence rejects missing or contradictory result dimensions across surfaces", () => {
+  for (const result of [undefined, { ...plan.result, validity: "invented" }]) {
+    const changed = { ...plan, result };
+    assert.throws(
+      () =>
+        validateOperatorTaskEvidence(
+          evidence("decision-consistency", {
+            ...validObservations["decision-consistency"],
+            terminalPlans: [changed, changed, changed],
+            dashboardPlan: changed,
+          }),
+        ),
+      /diverged/,
+    );
+  }
+});

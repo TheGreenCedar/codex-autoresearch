@@ -1,4 +1,12 @@
 #!/usr/bin/env node
+import { formatCliJson } from "../lib/cli-json.js";
+import {
+  outcomeCommand,
+  nextOutcomeAction,
+  logInvestigationObservation,
+  maybeOutcomeReadout,
+} from "../lib/commands/outcome.js";
+import { readOutcome } from "../lib/outcome-store.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -268,7 +276,7 @@ export const AUTORESEARCH_RUNTIME_IDENTITY = {
 } as const;
 
 async function publicState(args: LooseObject): Promise<LooseObject> {
-  return await readPublicState(args);
+  return (await maybeOutcomeReadout(args)) ?? (await readPublicState(args));
 }
 
 function compactPublicState(state: LooseObject): LooseObject {
@@ -285,7 +293,7 @@ async function finalizationPressureForWorkDir(args: {
 }
 
 async function doctorSession(args: LooseObject): Promise<LooseObject> {
-  return await runDoctorSession(args);
+  return (await maybeOutcomeReadout(args)) ?? (await runDoctorSession(args));
 }
 const DASHBOARD_GUIDANCE_EXTRA_DROP_FIELDS = new Set([
   "runtimeDriftSummary",
@@ -1531,6 +1539,8 @@ async function onboardingPacket(args: LooseObject): Promise<LooseObject> {
 }
 
 async function recommendNext(args: LooseObject): Promise<LooseObject> {
+  const investigation = await maybeOutcomeReadout(args);
+  if (investigation) return investigation;
   const requestedCwd = String(args.working_dir || args.cwd || "");
   if (boolOption(args.compact, false) && !boolOption(args.full, false)) {
     const compact = await publicState({
@@ -3480,6 +3490,30 @@ async function dashboardViewModel(workDir: string, config: any, context: LooseOb
         ? projectDashboardDecisionPlan(canonicalState.decisionPlan as DecisionPlan)
         : null,
     resolvedDecision: canonicalState.resolvedDecision || null,
+    investigationAudit: canonicalState.investigation
+      ? {
+          investigations: canonicalState.investigations,
+          executions: canonicalState.executions?.map((receipt: LooseObject) => ({
+            id: receipt.id,
+            status: receipt.status?.kind,
+            result: receipt.result,
+            consumptionSource: receipt.consumptionSource,
+          })),
+          evidence: canonicalState.evidence?.map((evidence: LooseObject) => ({
+            id: evidence.id,
+            criterionId: evidence.criterionId,
+            text: evidence.text,
+            relation: evidence.relation,
+            historicalValidity: evidence.historicalValidity,
+          })),
+          deliveries: canonicalState.deliveries,
+          retainedPatches: canonicalState.retainedPatches?.map((patch: LooseObject) => ({
+            id: patch.id,
+            digest: patch.digest,
+            disposition: patch.disposition,
+          })),
+        }
+      : null,
   };
   return buildDashboardViewModelLazy({
     state: enrichedState as any,
@@ -4607,6 +4641,11 @@ async function realPathOrResolved(target: string): Promise<string> {
 }
 
 async function nextExperiment(args: any) {
+  if (args.actionFile || args.resume) return await nextOutcomeAction(args);
+  if (await readOutcome(resolveWorkDir(args.working_dir || args.cwd).workDir))
+    throw new Error(
+      "This outcome requires next --action-file or next --resume; legacy benchmark commands remain available outside governed outcomes.",
+    );
   const { workDir } = resolveWorkDir(args.working_dir || args.cwd);
   let ownsActiveProgress = false;
   return await runWithRequiredCleanup(
@@ -5051,6 +5090,7 @@ async function executeAutoresearchCli(
   if (migrationError) throw new CliUsageError(migrationError, command);
   await withOutsideWorkdirAuthorization(boolOption(args.allowOutsideWorkdir, false), async () => {
     const handlers = createCliCommandHandlers({
+      outcomeCommand,
       benchmarkInspect,
       benchmarkLint,
       checksInspect,
@@ -5061,11 +5101,19 @@ async function executeAutoresearchCli(
       doctorSession,
       exportDashboard,
       finalizeCurrentTree: buildFinalizeCurrentTree,
-      finalizePreview: buildFinalizePreview,
+      finalizePreview: async (args: LooseObject) =>
+        (await maybeOutcomeReadout(args)) ?? (await buildFinalizePreview(args)),
       gapCandidates: buildGapCandidates,
       guidedSetup,
       interactiveSetup,
-      logExperiment,
+      logExperiment: async (args: LooseObject) => {
+        if (args.observationFile) return await logInvestigationObservation(args);
+        if (await readOutcome(resolveWorkDir(args.cwd).workDir))
+          throw new Error(
+            "This outcome uses log --observation-file; legacy ledgers remain immutable history.",
+          );
+        return await logExperiment(args);
+      },
       ledgerDoctor,
       measureQualityGap,
       newSegment,
@@ -5170,7 +5218,7 @@ async function executeAutoresearchCli(
       writeStdout(outcome.text);
       return;
     }
-    writeStdout(JSON.stringify(redactCliResponseForOutput(outcome.result), null, 2));
+    writeStdout(formatCliJson(redactCliResponseForOutput(outcome.result)));
     if (outcome.keepAlive) return await new Promise(() => {});
   });
 }

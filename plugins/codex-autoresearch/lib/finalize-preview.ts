@@ -749,7 +749,7 @@ export async function finalizeCurrentTree(args: LooseObject) {
     product_grade_issue: productGradeIssue,
     product_grade_summary: productGradeIssue
       ? "Experimental review branch only: product-grade proof is missing."
-      : "Product-grade proof is complete for the recorded claim coverage.",
+      : "Review covers the recorded benchmark result; broader product readiness is unverified.",
     groups: [
       {
         title: `Current final tree for ${branch || "autoresearch"}`,

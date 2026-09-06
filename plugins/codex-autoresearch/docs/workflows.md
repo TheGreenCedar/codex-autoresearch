@@ -56,7 +56,7 @@ stateDiagram-v2
   Finalize --> [*]
 ```
 
-Two eligible no-learning candidates or two same-layer failures pause packet work unless that failure class's relevant preconditions changed. A remaining budget does not authorize another packet. Pausing never triggers automatic fanout, diversification, or a segment transition.
+Repeated execution failures pause packet work at the accepted `repeatedFailures.limit`, using the same failure code and relevant preconditions. Legacy learning notes do not trigger an automatic pause. A remaining budget does not authorize another packet. Pausing never triggers automatic fanout, diversification, or a segment transition.
 
 ## Explicit qualitative loop
 

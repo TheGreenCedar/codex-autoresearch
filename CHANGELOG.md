@@ -6,6 +6,19 @@ This project uses a root-only changelog because the root README is the public do
 
 Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older entries that mention MCP servers, MCP tools, or MCP resources describe historical release surfaces before the 1.3.3 removal.
 
+## 3.0.0 - 2026-09-05
+
+- Add bounded investigations for work whose method may change. The `outcome` commands preserve the accepted objective, permissions, and cumulative costs across preparation, failed attempts, repairs, confirmation, and delivery. An explicit budget is required; linked worktrees share reservations, and unresolved executions keep their reserved allowance.
+- Resume actions by their recorded identity without launching them twice. Evaluator versions are immutable, and goals can use predicate observations without inventing a metric. Existing benchmark sessions remain available.
+- Distinguish a valid observation, an improved metric, a reached target, and accepted code. Legacy learning notes no longer decide whether work continues. Repeated failures use the accepted limit and the same failure code and relevant preconditions.
+- Check whether each result still applies to its criterion after inputs change. Cached results do not count as new measurements. Selected changes can be saved as immutable patches, but saving part of a rejected candidate does not accept it. Product proof requirements must have explicit identities; goal wording cannot create them.
+- Keep process actions running in a packaged worker when the observing CLI closes. GitHub Actions confirmation verifies the candidate, evaluator, and execution receipt and preserves disclosed feedback. It records provider usage separately from local observation time; verified execution alone does not establish evaluator independence.
+- Deliver an answer or the complete checked patch only when every current criterion has evidence. Integration and deployment also require accepted targets and matching provider records. Terminal and dashboard show the same outcome, remaining allowance, evidence, and delivery state.
+- Preserve original legacy session bytes and referenced artifacts during adoption. Unknown historical costs stay unknown. Later legacy writes block dependent work; authorized reconciliation keeps both snapshots.
+- Keep dashboard exports outside the inputs being assessed. Windows cleanup rejects reused process IDs whose identities have changed and keeps the reservation when cleanup is uncertain.
+- Include an optional, disabled comparison protocol and receipt collector for separately funded studies, with support for the stable 3.0 artifact. This release is based on engineering verification; comparative benefit remains unproven.
+- Clarify the investigation, evidence, and release documentation, including the accepted retry limit. No model-driven experiments are required to use or install the release.
+
 ## 2.9.0 - 2026-09-05
 
 - Bound CI jobs to 15 minutes: run the full suite on Linux and focused native checks on macOS and Windows. Release reuses successful CI for its exact commit, then verifies the packaged artifact and provenance. Local full checks retain separate suite deadlines and report timeout causes.
