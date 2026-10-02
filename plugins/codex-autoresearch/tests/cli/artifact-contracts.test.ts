@@ -668,8 +668,8 @@ test("last-run packet storage redacts raw benchmark evidence and still logs from
 
 test("last-run packet storage redacts run benchmark contract command and option-file metadata", async () => {
   await withTempDir("last-run-contract-redaction", async (dir) => {
-    const commandSecret = "command-secret-abcdefghijklmnop";
-    const checksSecret = "checks-secret-zyxwvutsrqpon";
+    const commandSecret = "example-command-secret-abcdefghijklmnop";
+    const checksSecret = "example-checks-secret-zyxwvutsrqpon";
     const commandFile = path.join(dir, "private-packet.command");
     const envFile = path.join(dir, ".env.private");
     const checksCommand = `${quoteForAcceptedShell(process.execPath)} -e "process.exit(0)" -- --token ${checksSecret}`;

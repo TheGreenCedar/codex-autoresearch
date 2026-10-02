@@ -91,6 +91,8 @@ export async function runPackageArtifactCheck() {
     const packedEntries = packageEntryMap(packInfo);
     const requiredPaths = [
       ".codex-plugin/plugin.json",
+      "README.md",
+      "SECURITY.md",
       "assets/dashboard-build/dashboard-app.js",
       "assets/dashboard-build/dashboard-app.css",
       "docs/index.md",

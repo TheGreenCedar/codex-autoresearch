@@ -6,6 +6,11 @@ This project uses a root-only changelog because the root README is the public do
 
 Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older entries that mention MCP servers, MCP tools, or MCP resources describe historical release surfaces before the 1.3.3 removal.
 
+## Unreleased
+
+- Include installation, execution-boundary, and vulnerability-reporting guidance inside the plugin package. Verified runtime hydration accepts these package documents.
+- Mark synthetic credentials in security and lock-recovery tests explicitly as examples so source scans can distinguish fixtures from potential credentials without removing redaction coverage.
+
 ## 3.0.0 - 2026-09-05
 
 - Add bounded investigations for work whose method may change. The `outcome` commands preserve the accepted objective, permissions, and cumulative costs across preparation, failed attempts, repairs, confirmation, and delivery. An explicit budget is required; linked worktrees share reservations, and unresolved executions keep their reserved allowance.
