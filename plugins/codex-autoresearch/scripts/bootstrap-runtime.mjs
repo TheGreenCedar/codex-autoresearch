@@ -344,7 +344,12 @@ export function validateRuntimeArchiveEntries(entries) {
 }
 
 function isExpectedRuntimeArchiveFile(name) {
-  if ([".codex-plugin/plugin.json", "LICENSE", "package.json"].includes(name)) return true;
+  if (
+    [".codex-plugin/plugin.json", "LICENSE", "README.md", "SECURITY.md", "package.json"].includes(
+      name,
+    )
+  )
+    return true;
   if (/^assets\/[^/]+\.template$/.test(name)) return true;
   if (/^assets\/dashboard-build\/dashboard-app\.(?:css|js)$/.test(name)) return true;
   if (/^assets\/(?:icon|logo)\.svg$/.test(name)) return true;

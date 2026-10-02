@@ -519,6 +519,8 @@ test("runtime archive validation accepts only regular package files and director
       { name: "package/dist/scripts/autoresearch.mjs", type: "-" },
       { name: "package/assets/dashboard-build/dashboard-app.js", type: "-" },
       { name: "package/package.json", type: "-" },
+      { name: "package/README.md", type: "-" },
+      { name: "package/SECURITY.md", type: "-" },
     ]),
   );
 
@@ -530,6 +532,7 @@ test("runtime archive validation accepts only regular package files and director
     { name: "package/dist/hardlink", type: "h" },
     { name: "package/dist/device", type: "b" },
     { name: "package/unexpected.exe", type: "-" },
+    { name: "package/private.md", type: "-" },
   ]) {
     assert.throws(() => validateRuntimeArchiveEntries([entry]), /tarball/);
   }
@@ -632,7 +635,7 @@ test("parallel runtime dead-owner recovery remains exclusive", async () => {
     );
     await writeFile(
       recoveryPath,
-      `${JSON.stringify({ pid: 2_147_483_647, createdAt: "2020-01-01T00:00:00.000Z", token: "dead-recovery" })}\n`,
+      `${JSON.stringify({ pid: 2_147_483_647, createdAt: "2020-01-01T00:00:00.000Z", token: "example-dead-recovery-owner" })}\n`,
       "utf8",
     );
     let active = 0;

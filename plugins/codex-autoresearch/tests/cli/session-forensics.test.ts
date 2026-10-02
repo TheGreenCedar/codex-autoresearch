@@ -754,7 +754,7 @@ test("next ignores hard capsule projections and follows the accepted contract", 
 
 test("next refuses fixed-control rerun commands without override", async () => {
   await withTempDir("fixed-control-next", async (dir) => {
-    const secret = "sk-fixed-control-next-secret-123";
+    const secret = "example-fixed-control-next-secret";
     const sentinel = path.join(dir, "next-sentinel.txt");
     const command = `${quoteForAcceptedShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForAcceptedShell(sentinel)} --mode no-codestory --token=${secret}`;
     await setupFixture(dir, {
@@ -800,7 +800,7 @@ test("next refuses fixed-control rerun commands without override", async () => {
 
 test("doctor check-benchmark refuses fixed-control rerun commands without executing", async () => {
   await withTempDir("fixed-control-doctor", async (dir) => {
-    const secret = "sk-fixed-control-doctor-secret-123";
+    const secret = "example-fixed-control-doctor-secret";
     const sentinel = path.join(dir, "doctor-sentinel.txt");
     const command = `${quoteForRunShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForRunShell(sentinel)} --mode no-codestory --token=${secret}`;
     await writeFile(
@@ -847,7 +847,7 @@ test("doctor check-benchmark refuses fixed-control rerun commands without execut
 
 test("benchmark-lint refuses fixed-control explicit commands without override", async () => {
   await withTempDir("fixed-control-benchmark-lint", async (dir) => {
-    const secret = "sk-fixed-control-lint-secret-123";
+    const secret = "example-fixed-control-lint-secret";
     const sentinel = path.join(dir, "lint-sentinel.txt");
     const command = `${quoteForRunShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForRunShell(sentinel)} --mode no-codestory --token=${secret}`;
     await writeFile(
@@ -892,7 +892,7 @@ test("benchmark-lint refuses fixed-control explicit commands without override", 
 
 test("benchmark-inspect refuses fixed-control explicit commands without override", async () => {
   await withTempDir("fixed-control-benchmark-inspect", async (dir) => {
-    const secret = "sk-fixed-control-inspect-secret-123";
+    const secret = "example-fixed-control-inspect-secret";
     const sentinel = path.join(dir, "inspect-sentinel.txt");
     const command = `${quoteForRunShell(process.execPath)} -e "require('node:fs').writeFileSync(process.argv[1], 'ran'); console.log('METRIC score=1')" ${quoteForRunShell(sentinel)} --mode no-codestory --token=${secret}`;
     await writeFile(
@@ -937,7 +937,7 @@ test("benchmark-inspect refuses fixed-control explicit commands without override
 
 test("state exposes fixed-control config", async () => {
   await withTempDir("fixed-control-state", async (dir) => {
-    const secret = "sk-fixed-control-state-secret-123";
+    const secret = "example-fixed-control-state-secret";
     const longReason = "The no-CodeStory control is fixed for this round. " + "r".repeat(500);
     const forbiddenCommandPatterns = Array.from(
       { length: 16 },

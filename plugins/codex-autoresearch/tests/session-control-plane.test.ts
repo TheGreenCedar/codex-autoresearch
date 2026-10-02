@@ -330,7 +330,7 @@ test("fixed control guard blocks forbidden rerun commands", () => {
 });
 
 test("fixed control state summary bounds arrays strings and command hints", () => {
-  const secret = "sk-fixed-control-secret-123";
+  const secret = "example-fixed-control-summary-secret";
   const summary = fixedControlStateSummary(
     normalizeFixedControlConfig({
       artifact: "target/control/no-codestory.json",

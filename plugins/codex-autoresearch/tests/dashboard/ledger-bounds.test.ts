@@ -105,12 +105,12 @@ test(
       },
       {
         name: "old-malformed",
-        secret: "secret-packet-must-not-leak",
+        secret: "example-secret-packet-must-not-leak",
         lifecycle: [
           {
             type: "process_lifecycle",
             identity: {
-              packetId: "secret-packet-must-not-leak malformed",
+              packetId: "example-secret-packet-must-not-leak malformed",
               processId: "benchmark",
             },
             event: "started",

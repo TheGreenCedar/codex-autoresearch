@@ -38,6 +38,8 @@ test("version, manifest, package, and command surfaces remain internally consist
     "scripts/bootstrap-runtime.mjs",
     "scripts/operator-task-benchmark.mjs",
     ".codex-plugin/",
+    "README.md",
+    "SECURITY.md",
   ]) {
     assert.ok(files.has(file), `${file} must be packaged`);
   }
@@ -57,6 +59,8 @@ test("version, manifest, package, and command surfaces remain internally consist
 test("documentation links resolve and session artifacts remain excluded from product commits", async () => {
   const markdown = [
     path.join(repoRoot, "README.md"),
+    path.join(pluginRoot, "README.md"),
+    path.join(pluginRoot, "SECURITY.md"),
     ...(await markdownFiles(path.join(pluginRoot, "docs"))),
     ...(await markdownFiles(path.join(pluginRoot, "skills"))),
   ];

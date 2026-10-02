@@ -475,7 +475,7 @@ test("live dashboard keeps debug ledger disabled unless explicitly enabled", asy
   await withTempDir("autoresearch", "serve-debug-ledger", async (dir) => {
     await writeFile(
       path.join(dir, "autoresearch.jsonl"),
-      `${JSON.stringify({ type: "config", secret: "abcdefghijklmnop" })}\n`,
+      `${JSON.stringify({ type: "config", secret: "example-dashboard-config-secret" })}\n`,
       "utf8",
     );
     const disabled = await serveAutoresearch({
@@ -505,7 +505,7 @@ test("live dashboard keeps debug ledger disabled unless explicitly enabled", asy
         Host: `127.0.0.1:${enabled.port}`,
       });
       assert.equal(enabledLedger.status, 200);
-      assert.doesNotMatch(enabledLedger.body, /abcdefghijklmnop/);
+      assert.doesNotMatch(enabledLedger.body, /example-dashboard-config-secret/);
       assert.match(enabledLedger.body, /"<redacted>"/);
     } finally {
       await Promise.all(
