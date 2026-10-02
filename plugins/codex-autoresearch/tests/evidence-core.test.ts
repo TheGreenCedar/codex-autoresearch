@@ -178,7 +178,7 @@ test("runner minimal environment retains Windows command resolution without leak
       SystemRoot: "C:\\Windows",
       TEMP: "C:\\Temp",
       TMP: "C:\\Temp",
-      PRIVATE_TOKEN: "must-not-leak",
+      PRIVATE_TOKEN: "example-private-env-token",
     }),
     {
       Path: "C:\\Windows\\System32",
@@ -624,7 +624,7 @@ test("parallel dead-owner recovery admits exactly one session mutation", async (
     );
     await writeFile(
       recoveryPath,
-      `${JSON.stringify({ pid: 2_147_483_647, command: "stale-recovery", timestamp: new Date(0).toISOString(), token: "dead-recovery" })}\n`,
+      `${JSON.stringify({ pid: 2_147_483_647, command: "stale-recovery", timestamp: new Date(0).toISOString(), token: "example-dead-recovery-owner" })}\n`,
     );
     let actions = 0;
     const contenders = await Promise.allSettled(
@@ -831,9 +831,10 @@ test("core last-run freshness can validate command, git, and scoped file context
 });
 
 test("evidence redactor hides secrets, credentials, home paths, and env files", () => {
+  // The provider-shaped token has a deliberately sequential synthetic payload.
   const text = [
     "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
-    "api_key=sk-test-1234567890abcdef",
+    "api_key=sk-test-abcdefghijklmnopqrstuvwxyz-example",
     "family key api key abcdefghijklmnop",
     "node scripts/private-check.mjs --api-key flagsecretvalue123",
     'node scripts/private-check.mjs --client-secret "flag secret value 456"',
@@ -865,15 +866,15 @@ test("evidence redactor hides secrets, credentials, home paths, and env files", 
   const object = redactEvidenceObject({
     command: text,
     nested: {
-      token: "123456789abcdef",
-      accessToken: "zyxwvutsrqponmlkjihg",
-      client_secret: "sk-test-structured-secret",
+      token: "example-structured-token",
+      accessToken: "example-structured-api-key",
+      client_secret: "example-structured-client-secret",
       tokenCount: 123456789,
     },
   });
-  assert.doesNotMatch(JSON.stringify(object), /123456789abcdef/);
-  assert.doesNotMatch(JSON.stringify(object), /zyxwvutsrqponmlkjihg/);
-  assert.doesNotMatch(JSON.stringify(object), /sk-test-structured-secret/);
+  assert.doesNotMatch(JSON.stringify(object), /example-structured-token/);
+  assert.doesNotMatch(JSON.stringify(object), /example-structured-api-key/);
+  assert.doesNotMatch(JSON.stringify(object), /example-structured-client-secret/);
   assert.equal(object.nested.token, "<redacted>");
   assert.equal(object.nested.accessToken, "<redacted>");
   assert.equal(object.nested.client_secret, "<redacted>");
@@ -1630,7 +1631,7 @@ test("session forensics parses bounded signals without raw body persistence", as
       "Process exited with code 1",
       "Original token count: 25000",
       "Output:",
-      "api_key=sk-test-1234567890abcdef",
+      "api_key=sk-test-abcdefghijklmnopqrstuvwxyz-example",
       "Total output lines: 600",
     ].join("\n");
     const entries = [

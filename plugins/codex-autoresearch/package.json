@@ -17,6 +17,8 @@
   "files": [
     ".codex-plugin/",
     "LICENSE",
+    "README.md",
+    "SECURITY.md",
     "assets/*.template",
     "assets/dashboard-build/",
     "assets/icon.svg",
