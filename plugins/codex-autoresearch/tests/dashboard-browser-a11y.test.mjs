@@ -48,6 +48,157 @@ test("Chrome startup recognizes a DevTools endpoint split across stderr chunks",
   browser.stderr.destroy();
 });
 
+test(
+  "real browser preserves full-history best and canonical review acceptance",
+  { timeout: 90_000 },
+  async () => {
+    const { dashboardHtml: render, dashboardEntriesForClient } =
+      await import("../dist/lib/dashboard-transport.mjs");
+    const { buildDashboardViewModel } = await import("../dist/lib/dashboard-view-model.mjs");
+    const { foldDashboardLedgerFile } = await import("../dist/lib/dashboard-ledger.mjs");
+    const dir = await mkdtemp(path.join(tmpdir(), "dashboard-readout-browser-"));
+    const browserExecutable = resolveBrowserExecutable();
+    assert.ok(browserExecutable);
+    let browser;
+    let client;
+    try {
+      browser = await launchBrowser(browserExecutable);
+      client = await CdpClient.connect(browser.wsUrl);
+      for (const { acknowledged, weighted, expectedBest } of [
+        { acknowledged: false, weighted: false, expectedBest: "1s" },
+        { acknowledged: true, weighted: false, expectedBest: "0.1s" },
+        { acknowledged: false, weighted: true, expectedBest: "0.80" },
+      ]) {
+        const config = {
+          type: "config",
+          name: "Full-history readout",
+          metricName: "seconds",
+          metricUnit: "s",
+          bestDirection: "lower",
+          ...(weighted
+            ? { metricDefinition: { mode: "weighted_cost", weights: { time: 0.7, memory: 0.3 } } }
+            : {}),
+        };
+        const records = [
+          config,
+          {
+            type: "run",
+            run: 1,
+            status: "keep",
+            metric: 1,
+            segment: 0,
+            metrics: { memory_mb: 100 },
+            description: "Old raw best and baseline",
+          },
+          {
+            type: "run",
+            run: 2,
+            status: "keep",
+            metric: 1.1,
+            segment: 0,
+            metrics: { memory_mb: 10 },
+            description: "Old weighted best",
+          },
+          ...Array.from({ length: 5_001 }, (_, index) => ({
+            type: "run",
+            run: index + 3,
+            status: "discard",
+            metric: index + 100,
+            segment: 0,
+            metrics: { memory_mb: 200 },
+          })),
+          {
+            type: "run",
+            run: 5_004,
+            status: "keep",
+            metric: 0.1,
+            segment: 0,
+            evidenceStatus: "accepted",
+            metrics: { review_required: 1, memory_mb: 1 },
+            asi: { review_acknowledged: acknowledged },
+            description: "Review-required result",
+          },
+        ];
+        const ledgerPath = path.join(dir, "autoresearch.jsonl");
+        await writeFile(ledgerPath, records.map((row) => JSON.stringify(row)).join("\n"));
+        const fold = await foldDashboardLedgerFile(ledgerPath);
+        const viewModel = buildDashboardViewModel({
+          state: {
+            config,
+            segment: 0,
+            current: fold.analysisRecords.filter((row) => row.run != null),
+            baseline: fold.summary.baseline,
+            best: fold.summary.best,
+            dashboardLedgerSummary: fold.summary,
+          },
+        });
+        assert.equal(fold.summary.best, acknowledged ? 0.1 : 1);
+        for (const deliveryMode of ["static-export", "live-server"]) {
+          const html = render(fold.entries, {
+            deliveryMode,
+            liveRefreshAvailable: deliveryMode === "live-server",
+            refreshMs: 60_000,
+            viewModel,
+            ledgerBounds: fold.ledgerBounds,
+          });
+          const server = await serveHtml(html, html, {
+            payloadVersion: 1,
+            ...viewModel,
+            ledgerEntries: dashboardEntriesForClient(fold.entries),
+            ledgerBounds: fold.ledgerBounds,
+          });
+          try {
+            const page = await openPage(client, server.url);
+            await client.send(
+              "Emulation.setDeviceMetricsOverride",
+              { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false },
+              page.sessionId,
+            );
+            await waitForPageReady(client, page.sessionId);
+            await evaluate(
+              client,
+              page.sessionId,
+              "document.querySelector('#view-toggle').click()",
+            );
+            await waitForSelector(client, page.sessionId, "#workspace-grid");
+            const best = await evaluate(
+              client,
+              page.sessionId,
+              "document.querySelector('#best-value')?.textContent?.trim()",
+            );
+            assert.equal(
+              best,
+              expectedBest,
+              `${deliveryMode} review=${acknowledged} weighted=${weighted}`,
+            );
+            if (!acknowledged && deliveryMode === "static-export") {
+              await evaluate(
+                client,
+                page.sessionId,
+                "document.querySelector('#best-value').scrollIntoView({ block: 'center' })",
+              );
+              const evidencePath = path.join(
+                pluginRoot,
+                "tmp",
+                weighted ? "dashboard-audit-weighted.png" : "dashboard-audit-readout.png",
+              );
+              await captureScreenshot(client, page.sessionId, evidencePath);
+              console.log(`ARTIFACT dashboard_audit_readout_screenshot=${evidencePath}`);
+            }
+            await client.send("Target.closeTarget", { targetId: page.targetId });
+          } finally {
+            await server.close();
+          }
+        }
+      }
+    } finally {
+      await client?.close();
+      await browser?.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
 test("real browser covers dashboard focus, live refresh, motion, mobile, and large ledgers", async () => {
   const browserExecutable = resolveBrowserExecutable();
   assert.ok(

@@ -1326,6 +1326,7 @@ function classifyOutcome(snapshot: CoherentSessionSnapshot): DecisionPlan["outco
   // observation is required to establish a valid counterexample.
   if (failure || latest.status === "crash" || latest.status === "checks_failed")
     return resultOutcome(classifyResult({ kind: "invalid", execution: "failed" }, acceptance));
+  if (!hasVerifiedOutcomeMetric(latest, snapshot)) return unknown();
   const metric = finiteNumber(latest.metric);
   if (metric === null)
     return resultOutcome(classifyResult({ kind: "invalid", execution: "completed" }, acceptance));
@@ -1393,7 +1394,9 @@ function latestAcceptedCandidateRun(snapshot: CoherentSessionSnapshot): UnknownR
         !axes.valid ||
         axes.runPurpose !== "candidate" ||
         axes.evaluationAuthority !== "accepted-contract" ||
-        axes.candidateOrigin.kind === "none"
+        axes.candidateOrigin.kind === "none" ||
+        record.quarantined === true ||
+        record.evidenceStatus === "superseded"
       ) {
         return false;
       }
@@ -1416,7 +1419,9 @@ function isEligibleOutcomeReference(
   if (
     !axes.valid ||
     axes.evaluationAuthority !== "accepted-contract" ||
-    (axes.runPurpose !== "baseline" && axes.runPurpose !== "candidate")
+    (axes.runPurpose !== "baseline" && axes.runPurpose !== "candidate") ||
+    record.quarantined === true ||
+    !hasVerifiedOutcomeMetric(record, snapshot)
   ) {
     return false;
   }
@@ -1427,6 +1432,23 @@ function isEligibleOutcomeReference(
     (record.experimentContractDigest || evaluation?.contractDigest) ===
       snapshot.semanticFacts.contractDigest &&
     record.preconditionEpoch === snapshot.semanticFacts.preconditionEpoch
+  );
+}
+
+function hasVerifiedOutcomeMetric(
+  record: UnknownRecord,
+  snapshot: CoherentSessionSnapshot,
+): boolean {
+  const evidence = isUnknownRecord(record.contractEvaluationEvidence)
+    ? record.contractEvaluationEvidence
+    : null;
+  return (
+    evidence?.contractDigest === snapshot.semanticFacts.contractDigest &&
+    evidence.acceptedEvaluation === true &&
+    evidence.checksPassed === true &&
+    nonEmptyString(evidence.candidateFingerprint) &&
+    finiteNumber(evidence.metric) !== null &&
+    evidence.metric === record.metric
   );
 }
 

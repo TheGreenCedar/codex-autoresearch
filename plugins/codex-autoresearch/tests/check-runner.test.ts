@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { globSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -62,11 +63,20 @@ test("finalizer test gate caps Git fixture concurrency without weakening default
 
 test("CLI test gate caps Git fixture concurrency without weakening default case deadlines", async () => {
   const packageJson = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8"));
-  const command = packageJson.scripts?.["test:compiled:cli"];
-
-  assert.equal(typeof command, "string");
-  assert.match(command, /--test-timeout=120000(?:\s|$)/);
-  assert.match(command, /--test-concurrency=2(?:\s|$)/);
+  const scripts = packageJson.scripts["test:compiled:cli"].split(/\s+/).slice(1);
+  assert.equal(scripts.length, 2);
+  const files: string[] = [];
+  for (const script of scripts) {
+    const command = packageJson.scripts[script];
+    assert.equal(typeof command, "string");
+    assert.match(command, /--test-timeout=120000(?:\s|$)/);
+    assert.match(command, /--test-concurrency=2(?:\s|$)/);
+    const patterns = command.match(/dist\/tests\/cli\/[^\s"]+/g) || [];
+    assert.ok(patterns.length > 0);
+    files.push(...globSync(patterns));
+  }
+  assert.equal(new Set(files).size, files.length, "CLI phases overlap");
+  assert.deepEqual(files.sort(), globSync("dist/tests/cli/**/*.test.mjs").sort());
 });
 
 test("check runner refuses Windows command scripts instead of routing through cmd", () => {

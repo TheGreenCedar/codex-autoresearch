@@ -6,6 +6,39 @@ import path from "node:path";
 import test from "node:test";
 import { getBuiltInRecipe } from "../../lib/recipes.js";
 
+test("Node runtime recipe executes npm tests and propagates their failure", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "autoresearch-node-recipe-"));
+  try {
+    await writeFile(
+      path.join(cwd, "package.json"),
+      JSON.stringify({ scripts: { test: "node test.cjs" } }),
+    );
+    const run = () =>
+      spawnSync(getBuiltInRecipe("node-test-runtime")!.benchmarkCommand, {
+        cwd,
+        shell: true,
+        encoding: "utf8",
+        timeout: 30_000,
+        windowsHide: true,
+      });
+    await writeFile(path.join(cwd, "test.cjs"), "console.log('RUNTIME_RECIPE_EXECUTED');");
+    const success = run();
+    assert.equal(success.error, undefined);
+    assert.equal(success.status, 0, success.stderr);
+    assert.match(success.stdout, /RUNTIME_RECIPE_EXECUTED/);
+    await writeFile(
+      path.join(cwd, "test.cjs"),
+      "console.log('RUNTIME_RECIPE_FAILED'); process.exit(7);",
+    );
+    const failure = run();
+    assert.equal(failure.error, undefined);
+    assert.equal(failure.status, 7, failure.stderr);
+    assert.match(failure.stdout, /RUNTIME_RECIPE_FAILED/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("bundle recipe measures freshly built output and rejects missing, empty, or failed builds", async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "autoresearch-bundle-"));
   try {

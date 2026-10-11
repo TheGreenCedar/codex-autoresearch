@@ -157,7 +157,11 @@ export async function serveHtml(html, failureHtml, livePayload) {
   return {
     url: `http://127.0.0.1:${address.port}/`,
     liveRequestCount: () => liveRequestCount,
-    close: () => new Promise((resolve) => server.close(resolve)),
+    close: () =>
+      new Promise((resolve) => {
+        server.close(resolve);
+        server.closeAllConnections();
+      }),
   };
 }
 

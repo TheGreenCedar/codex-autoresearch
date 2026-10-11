@@ -1,6 +1,5 @@
 import { type UnknownRecord, unknownRecordOrNull as recordOrNull } from "../types/json.js";
 import path from "node:path";
-import fsp from "node:fs/promises";
 import {
   buildServeRegistryHealthInput,
   findReusableServeRegistry,
@@ -244,8 +243,7 @@ export async function exportDashboard(args: UnknownRecord, runtime: DashboardRun
     showcaseMode: showcaseExport,
   });
   emitProgress(args, "export", `writing dashboard snapshot to ${output}`);
-  if (outcomeLocation) await checkedAtomicWriteFile(outcomeLocation.root, output, html);
-  else await fsp.writeFile(output, html, "utf8");
+  await checkedAtomicWriteFile(outcomeLocation?.root || workDir, output, html);
   const modeGuidance = {
     staticExport: output,
     difference:
@@ -608,9 +606,7 @@ function unavailableRuntimeDrift(error: unknown): UnknownRecord {
 
 function resolveOutputInside(workDir: string, output?: unknown): string {
   const defaultOutput = resolveSessionPaths({ workDir }).dashboardExportPath;
-  const resolved = output
-    ? resolvePathInsideRootSync(workDir, String(output))
-    : { absolutePath: defaultOutput, inside: true, relativePath: AUTORESEARCH_DASHBOARD_FILE };
+  const resolved = resolvePathInsideRootSync(workDir, output ? String(output) : defaultOutput);
   if (!resolved.inside) {
     throw new Error(`Dashboard output is outside the working directory: ${resolved.absolutePath}`);
   }

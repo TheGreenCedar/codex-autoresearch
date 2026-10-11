@@ -6,8 +6,18 @@ This project uses a root-only changelog because the root README is the public do
 
 Current package contract: Codex Autoresearch is a CLI/skill-only plugin. Older entries that mention MCP servers, MCP tools, or MCP resources describe historical release surfaces before the 1.3.3 removal.
 
-## Unreleased
+## 3.0.1 - 2026-10-11
 
+- Keep outcome observations tied to the inputs actually measured. Correctness checks that change assessed dependencies invalidate the earlier observation.
+- Retain reservations when correctness-check termination is uncertain, including later scope or input errors. Cancellation can reconcile an unknown completion after its processes stop without losing the saved request.
+- Retry brief Windows file-lock failures when replacing prepared state files. Retries keep the same file and do not repeat the evaluator or mutation; persistent failures remain visible.
+- Charge verified GitHub confirmation duration from provider records, excluding time spent waiting to resume locally.
+- Reject primary metric overrides on accepted saved packets. Successful canonical outcomes require matching verified evaluation evidence; quarantined or superseded records cannot supply them.
+- Preserve valid ledgers whose final record has no newline when contract, lane, or partial-result writers append evidence.
+- Validate default dashboard export paths and reject linked write targets. Dashboard best-result summaries preserve full-ledger evidence beyond retained rows and respect the core's review acknowledgment rules.
+- Rebuild source runtimes after build configuration changes or source deletions, keep freshness probes read-only, and serialize concurrent source rebuilds with the existing runtime lock.
+- Run the Node test-runtime recipe correctly on Windows, show spawn errors, and include recipe execution in native platform checks.
+- Recognize older Git's unsupported ref-format query response while retaining the files-backend check before an atomic keep.
 - Include installation, execution-boundary, and vulnerability-reporting guidance inside the plugin package. Verified runtime hydration accepts these package documents.
 - Mark synthetic credentials in security and lock-recovery tests explicitly as examples so source scans can distinguish fixtures from potential credentials without removing redaction coverage.
 

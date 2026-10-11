@@ -303,6 +303,7 @@ const observationValidators: Record<
   "long-history": (observations) => {
     const anchors = asRecordArray(observations.retainedAnchors, "retained history anchors");
     const [baseline, best, failure] = anchors;
+    const oldBest = asRecord(observations.oldBest, "offscreen best projection");
     if (
       observations.totalEntries !== 5001 ||
       observations.retainedEntries !== 5000 ||
@@ -315,6 +316,12 @@ const observationValidators: Record<
       best?.metric !== 1 ||
       failure?.run !== 5000 ||
       failure?.status !== "checks_failed" ||
+      oldBest.run !== 1 ||
+      oldBest.metric !== 0.5 ||
+      oldBest.segment !== 0 ||
+      oldBest.evidenceStatus !== "accepted" ||
+      observations.oldBestRetained !== false ||
+      observations.reviewEvidenceStatus !== "provisional" ||
       stringArray(observations.responseKeys, "export response keys").includes("viewModel") ||
       !nonNegativeInteger(observations.responseBytes) ||
       Number(observations.responseBytes) > 12_000
@@ -599,11 +606,17 @@ async function governedInvestigation(
   );
   const until = Date.now() + 15000;
   while (nestedRecord(execution, "execution", "status").kind !== "completed") {
-    if (Date.now() >= until) throw new Error("Governed operator worker did not complete.");
+    const status = nestedRecord(execution, "execution", "status");
+    if (["failed", "cancelled"].includes(string(status.kind)) || Date.now() >= until)
+      throw new Error(`Governed operator worker did not complete: ${JSON.stringify(status)}`);
     await delay(100);
-    execution = expectJsonSuccess(
-      await runNode(cli, ["next", "--cwd", cwd, "--resume", "A2"], pluginRoot, env),
-    );
+    const resumed = await runNode(cli, ["next", "--cwd", cwd, "--resume", "A2"], pluginRoot, env);
+    if (
+      resumed.code !== 0 &&
+      `${resumed.stdout}${resumed.stderr}`.includes("Autoresearch mutation is already running")
+    )
+      continue;
+    execution = expectJsonSuccess(resumed);
   }
   await fsp.writeFile(
     observationFile,
@@ -1211,11 +1224,41 @@ async function longHistory(root: string): Promise<Record<string, unknown>> {
     (run) => entries.find((entry) => asRecord(entry, "retained entry").run === run) ?? null,
   );
   const governingConfig = asRecord(entries[0], "first retained entry");
+  const offscreenCwd = path.join(root, "offscreen-history");
+  const offscreenRecords = [
+    configRecord("offscreen history"),
+    { ...runRecord(1, 0.5, "keep"), description: "Old best outside retained rows" },
+    ...records.slice(2),
+    {
+      ...runRecord(5001, 0.1, "keep"),
+      evidenceStatus: "accepted",
+      metrics: { review_required: 1 },
+    },
+  ];
+  await writeLedger(offscreenCwd, offscreenRecords);
+  const offscreenOutput = path.join(offscreenCwd, "dashboard.html");
+  expectJsonSuccess(
+    await runNode(
+      cli,
+      ["export", "--cwd", offscreenCwd, "--output", offscreenOutput],
+      pluginRoot,
+      isolatedCodexHome(root, "offscreen-codex-home"),
+    ),
+  );
+  const offscreenHtml = await fsp.readFile(offscreenOutput, "utf8");
+  const offscreenEntries = embeddedJsonArray(offscreenHtml, "window.__AUTORESEARCH_DATA__ = ");
+  const offscreenMeta = embeddedJsonRecord(offscreenHtml, "window.__AUTORESEARCH_META__ = ");
+  const offscreenViewModel = asRecord(offscreenMeta.viewModel, "offscreen view model");
+  const offscreenReadout = asRecord(offscreenViewModel.readout, "offscreen readout");
+  const review = offscreenEntries.find((entry) => asRecord(entry, "retained entry").run === 5001);
   return {
     totalEntries: Number(bounds.totalEntries),
     retainedEntries: entries.length,
     governingConfig: { type: governingConfig.type, metricName: governingConfig.metricName },
     retainedAnchors,
+    oldBest: offscreenReadout.bestKept,
+    oldBestRetained: offscreenEntries.some((entry) => asRecord(entry, "retained entry").run === 1),
+    reviewEvidenceStatus: asRecord(review, "review-required entry").evidenceStatus,
     responseKeys: Object.keys(response).sort(),
     responseBytes,
   };

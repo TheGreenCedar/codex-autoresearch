@@ -90,7 +90,7 @@ setup -> state -> next -> log -> state -> finalize-preview
 `next` may execute only the accepted evaluator and accepted checks, using their accepted execution specifications. After it returns:
 
 1. Inspect the metric, checks, artifacts, diff, and Git state.
-2. Log with `--from-last`; do not retype parsed metrics.
+2. Log with `--from-last`; do not retype parsed metrics. A differing primary metric override on an accepted packet is rejected before logging.
 3. Record the real hypothesis and learning assessment. Learning defaults to `none`; `causal` or `discriminating` requires evidence and a concrete changed belief.
 4. Read the resulting decision before doing more work.
 

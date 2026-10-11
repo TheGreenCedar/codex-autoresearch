@@ -182,6 +182,34 @@ test("unavailable proof remains resumable and provider duration cannot be replac
   });
 });
 
+test("delayed reconciliation charges verified provider duration for completed and over-budget runs", async (context) => {
+  for (const seconds of [2, 60])
+    await withTempDir("confirmation", "delayed-reconciliation", async (cwd) => {
+      const { api, action } = await fixture(cwd);
+      api.receiptDelta = { executionSeconds: seconds };
+      await nominateOutcomeAction(cwd, action);
+      await dispatchOutcomeConfirmation(cwd, "A1", api);
+      const startedAt = Date.now();
+      api.runDelta = {
+        created_at: new Date(startedAt).toISOString(),
+        updated_at: new Date(startedAt + seconds * 1000).toISOString(),
+      };
+      context.mock.method(Date, "now", () => startedAt + 86400 * 1000);
+      try {
+        const receipt = await reconcileOutcomeConfirmation(cwd, "A1", api);
+        assert.equal(receipt.status.kind, seconds > action.seconds ? "failed" : "completed");
+        assert.equal(receipt.consumptionSource, "provider");
+        const usage = outcomeUsage((await readOutcome(cwd))!);
+        assert.equal(usage.measuredSeconds, seconds);
+        assert.equal(usage.estimatedSeconds, 0);
+        assert.equal(usage.reservedSeconds, 0);
+        assert.equal(api.calls, 1);
+      } finally {
+        context.mock.restoreAll();
+      }
+    });
+});
+
 test("resume performs a first confirmation dispatch but cancellation never starts unattempted work", async () => {
   for (const cancel of [false, true])
     await withTempDir("confirmation", "before-dispatch", async (cwd) => {

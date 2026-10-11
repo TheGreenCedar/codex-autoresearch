@@ -5,9 +5,15 @@ import { inspectProcessIdentity } from "../lib/runner.js";
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { startOutcome, readOutcome, withOutcomeMutation } from "../lib/outcome-store.js";
+import {
+  startOutcome,
+  readOutcome,
+  outcomeStateLocation,
+  withOutcomeMutation,
+} from "../lib/outcome-store.js";
 import { nominateOutcomeAction, logOutcomeObservation } from "../lib/investigation-workflow.js";
 import {
   launchOutcomeWorker,
@@ -15,11 +21,12 @@ import {
   requestOutcomeCancellation,
 } from "../lib/outcome-worker.js";
 import { outcomeUsage } from "../lib/outcome-contract.js";
+import { classifyResult } from "../lib/result-semantics.js";
 import { buildOutcomeEvidenceRegistry } from "../lib/evidence-registry.js";
 import { captureOutcomeInputs } from "../lib/outcome-inputs.js";
 import type { ExecutionReceipt } from "../lib/investigation-records.js";
 import { governedFixture, actionFixture } from "./helpers/outcome-fixtures.js";
-import { withTempDir } from "./helpers/process.js";
+import { runProcess as runFixtureProcess, withTempDir } from "./helpers/process.js";
 
 async function fixture(cwd: string, program: string) {
   await fsp.mkdir(path.join(cwd, "src"));
@@ -49,7 +56,7 @@ async function waitFor(cwd: string, accept: (receipt: ExecutionReceipt) => boole
     await delay(100);
   }
   throw new Error(
-    `Worker did not converge: ${JSON.stringify((await readOutcome(cwd))!.executions[0])}`,
+    `Worker did not converge: ${JSON.stringify((await readOutcome(cwd))!.executions.find((entry) => entry.id === id))}`,
   );
 }
 
@@ -150,6 +157,228 @@ test("worker refuses changed prepared inputs and records actual invalid output s
     const invalid = await waitFor(cwd, (receipt) => receipt.status.kind === "completed");
     assert.equal(invalid.result?.validity, "invalid");
     assert.equal(invalid.result?.attainment, "unknown");
+  });
+});
+
+test("checks cannot attach an earlier measurement to changed assessed inputs", async () => {
+  await withTempDir("worker", "post-measurement-drift", async (cwd) => {
+    const action = await fixture(
+      cwd,
+      `console.log('METRIC loss=' + require('node:fs').readFileSync('src/value.txt', 'utf8'));`,
+    );
+    await fsp.writeFile(path.join(cwd, "src/value.txt"), "5");
+    await nominateOutcomeAction(cwd, {
+      ...action,
+      evaluator: {
+        ...action.evaluator,
+        method: {
+          kind: "metric",
+          name: "loss",
+          direction: "lower",
+          target: { comparator: "<=", value: 5 },
+        },
+        checkArgv: [
+          process.execPath,
+          "-e",
+          "require('node:fs').writeFileSync('src/value.txt', '10');",
+        ],
+      },
+    });
+    await launchOutcomeWorker(cwd, "A1");
+    const receipt = await waitFor(cwd, (entry) =>
+      ["failed", "completed"].includes(entry.status.kind),
+    );
+    assert.equal(receipt.status.kind, "failed");
+    assert.deepEqual(receipt.observation, { kind: "metric", value: 5 });
+    assert.equal(receipt.checksPassed, true);
+    assert.equal(receipt.result?.validity, "invalid");
+    assert.equal(await fsp.readFile(path.join(cwd, "src/value.txt"), "utf8"), "10");
+    await logOutcomeObservation(cwd, {
+      id: "E1",
+      executionId: "A1",
+      criterionId: "compatibility",
+      text: "Check changed the subject after measurement",
+    });
+    assert.equal(
+      buildOutcomeEvidenceRegistry({
+        state: (await readOutcome(cwd))!,
+        input: await captureOutcomeInputs(cwd, "local"),
+      }).criteria[0].status,
+      "unknown",
+    );
+  });
+});
+
+test("accepted dependencies allow unrelated check outputs without invalidating measurements", async () => {
+  await withTempDir("worker", "check-output-dependencies", async (cwd) => {
+    await fsp.mkdir(path.join(cwd, "src"));
+    await fsp.mkdir(path.join(cwd, "checks"));
+    await fsp.writeFile(path.join(cwd, "src/value.txt"), "5");
+    await fsp.writeFile(
+      path.join(cwd, "checks/evaluate.cjs"),
+      `console.log('METRIC loss=' + require('node:fs').readFileSync('src/value.txt', 'utf8'));`,
+    );
+    const manifestBytes = JSON.stringify({
+      schemaVersion: 1,
+      criteria: {
+        compatibility: {
+          subject: ["src/value.txt"],
+          evaluator: ["checks"],
+          fixtures: [],
+          checks: ["checks"],
+        },
+      },
+    });
+    await fsp.writeFile(path.join(cwd, "checks/dependencies.json"), manifestBytes);
+    await startOutcome(cwd, {
+      ...governedFixture(cwd),
+      budget: { actions: 5, executionSeconds: 180 },
+      dependencySource: {
+        path: "checks/dependencies.json",
+        digest: createHash("sha256").update(manifestBytes).digest("hex"),
+        authorityReference: "Accepted check-output dependency boundary",
+      },
+    });
+    const action = actionFixture("A1");
+    await nominateOutcomeAction(cwd, {
+      ...action,
+      mode: "process",
+      effects: ["execute", "edit"],
+      paths: ["src"],
+      seconds: 30,
+      evaluator: {
+        ...action.evaluator,
+        method: {
+          kind: "metric",
+          name: "loss",
+          direction: "lower",
+          target: { comparator: "<=", value: 5 },
+        },
+        argv: [process.execPath, "checks/evaluate.cjs"],
+        checkArgv: [
+          process.execPath,
+          "-e",
+          "require('node:fs').writeFileSync('src/check-output.txt', 'generated');",
+        ],
+      },
+    });
+    await launchOutcomeWorker(cwd, "A1");
+    const receipt = await waitFor(cwd, (entry) =>
+      ["failed", "completed"].includes(entry.status.kind),
+    );
+    assert.equal(receipt.status.kind, "completed");
+    assert.equal(receipt.result?.attainment, "satisfied");
+    assert.equal(receipt.checksPassed, true);
+    await logOutcomeObservation(cwd, {
+      id: "E1",
+      executionId: "A1",
+      criterionId: "compatibility",
+      text: "Check generated an output outside assessed dependencies",
+    });
+    const state = (await readOutcome(cwd))!;
+    assert.equal(
+      buildOutcomeEvidenceRegistry({
+        state,
+        input: await captureOutcomeInputs(cwd, "local"),
+        manifest: await readOutcomeDependencyManifest(state, cwd),
+      }).criteria[0].status,
+      "satisfied",
+    );
+  });
+});
+
+test("an unproven check retains exposure when later scope validation fails", async () => {
+  await withTempDir("worker", "unproven-check-scope", async (cwd) => {
+    const action = await fixture(
+      cwd,
+      `console.log('AUTORESEARCH_OBSERVATION {"kind":"predicate","observed":"satisfied"}');`,
+    );
+    await fsp.writeFile(
+      path.join(cwd, "checks/stubborn.cjs"),
+      `const fs = require('node:fs'); fs.writeFileSync('src/check-started.txt', String(process.pid)); fs.writeFileSync('outside-scope.txt', 'unowned change'); setInterval(() => { if (fs.existsSync('.autoresearch/stop-check')) process.exit(0); }, 100);`,
+    );
+    await nominateOutcomeAction(cwd, {
+      ...action,
+      seconds: 12,
+      evaluator: { ...action.evaluator, checkArgv: [process.execPath, "checks/stubborn.cjs"] },
+    });
+    await withOutcomeMutation(cwd, async (state) => {
+      state.executions[0].worker = {
+        launchId: "unproven-check-regression",
+        observerPid: process.pid,
+        observerIdentity: null,
+        attemptedAt: new Date().toISOString(),
+        pid: null,
+        identity: null,
+        child: null,
+        cancelRequestedAt: null,
+      };
+    });
+    const helper = new URL("./helpers/outcome-worker-failure.mjs", import.meta.url);
+    const workerProcess = await runFixtureProcess(
+      process.execPath,
+      [fileURLToPath(helper), cwd],
+      cwd,
+    );
+    assert.equal(workerProcess.code, 0, workerProcess.stderr);
+    const state = (await readOutcome(cwd))!;
+    const receipt = state.executions[0];
+    assert.equal(receipt.status.kind, "unknown");
+    if (receipt.status.kind === "unknown")
+      assert.match(receipt.status.reason, /outside the accepted edit scope/);
+    assert.equal(receipt.result?.validity, "unknown");
+    assert.equal(outcomeUsage(state).reservedSeconds, 12);
+    assert.equal(outcomeUsage(state).unknownExecutions, 1);
+    await assert.rejects(nominateOutcomeAction(cwd, { ...action, id: "A2" }), /existing action/);
+    const childPid = Number(await fsp.readFile(path.join(cwd, "src/check-started.txt"), "utf8"));
+    assert.equal((await inspectProcessIdentity(childPid)).identity, null);
+  });
+});
+
+test("an admission write failure awaits its started process and retains unknown exposure", async () => {
+  await withTempDir("worker", "admission-write-failure", async (cwd) => {
+    const action = await fixture(
+      cwd,
+      `const fs = require('node:fs'); fs.appendFileSync('src/count.txt', 'one\\n'); fs.writeFileSync('src/started.txt', String(process.pid)); setInterval(() => { if (fs.existsSync('.autoresearch/stop-admission-child')) process.exit(0); }, 100);`,
+    );
+    await nominateOutcomeAction(cwd, action);
+    await withOutcomeMutation(cwd, async (state) => {
+      state.executions[0].worker = {
+        launchId: "admission-write-regression",
+        observerPid: process.pid,
+        observerIdentity: null,
+        attemptedAt: new Date().toISOString(),
+        pid: null,
+        identity: null,
+        child: null,
+        cancelRequestedAt: null,
+      };
+    });
+    const helper = new URL("./helpers/outcome-worker-admission-failure.mjs", import.meta.url);
+    const workerProcess = await runFixtureProcess(
+      process.execPath,
+      [fileURLToPath(helper), cwd],
+      cwd,
+    );
+    assert.equal(workerProcess.code, 0, workerProcess.stderr);
+    const state = (await readOutcome(cwd))!;
+    const receipt = state.executions[0];
+    assert.equal(receipt.status.kind, "unknown");
+    if (receipt.status.kind === "unknown")
+      assert.match(receipt.status.reason, /injected admission replacement failure/);
+    assert.equal(receipt.result?.validity, "unknown");
+    assert.equal(outcomeUsage(state).reservedSeconds, action.seconds);
+    assert.equal(outcomeUsage(state).measuredSeconds, 0);
+    await assert.rejects(nominateOutcomeAction(cwd, { ...action, id: "A2" }), /existing action/);
+    await requestOutcomeCancellation(cwd, "A1");
+    const reconciled = await reconcileOutcomeWorker(cwd, "A1");
+    assert.equal(reconciled.status.kind, "cancelled");
+    const usage = outcomeUsage((await readOutcome(cwd))!);
+    assert.equal(usage.reservedSeconds, 0);
+    assert.equal(usage.measuredSeconds, 0);
+    assert.ok(usage.estimatedSeconds >= action.seconds);
+    assert.equal(await fsp.readFile(path.join(cwd, "src/count.txt"), "utf8"), "one\n");
+    assert.deepEqual(await reconcileOutcomeWorker(cwd, "A1"), reconciled);
   });
 });
 
@@ -273,31 +502,61 @@ test("resume can perform the first durable launch after a crash before launch no
   });
 });
 
-test("lost-worker cancellation reconciles process exposure conservatively without inventing a measurement", async () => {
+test("lost-worker cancellation reconciles immutable unknown completions without losing its request", async () => {
   await withTempDir("worker", "lost-owner", async (cwd) => {
     const action = await fixture(
       cwd,
-      `require('node:fs').writeFileSync('src/running.txt', String(process.pid)); setInterval(() => {}, 100);`,
+      `const fs = require('node:fs'); fs.writeFileSync('src/running.txt', String(process.pid)); setInterval(() => { if (fs.existsSync('.autoresearch/stop-lost-child')) process.exit(0); }, 100);`,
     );
     await nominateOutcomeAction(cwd, action);
     await launchOutcomeWorker(cwd, "A1");
     const running = await waitFor(cwd, (entry) => entry.worker?.child?.identity != null);
-    process.kill(running.worker!.pid!, "SIGKILL");
-    for (let attempts = 0; attempts < 30; attempts++) {
-      if ((await inspectProcessIdentity(running.worker!.pid!)).identity === null) break;
-      await delay(100);
+    try {
+      process.kill(running.worker!.pid!, "SIGKILL");
+      for (let attempts = 0; attempts < 30; attempts++) {
+        if ((await inspectProcessIdentity(running.worker!.pid!)).identity === null) break;
+        await delay(100);
+      }
+      const unknownCompletion = structuredClone(running);
+      unknownCompletion.status = {
+        kind: "unknown",
+        reason: "Native process observation was lost",
+        lastKnownPid: running.worker!.pid,
+      };
+      unknownCompletion.result = classifyResult({ kind: "invalid", execution: "unknown" });
+      unknownCompletion.consumptionSource = "unknown";
+      const owner = await outcomeStateLocation(cwd);
+      const completionPath = path.join(path.dirname(owner.path), "executions/A1/completion.json");
+      await fsp.mkdir(path.dirname(completionPath), { recursive: true });
+      const completionBytes = JSON.stringify({
+        schemaVersion: 1,
+        launchId: running.worker!.launchId,
+        receipt: unknownCompletion,
+        seconds: 1,
+      });
+      await fsp.writeFile(completionPath, completionBytes);
+      await reconcileOutcomeWorker(cwd, "A1");
+      assert.equal(outcomeUsage((await readOutcome(cwd))!).unknownExecutions, 1);
+      const requested = await requestOutcomeCancellation(cwd, "A1");
+      assert.notEqual(requested.worker?.cancelRequestedAt, null);
+      const reconciled = await reconcileOutcomeWorker(cwd, "A1");
+      assert.equal(reconciled.status.kind, "cancelled");
+      assert.equal(reconciled.worker?.cancelRequestedAt, requested.worker?.cancelRequestedAt);
+      assert.equal(reconciled.result?.validity, "unknown");
+      const usage = outcomeUsage((await readOutcome(cwd))!);
+      assert.ok(usage.estimatedSeconds >= action.seconds);
+      assert.equal(usage.measuredSeconds, 0);
+      assert.equal(usage.unknownExecutions, 0);
+      assert.equal((await inspectProcessIdentity(running.worker!.child!.pid)).identity, null);
+      assert.equal(await fsp.readFile(completionPath, "utf8"), completionBytes);
+      assert.deepEqual(await reconcileOutcomeWorker(cwd, "A1"), reconciled);
+    } finally {
+      await fsp.writeFile(path.join(cwd, ".autoresearch/stop-lost-child"), "stop");
+      for (let attempts = 0; attempts < 20; attempts++) {
+        if ((await inspectProcessIdentity(running.worker!.child!.pid)).identity === null) break;
+        await delay(100);
+      }
     }
-    await reconcileOutcomeWorker(cwd, "A1");
-    assert.equal(outcomeUsage((await readOutcome(cwd))!).unknownExecutions, 1);
-    await requestOutcomeCancellation(cwd, "A1");
-    const reconciled = await reconcileOutcomeWorker(cwd, "A1");
-    assert.equal(reconciled.status.kind, "cancelled");
-    assert.equal(reconciled.result?.validity, "unknown");
-    const usage = outcomeUsage((await readOutcome(cwd))!);
-    assert.ok(usage.estimatedSeconds >= action.seconds);
-    assert.equal(usage.measuredSeconds, 0);
-    assert.equal(usage.unknownExecutions, 0);
-    assert.equal((await inspectProcessIdentity(running.worker!.child!.pid)).identity, null);
   });
 });
 

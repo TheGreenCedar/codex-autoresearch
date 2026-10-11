@@ -478,7 +478,7 @@ export async function reconcileOutcomeConfirmation(
       if (verified || providerSeconds !== null)
         settleInOutcome(current, executionId, {
           kind: "measured",
-          seconds: Math.max(elapsed(current, executionId), verified?.seconds ?? providerSeconds!),
+          seconds: verified?.seconds ?? providerSeconds!,
         });
       else
         settleInOutcome(current, executionId, {

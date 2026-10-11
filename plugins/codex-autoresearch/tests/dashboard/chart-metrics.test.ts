@@ -4,6 +4,7 @@ import { buildChart } from "../../dashboard/src/model/chart.js";
 import { formatCompactMetricTick } from "../../dashboard/src/model/formatting.js";
 import { normalizeEntries } from "../../dashboard/src/model/entries.js";
 import { buildReadout } from "../../dashboard/src/model/readout.js";
+import { dashboardEntriesForClient } from "../../lib/dashboard-transport.js";
 import {
   buildChartData,
   sampleTrendChartData,
@@ -119,7 +120,7 @@ test("dashboard chart reserves full-history coverage when every run changes stat
   );
 });
 
-test("dashboard summary cannot override the best accepted visible keep", () => {
+test("dashboard raw readout displays the canonical best outside the visible rows", async () => {
   const runs: SessionRun[] = Array.from({ length: 4 }, (_, index) => ({
     run: index + 102,
     metric: index + 102,
@@ -134,14 +135,116 @@ test("dashboard summary cannot override the best accepted visible keep", () => {
     config: { metricName: "seconds", metricUnit: "s", bestDirection: "lower" },
     runs,
   };
-  const readout = buildReadout(session, {
+  const viewModel = {
     summary: { segment: 0, baseline: 101, best: 1, runs: 105 },
-  });
+    readout: {
+      bestKept: {
+        run: 1,
+        metric: 1,
+        status: "keep",
+        segment: 0,
+        evidenceStatus: "accepted",
+        description: "Earlier accepted best",
+      },
+    },
+  };
+  const readout = buildReadout(session, viewModel);
   const chart = buildChart(session, readout);
 
-  assert.equal(readout.best, 102);
-  assert.equal(readout.bestRun?.run, 102);
-  assert.match(chart.summary, /Best #102 at 102s/);
+  assert.equal(readout.best, 1);
+  assert.equal(readout.bestRun?.run, 1);
+  assert.match(chart.summary, /Best #1 at 1s/);
+  const { getById } = await runDashboard(
+    [
+      dashboardConfigEntry({ name: "Earlier best", metricName: "seconds", metricUnit: "s" }),
+      ...runs,
+    ],
+    emptyCommandMeta({ viewModel }),
+    chartLayoutOptions(),
+  );
+  assert.equal(getById("best-value").textContent, "1s");
+  assert.equal(getById("best-kept-detail").textContent, "Earlier accepted best");
+});
+
+test("canonical raw best does not replace weighted ranking or another segment's best", () => {
+  const runs: SessionRun[] = [
+    {
+      run: 1,
+      metric: 10,
+      status: "measure",
+      description: "Baseline",
+      segment: 0,
+      metrics: { memory_mb: 100 },
+      asi: {},
+    },
+    {
+      run: 2,
+      metric: 8,
+      status: "keep",
+      description: "Raw best",
+      segment: 0,
+      metrics: { memory_mb: 100 },
+      asi: {},
+    },
+    {
+      run: 3,
+      metric: 9,
+      status: "keep",
+      description: "Weighted best",
+      segment: 0,
+      metrics: { memory_mb: 10 },
+      asi: {},
+    },
+  ];
+  const viewModel = {
+    summary: { segment: 0, baseline: 10, best: 8 },
+    readout: { bestKept: { ...runs[1], evidenceStatus: "accepted" } },
+  };
+  const session = {
+    segment: 0,
+    config: {
+      ...dashboardConfigEntry({ name: "Weights", metricName: "seconds" }),
+      metricMode: "weighted_cost" as const,
+    },
+    runs,
+  };
+  const weighted = buildReadout(session, viewModel);
+  assert.equal(weighted.bestRun?.run, 3);
+  assert.equal(weighted.best, 0.66);
+  const historical = buildReadout(
+    { ...session, config: { ...session.config, metricMode: "raw" } },
+    { ...viewModel, summary: { ...viewModel.summary, segment: 1, best: 0 } },
+  );
+  assert.equal(historical.bestRun?.run, 2);
+  assert.equal(historical.best, 8);
+});
+
+test("dashboard metric display excludes review-required keeps until acknowledged", async () => {
+  const entries = [
+    dashboardConfigEntry({
+      name: "Review-required evidence",
+      metricName: "seconds",
+      metricUnit: "s",
+    }),
+    { run: 1, metric: 100, status: "measure", segment: 0 },
+    {
+      run: 2,
+      metric: 1,
+      status: "keep",
+      segment: 0,
+      evidenceStatus: "accepted",
+      metrics: { review_required: 1 },
+      asi: {},
+    },
+    { run: 3, metric: 90, status: "keep", segment: 0, description: "Accepted best" },
+  ];
+  const { getById } = await runDashboard(
+    dashboardEntriesForClient(entries),
+    emptyCommandMeta(),
+    chartLayoutOptions(),
+  );
+  assert.equal(getById("best-value").textContent, "90s");
+  assert.equal(getById("best-kept-detail").textContent, "Accepted best");
 });
 
 test("dashboard uses measure 10 as the raw and weighted baseline before keep 8", () => {

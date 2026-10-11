@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import {
+import fsp, {
   access,
   mkdir,
   readFile,
@@ -514,6 +514,187 @@ test("checked atomic writes remove temporary files after write failure", async (
     );
   });
 });
+
+test(
+  "checked atomic writes retry the same prepared replacement after transient Windows failures",
+  { skip: process.platform !== "win32", concurrency: false },
+  async (t) => {
+    await withTempDir("checked-write-transient-replace", async (dir) => {
+      const target = path.join(dir, "outcome.json");
+      await writeFile(target, "original");
+      const rename = fsp.rename;
+      const sources: string[] = [];
+      let commits = 0;
+      const transientCodes = ["EPERM", "EBUSY", "EACCES"];
+      t.mock.method(fsp, "rename", async (from, to) => {
+        sources.push(String(from));
+        assert.equal(await readFile(String(from), "utf8"), "replacement");
+        const code = transientCodes[sources.length - 1];
+        if (code) {
+          assert.equal(await readFile(target, "utf8"), "original");
+          throw Object.assign(new Error("replacement temporarily locked"), { code });
+        }
+        await rename(from, to);
+        commits += 1;
+      });
+      await checkedAtomicWriteFile(dir, target, "replacement");
+      assert.equal(sources.length, 4);
+      assert.equal(new Set(sources).size, 1);
+      assert.equal(commits, 1);
+      assert.equal(await readFile(target, "utf8"), "replacement");
+      assert.deepEqual(await readdir(dir), ["outcome.json"]);
+    });
+  },
+);
+
+test(
+  "checked atomic writes preserve the original and clean temporary files after exhausted Windows retries",
+  { skip: process.platform !== "win32", concurrency: false },
+  async (t) => {
+    await withTempDir("checked-write-exhausted-replace", async (dir) => {
+      const target = path.join(dir, "outcome.json");
+      await writeFile(target, "original");
+      const failure = Object.assign(new Error("replacement remains locked"), { code: "EPERM" });
+      let attempts = 0;
+      t.mock.method(fsp, "rename", async () => {
+        attempts += 1;
+        throw failure;
+      });
+      await assert.rejects(
+        checkedAtomicWriteFile(dir, target, "replacement"),
+        (error) => error === failure,
+      );
+      assert.equal(attempts, 5);
+      assert.equal(await readFile(target, "utf8"), "original");
+      assert.deepEqual(await readdir(dir), ["outcome.json"]);
+    });
+  },
+);
+
+test(
+  "checked atomic writes propagate permanent replacement errors without retrying",
+  { concurrency: false },
+  async (t) => {
+    await withTempDir("checked-write-permanent-replace", async (dir) => {
+      const target = path.join(dir, "outcome.json");
+      await writeFile(target, "original");
+      const failure = Object.assign(new Error("permanent replacement failure"), { code: "EIO" });
+      let attempts = 0;
+      t.mock.method(fsp, "rename", async () => {
+        attempts += 1;
+        throw failure;
+      });
+      await assert.rejects(
+        checkedAtomicWriteFile(dir, target, "replacement"),
+        (error) => error === failure,
+      );
+      assert.equal(attempts, 1);
+      assert.equal(await readFile(target, "utf8"), "original");
+      assert.deepEqual(await readdir(dir), ["outcome.json"]);
+    });
+  },
+);
+
+test(
+  "checked atomic writes reject a target replaced during the Windows retry wait",
+  { skip: process.platform !== "win32", concurrency: false },
+  async (t) => {
+    await withTempDir("checked-write-target-replaced", async (dir) => {
+      const target = path.join(dir, "outcome.json");
+      await writeFile(target, "original");
+      let attempts = 0;
+      t.mock.method(fsp, "rename", async () => {
+        attempts += 1;
+        await rm(target);
+        await mkdir(target);
+        throw Object.assign(new Error("replacement temporarily locked"), { code: "EPERM" });
+      });
+      await assert.rejects(
+        checkedAtomicWriteFile(dir, target, "replacement"),
+        /Write target must be a regular file/,
+      );
+      assert.equal(attempts, 1);
+      assert.equal((await stat(target)).isDirectory(), true);
+      assert.deepEqual(await readdir(dir), ["outcome.json"]);
+    });
+  },
+);
+
+test(
+  "checked atomic writes reject a swapped root without redirecting temporary cleanup",
+  { skip: process.platform !== "win32", concurrency: false },
+  async (t) => {
+    await withTempDir("checked-write-root-replaced", async (dir) => {
+      const root = path.join(dir, "root");
+      const displaced = path.join(dir, "displaced");
+      const outside = path.join(dir, "outside");
+      await mkdir(root);
+      await mkdir(outside);
+      const target = path.join(root, "outcome.json");
+      await writeFile(target, "original");
+      await writeFile(path.join(outside, "outcome.json"), "outside");
+      const rename = fsp.rename;
+      let attempts = 0;
+      let outsideTemp: string | null = null;
+      t.mock.method(fsp, "rename", async (from) => {
+        attempts += 1;
+        await rename(root, displaced);
+        await symlink(outside, root, "junction");
+        outsideTemp = path.join(outside, path.basename(String(from)));
+        await writeFile(outsideTemp, "outside temporary file");
+        throw Object.assign(new Error("replacement temporarily locked"), { code: "EPERM" });
+      });
+      await assert.rejects(
+        checkedAtomicWriteFile(root, target, "replacement"),
+        /Session root must be a real directory/,
+      );
+      assert.equal(attempts, 1);
+      assert.equal(await readFile(path.join(outside, "outcome.json"), "utf8"), "outside");
+      assert.ok(outsideTemp);
+      assert.equal(await readFile(outsideTemp, "utf8"), "outside temporary file");
+      assert.equal(await readFile(path.join(displaced, "outcome.json"), "utf8"), "original");
+    });
+  },
+);
+
+test(
+  "checked atomic writes preserve outside temporary files after an ancestor junction swap",
+  { skip: process.platform !== "win32", concurrency: false },
+  async (t) => {
+    await withTempDir("checked-write-ancestor-replaced", async (dir) => {
+      const holder = path.join(dir, "holder");
+      const root = path.join(holder, "root");
+      const displaced = path.join(dir, "displaced");
+      const outsideHolder = path.join(dir, "outside-holder");
+      const outsideRoot = path.join(outsideHolder, "root");
+      await mkdir(root, { recursive: true });
+      await mkdir(outsideRoot, { recursive: true });
+      const target = path.join(root, "outcome.json");
+      await writeFile(target, "original");
+      await writeFile(path.join(outsideRoot, "outcome.json"), "outside");
+      const rename = fsp.rename;
+      let attempts = 0;
+      let outsideTemp: string | null = null;
+      t.mock.method(fsp, "rename", async (from) => {
+        attempts += 1;
+        await rename(holder, displaced);
+        await symlink(outsideHolder, holder, "junction");
+        outsideTemp = path.join(outsideRoot, path.basename(String(from)));
+        await writeFile(outsideTemp, "outside temporary file");
+        throw Object.assign(new Error("replacement temporarily locked"), { code: "EPERM" });
+      });
+      await assert.rejects(
+        checkedAtomicWriteFile(root, target, "replacement"),
+        /Session root changed while committing write/,
+      );
+      assert.equal(attempts, 1);
+      assert.equal(await readFile(path.join(outsideRoot, "outcome.json"), "utf8"), "outside");
+      assert.ok(outsideTemp);
+      assert.equal(await readFile(outsideTemp, "utf8"), "outside temporary file");
+      assert.equal(await readFile(path.join(displaced, "root/outcome.json"), "utf8"), "original");
+    });
+  },
+);
 
 test("research directory replacement restores the original after a post-backup failure", async () => {
   await withTempDir("checked-directory-rollback", async (dir) => {

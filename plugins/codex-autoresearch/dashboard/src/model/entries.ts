@@ -1,11 +1,6 @@
-import type {
-  DashboardEntry,
-  NormalizedEntries,
-  SessionConfig,
-  SessionRun,
-  SessionSegment,
-} from "../types";
-import { numericOrNull } from "./metrics";
+import type { DashboardEntry, NormalizedEntries, SessionConfig, SessionSegment } from "../types";
+import { defaultConfig, normalizeRun } from "../../../lib/dashboard-metric.js";
+export { defaultConfig, normalizeRun } from "../../../lib/dashboard-metric.js";
 
 const RUN_STATUSES = new Set(["keep", "discard", "crash", "checks_failed", "measure"]);
 
@@ -67,40 +62,4 @@ export function normalizeEntries(entries: DashboardEntry[] | undefined): Normali
     latestSegment: normalizedSegments.at(-1)?.segment ?? 0,
     invalidLedgerEntryCount,
   };
-}
-
-export function defaultConfig(): SessionConfig {
-  return {
-    name: "Autoresearch",
-    metricName: "metric",
-    metricUnit: "",
-    bestDirection: "lower",
-  };
-}
-
-function normalizeRun(entry: DashboardEntry, target: SessionSegment): SessionRun {
-  return {
-    ...(entry as SessionRun),
-    run: Number(entry.run) || target.runs.length + 1,
-    metric: numericOrNull(entry.metric),
-    status: (entry.status as SessionRun["status"]) || "keep",
-    description: String(entry.description || ""),
-    confidence: numericOrNull(entry.confidence),
-    metrics:
-      entry.metrics && typeof entry.metrics === "object" && !Array.isArray(entry.metrics)
-        ? { ...(entry.metrics as Record<string, unknown>) }
-        : {},
-    asi:
-      entry.asi && typeof entry.asi === "object" && !Array.isArray(entry.asi)
-        ? { ...(entry.asi as SessionRun["asi"]) }
-        : {},
-    timestamp: normalizeTimestamp(entry.timestamp),
-    segment: target.segment,
-  };
-}
-
-function normalizeTimestamp(value: unknown): string | number | undefined {
-  if (typeof value === "string" && value.trim()) return value;
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  return undefined;
 }

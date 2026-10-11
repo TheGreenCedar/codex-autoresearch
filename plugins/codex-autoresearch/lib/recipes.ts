@@ -55,7 +55,7 @@ const BUILT_IN_RECIPES: Recipe[] = [
     metricUnit: "s",
     direction: "lower",
     benchmarkCommand:
-      "node -e \"const {spawnSync}=require('node:child_process'); const c=process.platform==='win32'?'npm.cmd':'npm'; const r=spawnSync(c,['test'],{stdio:'inherit'}); process.exit(r.status ?? 1)\"",
+      "node -e \"const {spawnSync}=require('node:child_process'); const c=process.platform==='win32'?'npm.cmd':'npm'; const r=spawnSync(c,['test'],{stdio:'inherit',shell:process.platform==='win32',windowsHide:true}); if(r.error) console.error(r.error.message); process.exit(r.status ?? 1)\"",
     checksCommand: "",
     scope: ["src"],
     caveats: ["Requires an npm test script."],

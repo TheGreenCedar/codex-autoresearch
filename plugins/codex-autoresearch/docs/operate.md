@@ -59,7 +59,7 @@ The five statuses have deliberately narrow meanings:
 
 Pass `--revert-paths` when the cleanup scope should be narrower than configured commit paths. Check `git status --short --branch` before logging any status that may mutate Git.
 
-Use `--from-last` rather than copying a metric out of the terminal. If inline JSON is awkward in the current shell, put metrics or the structured experiment note in a file and pass `--metrics-file` or `--asi-json-file`.
+Use `--from-last` rather than copying a metric out of the terminal. A successful accepted packet must retain its evaluated primary metric; a differing `--metric` override is rejected before logging. Record a separate manual observation without `--from-last` when the value came from another source. Manual values do not authorize a measured canonical outcome or a keep. If inline JSON is awkward in the current shell, put metrics or the structured experiment note in a file and pass `--metrics-file` or `--asi-json-file`.
 
 Detailed output stores that structured experiment note in the `asi` field. It should say what Codex expected, what the evidence showed, why a rejected path should stay rejected, and what experiment would be sensible next. Learning defaults to `none`; `causal` or `discriminating` requires evidence and a concrete changed belief.
 

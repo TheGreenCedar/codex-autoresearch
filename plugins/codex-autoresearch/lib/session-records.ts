@@ -88,10 +88,24 @@ export function appendJsonl(workDir: string, entry: UnknownRecord): void {
 export function appendJsonlEntries(workDir: string, entries: UnknownRecord[]): void {
   if (entries.length === 0) return;
   const paths = resolveSessionPaths({ workDir });
+  let delimiter = "";
+  if (fs.existsSync(paths.ledgerPath)) {
+    const handle = fs.openSync(paths.ledgerPath, "r");
+    try {
+      const size = fs.fstatSync(handle).size;
+      if (size > 0) {
+        const tail = Buffer.alloc(1);
+        fs.readSync(handle, tail, 0, 1, size - 1);
+        if (tail[0] !== 0x0a) delimiter = "\n";
+      }
+    } finally {
+      fs.closeSync(handle);
+    }
+  }
   checkedAppendFileSync(
     paths.sessionDir,
     paths.ledgerPath,
-    `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    `${delimiter}${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
   );
 }
 

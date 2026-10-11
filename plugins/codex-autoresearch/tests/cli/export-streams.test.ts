@@ -37,6 +37,29 @@ test("export refuses to write outside the working directory", async () => {
   });
 });
 
+test("default export refuses an output symlink and preserves its outside target", async (t) => {
+  await withTempDir("linked-default-export", async (dir) => {
+    await setupFixture(dir, { name: "linked default export", acceptedContract: true });
+    await appendLegacyLedgerRows(dir, [{ run: 1, metric: 1, status: "keep" }]);
+    const outsideFile = path.join(path.dirname(dir), `${path.basename(dir)}-outside.html`);
+    await writeFile(outsideFile, "Preserve the outside file.");
+    try {
+      try {
+        await symlink(outsideFile, path.join(dir, "autoresearch-dashboard.html"), "file");
+      } catch (error) {
+        t.skip(`file symlink creation unavailable: ${String(error)}`);
+        return;
+      }
+      const result = await runCli(["export", "--cwd", dir]);
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, /outside the working directory/);
+      assert.equal(await readFile(outsideFile, "utf8"), "Preserve the outside file.");
+    } finally {
+      await rm(outsideFile, { force: true });
+    }
+  });
+});
+
 test("export refuses to write through linked directories outside the working directory", async (t) => {
   await withTempDir("linked-contained-export", async (dir) => {
     await setupFixture(dir, { name: "linked export" });

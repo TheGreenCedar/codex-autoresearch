@@ -56,6 +56,8 @@ Managed work reports its ticket's elapsed wall-clock interval. This is not host 
 
 Evidence can satisfy a criterion only when it names that criterion and has an actual execution receipt. Autoresearch checks the assessed subject, evaluator, fixtures, environment, correctness checks, criterion version, and referenced evidence. When a dependency changes, the old result no longer applies; the original observation remains in history. Reusing an execution does not add a measurement. A counterexample that still applies remains visible and prevents the criterion from passing.
 
+Process workers capture the assessed inputs after evaluation and compare them again after correctness checks. A check that changes an assessed dependency invalidates that observation; rerun the evaluator on the final candidate. Changes excluded by an accepted dependency manifest may remain valid.
+
 The default dependency set is the complete worktree input inventory. Narrower reuse requires an accepted `dependencySource` with a protected relative path, SHA-256 digest, and authority reference. The pinned JSON manifest has `schemaVersion: 1` and a `criteria` object keyed by criterion ID. Each entry lists `subject`, `evaluator`, `fixtures`, and `checks` paths. The subject list must be nonempty. A changed manifest requires an authorization amendment.
 
 An edit ticket saves the original contents of its authorized paths, including preexisting dirty work. Before discarding a candidate, its observation can include `retainPatch: {"id": "regression-test", "paths": ["src/regression.test.ts"]}`. This saves an immutable patch containing only owned changes to the selected paths. It does not accept the candidate or apply the patch. Later application needs a new bounded action, scope review, and current correctness evidence. Audit output exposes the retained patch identity and digest.
@@ -69,6 +71,10 @@ Goal and learning prose cannot create or satisfy product-wide proof requirements
 A `process` action saves its reservation and launch identity before starting a packaged worker. Closing the observing CLI does not stop the worker. `next --resume <id>` reads its progress or completion; `--cancel` requests cancellation. An uncertain launch is never replaced. An action proven never to have started can be cancelled without launching it.
 
 If the worker dies, its reservation remains. Cancellation can release that reservation only after every process within the observed native boundary is proven stopped. Autoresearch charges a conservative estimate for that execution; it does not report the estimate as measured usage.
+
+An unknown completion remains resumable. Newer cancellation requests survive reconciliation, and a later scope or input error cannot release a reservation while evaluator or check termination is still unproven.
+
+Brief Windows file locks can delay state replacement. The writer retries the same prepared file within a bounded interval, checking its destination again each time. It never repeats the evaluator or mutation. A persistent write failure remains unknown, with its reservation and underlying error preserved.
 
 On POSIX systems that boundary is the process group; on Windows it is the observed native process tree. Helpers that daemonize and escape observation are neither contained nor accounted for. Receipts state this limit. The plugin enforces wall-clock limits within that boundary and cannot guarantee resource limits across the whole host. Use an externally enforced environment when the task needs containment of arbitrary subprocesses.
 

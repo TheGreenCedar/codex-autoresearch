@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { runAutoresearchCli } from "../../scripts/autoresearch.js";
 import { renderExportedDashboard } from "../helpers/dashboard-export.js";
 import { quoteForAcceptedShell } from "../helpers/process.js";
 
@@ -46,6 +47,20 @@ async function appendLegacyLedgerRows(dir: string, rows: Record<string, unknown>
   );
 }
 
+async function runSourceCli(args: string[]) {
+  let stdout = "";
+  let stderr = "";
+  const code = await runAutoresearchCli(args, {
+    stdout: (text) => {
+      stdout += `${text}\n`;
+    },
+    stderr: (text) => {
+      stderr += `${text}\n`;
+    },
+  });
+  return { code, stdout, stderr };
+}
+
 test("next returns only mechanically eligible decision options instead of a fake status", async () => {
   await withTempDir("decision-hint", async (dir) => {
     const command = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC seconds=1.25')"`;
@@ -64,6 +79,99 @@ test("next returns only mechanically eligible decision options instead of a fake
     assert.equal(payload.logHint.status, null);
     assert.equal(payload.logHint.needsDecision, true);
     assert.deepEqual(payload.logHint.allowedStatuses, ["discard", "measure"]);
+  });
+});
+
+test("accepted packets reject primary metric overrides without changing ledger or packet", async () => {
+  await withTempDir("accepted-metric-override", async (dir) => {
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=80')"`;
+    const setup = await setupSessionFixture(dir, {
+      acceptedContract: true,
+      benchmarkCommand: benchmark,
+      metricName: "score",
+      direction: "higher",
+      name: "accepted metric override",
+    });
+    assert.equal(setup.code, 0, setup.stderr);
+    const baseline = await runSourceCli(["next", "--cwd", dir]);
+    assert.equal(baseline.code, 0, baseline.stderr);
+    const baselineLog = await runSourceCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "measure",
+      "--description",
+      "Baseline",
+    ]);
+    assert.equal(baselineLog.code, 0, baselineLog.stderr);
+    const candidate = await runSourceCli(["next", "--cwd", dir]);
+    assert.equal(candidate.code, 0, candidate.stderr);
+    const packet = JSON.parse(candidate.stdout);
+    assert.equal(packet.run.parsedPrimary, 80);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const ledgerBefore = await readFile(ledgerPath);
+    const packetBefore = await readFile(packet.lastRunPath);
+    for (const status of ["measure", "discard"]) {
+      const rejected = await runSourceCli([
+        "log",
+        "--cwd",
+        dir,
+        "--from-last",
+        "--status",
+        status,
+        "--metric",
+        "93",
+        "--description",
+        "Override measured result",
+      ]);
+      assert.notEqual(rejected.code, 0);
+      assert.match(rejected.stderr, /Cannot override the primary metric/);
+      assert.deepEqual(await readFile(ledgerPath), ledgerBefore);
+      assert.deepEqual(await readFile(packet.lastRunPath), packetBefore);
+    }
+    const logged = await runSourceCli([
+      "log",
+      "--cwd",
+      dir,
+      "--from-last",
+      "--status",
+      "measure",
+      "--metric",
+      "80",
+      "--description",
+      "Preserve measured result",
+    ]);
+    assert.equal(logged.code, 0, logged.stderr);
+    const result = JSON.parse(logged.stdout);
+    assert.equal(result.experiment.metric, 80);
+    assert.equal(result.resultingDecision.outcome.movement, "neutral");
+  });
+});
+
+test("legacy acceptance preserves an unterminated ledger prefix", async () => {
+  await withTempDir("legacy-acceptance-delimiter", async (dir) => {
+    const benchmark = `${quoteForAcceptedShell(process.execPath)} -e "console.log('METRIC score=1')"`;
+    const setup = await setupSessionFixture(dir, {
+      completeContract: true,
+      benchmarkCommand: benchmark,
+      metricName: "score",
+      name: "legacy acceptance delimiter",
+    });
+    assert.equal(setup.code, 0, setup.stderr);
+    const ledgerPath = path.join(dir, "autoresearch.jsonl");
+    const prefix = (await readFile(ledgerPath, "utf8")).trimEnd();
+    const prefixRows = prefix.split(/\r?\n/).map((line) => JSON.parse(line));
+    await writeFile(ledgerPath, prefix);
+    const next = await runSourceCli(["next", "--cwd", dir]);
+    assert.equal(next.code, 0, next.stderr);
+    const rows = (await readFile(ledgerPath, "utf8"))
+      .trimEnd()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line));
+    assert.deepEqual(rows.slice(0, prefixRows.length), prefixRows);
+    assert.equal(rows.at(-1).type, "experiment-contract-accepted");
   });
 });
 
