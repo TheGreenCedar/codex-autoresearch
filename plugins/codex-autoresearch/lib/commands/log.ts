@@ -286,6 +286,11 @@ export async function logExperiment(
     acceptedCandidateFingerprint = candidateFingerprint;
     const packetCandidateFingerprint = packetRun.contractCandidateFingerprint;
     const evaluatedMetric = finiteMetric(packetRun.parsedPrimary);
+    if (!FAILURE_STATUSES.has(status) && metric !== evaluatedMetric) {
+      throw new Error(
+        "Cannot override the primary metric from an accepted last-run packet. Log its evaluated metric or record a separate manual measurement without --from-last.",
+      );
+    }
     const checkRuns = Array.isArray(packetChecks.runs) ? packetChecks.runs : [];
     const checkOutcomes = checkRuns.map((value) => {
       const checkRun = record(value);
@@ -2048,7 +2053,16 @@ async function advanceSymbolicHeadFilesAtomically(
 async function assertFilesReferenceStorage(workDir: string): Promise<void> {
   const format = await runGit(["rev-parse", "--show-ref-format"], workDir);
   if (format.code === 0 && !format.stdoutTruncated && format.stdout.trim() === "files") return;
-  if (format.code !== 0 && /unknown option|usage:/i.test(gitOutput(format, ""))) {
+  const echoedUnsupportedOption =
+    format.code === 0 &&
+    !format.stdoutTruncated &&
+    !format.stderrTruncated &&
+    !format.stderr.trim() &&
+    format.stdout.trim() === "--show-ref-format";
+  if (
+    echoedUnsupportedOption ||
+    (format.code !== 0 && /unknown option|usage:/i.test(gitOutput(format, "")))
+  ) {
     const configured = await runGit(["config", "--get", "extensions.refStorage"], workDir);
     if (configured.code === 1 && !configured.stdoutTruncated && !configured.stderrTruncated) return;
     if (

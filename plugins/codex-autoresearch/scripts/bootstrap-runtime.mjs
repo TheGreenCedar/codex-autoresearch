@@ -25,6 +25,18 @@ const RELEASE_REPOSITORY = "TheGreenCedar/codex-autoresearch";
 const RELEASE_WORKFLOW = `${RELEASE_REPOSITORY}/.github/workflows/release.yml`;
 const RELEASE_VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/;
 const DASHBOARD_BUILD_ASSETS = ["dashboard-app.js", "dashboard-app.css"];
+const SOURCE_RUNTIME_FILES = [
+  "package.json",
+  "package-lock.json",
+  "tsconfig.json",
+  "tsconfig.node.json",
+  "tsconfig.dashboard.json",
+  "tsdown.config.ts",
+  "vite.dashboard.config.ts",
+  "assets/template.html",
+  "scripts/normalize-dashboard-build.mjs",
+];
+const SOURCE_RUNTIME_DIRECTORIES = ["lib", "scripts", "dashboard/src"];
 
 export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
   const { install = true } = options;
@@ -32,21 +44,31 @@ export async function ensureRuntime(entrypoint, importerUrl, options = {}) {
   const pluginRoot = path.resolve(scriptDir, "..");
   const target = path.join(pluginRoot, "dist", "scripts", entrypoint);
 
-  await rebuildStaleSourceRuntime(pluginRoot, target);
+  const canBuildSource = (
+    await Promise.all(
+      ["scripts/autoresearch.ts", "tsdown.config.ts", "node_modules"].map((file) =>
+        fileExists(path.join(pluginRoot, file)),
+      ),
+    )
+  ).every(Boolean);
   const replacementTargets = runtimeReplacementTargets(pluginRoot);
   const ready = (await fileExists(target)) && (await dashboardRuntimeReady(pluginRoot));
   const recoveryPending = await hasDirectorySwapArtifacts(replacementTargets);
-  if (ready && !recoveryPending) return pathToFileURL(target).href;
-  if (!install) {
-    if (!ready) throw missingRuntimeError(pluginRoot, target);
-    throw new Error(
-      "Codex Autoresearch runtime has unfinished replacement artifacts. Run the launcher once with hydration enabled to recover or inspect them safely.",
-    );
-  }
+  if (ready && !recoveryPending && !canBuildSource) return pathToFileURL(target).href;
 
   await withRuntimeInstallLock(pluginRoot, async () => {
-    await recoverDirectorySwapArtifacts(pluginRoot, replacementTargets);
+    if (!install && (await hasDirectorySwapArtifacts(replacementTargets))) {
+      if (!(await fileExists(target)) || !(await dashboardRuntimeReady(pluginRoot))) {
+        throw missingRuntimeError(pluginRoot, target);
+      }
+      throw new Error(
+        "Codex Autoresearch runtime has unfinished replacement artifacts. Run the launcher once with hydration enabled to recover or inspect them safely.",
+      );
+    }
+    if (install) await recoverDirectorySwapArtifacts(pluginRoot, replacementTargets);
+    if (canBuildSource) await rebuildStaleSourceRuntime(pluginRoot, target);
     if ((await fileExists(target)) && (await dashboardRuntimeReady(pluginRoot))) return;
+    if (!install) throw missingRuntimeError(pluginRoot, target);
     await installRuntimeFromRelease(pluginRoot, options);
     if (!(await fileExists(target))) {
       throw new Error(`Release runtime did not provide ${path.relative(pluginRoot, target)}.`);
@@ -75,10 +97,6 @@ async function dashboardBuildReady(pluginRoot) {
 }
 
 async function rebuildStaleSourceRuntime(pluginRoot, target) {
-  if (!(await fileExists(path.join(pluginRoot, "scripts", "autoresearch.ts")))) return;
-  if (!(await fileExists(path.join(pluginRoot, "tsdown.config.ts")))) return;
-  if (!(await fileExists(path.join(pluginRoot, "node_modules")))) return;
-
   const dashboardMissing = !(await dashboardBuildReady(pluginRoot));
   const outputMtime = Math.min(
     await fileMtime(target),
@@ -88,8 +106,20 @@ async function rebuildStaleSourceRuntime(pluginRoot, target) {
       ),
     )),
   );
-  if (!dashboardMissing && (await sourceRuntimeFreshByGit(pluginRoot, outputMtime))) return;
-  if (!dashboardMissing && (await newestSourceMtime(pluginRoot)) < outputMtime) return;
+  if (!dashboardMissing) {
+    const gitFresh = await sourceRuntimeFreshByGit(pluginRoot, outputMtime);
+    if (gitFresh === true) return;
+    if (
+      gitFresh === null &&
+      (
+        await Promise.all(
+          SOURCE_RUNTIME_DIRECTORIES.map((dir) => fileExists(path.join(pluginRoot, dir))),
+        )
+      ).every(Boolean) &&
+      (await newestSourceMtime(pluginRoot)) < outputMtime
+    )
+      return;
+  }
 
   const build = npmBuildInvocation("build");
   await run(build.command, build.args, { cwd: pluginRoot });
@@ -629,7 +659,7 @@ async function sourceRuntimeFreshByGit(pluginRoot, targetMtime) {
       pathToFileURL(path.join(pluginRoot, "dist", "lib", "git-paths.mjs")).href
     ));
   } catch {
-    return false;
+    return null;
   }
   const [repoRootResult, headPathResult, indexPathResult, status] = await Promise.all([
     runCapture("git", ["rev-parse", "--show-toplevel"], { cwd: pluginRoot }).catch(() => null),
@@ -642,17 +672,14 @@ async function sourceRuntimeFreshByGit(pluginRoot, targetMtime) {
     runCapture(
       "git",
       [
+        "--no-optional-locks",
         "status",
         "--porcelain=v1",
         "-z",
         "-uall",
         "--",
-        "package.json",
-        "lib",
-        "scripts",
-        "dashboard/src",
-        "vite.dashboard.config.ts",
-        "assets/template.html",
+        ...SOURCE_RUNTIME_FILES,
+        ...SOURCE_RUNTIME_DIRECTORIES,
       ],
       {
         cwd: pluginRoot,
@@ -669,12 +696,12 @@ async function sourceRuntimeFreshByGit(pluginRoot, targetMtime) {
     !status ||
     status.code !== 0
   )
-    return false;
+    return null;
 
   const repoRootText = gitScalar(repoRootResult.stdout);
   const headPathText = gitScalar(headPathResult.stdout);
   const indexPathText = gitScalar(indexPathResult.stdout);
-  if (!repoRootText || !headPathText || !indexPathText) return false;
+  if (!repoRootText || !headPathText || !indexPathText) return null;
 
   const dirty = dirtyRuntimeSourcePaths({
     pluginRoot,
@@ -682,8 +709,8 @@ async function sourceRuntimeFreshByGit(pluginRoot, targetMtime) {
     repoRoot: repoRootText,
     stdout: status.stdout,
   });
-  if (dirty.fullScanRequired) return false;
-
+  if (!(await Promise.all(dirty.roots.map((root) => fileExists(root)))).every(Boolean))
+    return false;
   const markerMtimes = await Promise.all([
     fileMtime(headPathText),
     fileMtime(indexPathText),
@@ -693,25 +720,34 @@ async function sourceRuntimeFreshByGit(pluginRoot, targetMtime) {
 }
 
 function dirtyRuntimeSourcePaths({ parsePorcelainV1Z, pluginRoot, repoRoot, stdout }) {
-  const paths = [];
+  const paths = new Set();
+  const roots = new Set();
   for (const entry of parsePorcelainV1Z(stdout)) {
     const { status } = entry;
-    if (
-      status.includes("D") ||
-      status.includes("R") ||
-      status.includes("C") ||
-      status.includes("T")
-    ) {
-      return { fullScanRequired: true, paths };
-    }
     for (const gitPath of entry.paths) {
       const absolutePath = path.resolve(repoRoot, gitPath.replace(/\//g, path.sep));
       const relativePath = slashPath(path.relative(pluginRoot, absolutePath));
       if (!isRuntimeSourcePath(relativePath)) continue;
-      paths.push(absolutePath);
+      paths.add(absolutePath);
+      if (/[DRCT]/.test(status)) {
+        const sourceDirectory = SOURCE_RUNTIME_DIRECTORIES.find((dir) =>
+          relativePath.startsWith(`${dir}/`),
+        );
+        if (!sourceDirectory) {
+          paths.add(path.dirname(absolutePath));
+          continue;
+        }
+        const sourceRoot = path.join(pluginRoot, sourceDirectory);
+        roots.add(sourceRoot);
+        // Surviving source ancestors retain removal times even when a whole directory is gone.
+        for (let parent = path.dirname(absolutePath); ; parent = path.dirname(parent)) {
+          paths.add(parent);
+          if (samePath(parent, sourceRoot)) break;
+        }
+      }
     }
   }
-  return { fullScanRequired: false, paths };
+  return { paths: [...paths], roots: [...roots] };
 }
 
 function gitScalar(stdout) {
@@ -723,9 +759,7 @@ function gitScalar(stdout) {
 
 export function isRuntimeSourcePath(relativePath) {
   return (
-    relativePath === "package.json" ||
-    relativePath === "vite.dashboard.config.ts" ||
-    relativePath === "assets/template.html" ||
+    SOURCE_RUNTIME_FILES.includes(relativePath) ||
     relativePath.startsWith("dashboard/src/") ||
     ((relativePath.startsWith("lib/") || relativePath.startsWith("scripts/")) &&
       relativePath.endsWith(".ts"))
@@ -737,8 +771,8 @@ function slashPath(value) {
 }
 
 async function newestSourceMtime(pluginRoot) {
-  const files = ["package.json", "vite.dashboard.config.ts", "assets/template.html"];
-  for (const dir of ["lib", "scripts", "dashboard/src"]) {
+  const files = [...SOURCE_RUNTIME_FILES, ...SOURCE_RUNTIME_DIRECTORIES];
+  for (const dir of SOURCE_RUNTIME_DIRECTORIES) {
     const entries = await fs
       .readdir(path.join(pluginRoot, dir), { recursive: true })
       .catch(() => []);

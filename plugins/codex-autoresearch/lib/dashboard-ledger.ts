@@ -4,6 +4,18 @@ import { createInterface } from "node:readline";
 
 import { isAcceptedCurrentRun } from "./evidence-registry.js";
 import {
+  defaultConfig,
+  bestRunFor,
+  normalizeRun,
+  requestedMetricMode,
+  resolveMetricDefinition,
+} from "./dashboard-metric.js";
+import type {
+  SessionConfig,
+  SessionSegment,
+  WeightedMetricDefinition,
+} from "../dashboard/src/types.js";
+import {
   DASHBOARD_LEDGER_MAX_ENTRIES,
   type DashboardLedgerBounds,
 } from "./dashboard-ledger-bounds.js";
@@ -58,6 +70,8 @@ export interface DashboardLedgerSummary {
   best: number | null;
   baselineRun: RunRecord | null;
   bestRun: RunRecord | null;
+  weightedBestRun: RunRecord | null;
+  metricDefinition: WeightedMetricDefinition | null;
   latestRun: RunRecord | null;
   latestFailure: RunRecord | null;
   historicalBestRun: RunRecord | null;
@@ -90,6 +104,8 @@ interface SegmentSummary {
   latestRun: RunRecord | null;
   latestFailure: RunRecord | null;
   accepted: MetricExtremes;
+  weightedBestRun: RunRecord | null;
+  missingWeightedEvidenceRun: RunRecord | null;
   promotion: MetricExtremes & {
     count: number;
     acceptedRunCount: number;
@@ -127,6 +143,7 @@ export async function foldDashboardLedgerFile(
   let activeConfigEntry: SessionRecord | null = null;
   let previousConfigEntry: SessionRecord | null = null;
   let config = defaultDashboardConfig();
+  let metricConfig = defaultConfig();
   let metricSemanticsWarning: Record<string, unknown> | null = null;
   let current = emptySegmentSummary();
   const historicalAccepted: MetricExtremes = { min: null, max: null };
@@ -178,6 +195,7 @@ export async function foldDashboardLedgerFile(
         }
         previousConfigEntry = activeConfigEntry;
         config = dashboardConfigFromRecord(record, config);
+        metricConfig = { ...defaultConfig(), ...record };
         activeConfigEntry = { ...record, segment };
         metricSemanticsWarning =
           priorSegmentHadRuns &&
@@ -188,7 +206,7 @@ export async function foldDashboardLedgerFile(
       } else if (record?.run != null) {
         hasAnyRun = true;
         const run = normalizedRun(record, segment);
-        if (run.segment === segment) updateSegmentSummary(current, run);
+        if (run.segment === segment) updateSegmentSummary(current, run, metricConfig);
         if (isAcceptedCurrentRun(run)) updateExtremes(historicalAccepted, run);
       }
       if (record) processLifecycle.add(record);
@@ -207,12 +225,17 @@ export async function foldDashboardLedgerFile(
   const bestRun = extremeForDirection(current.accepted, config.bestDirection);
   const historicalBestRun = extremeForDirection(historicalAccepted, config.bestDirection);
   const promotionBestRun = extremeForDirection(current.promotion, config.bestDirection);
+  const metricDefinition = foldMetricDefinition(current, metricConfig, segment);
+  const weightedBestRun =
+    metricDefinition.mode === "weighted_cost" ? current.weightedBestRun : null;
   const processLifecycleProjection = processLifecycle.snapshot();
   const entries = lines.flatMap((line) => (line.record ? [line.record] : []));
   const analysisRecords = boundedAnalysisRecords(lines, [
     activeConfigEntry,
     current.baselineRun,
     bestRun,
+    weightedBestRun,
+    current.missingWeightedEvidenceRun,
     current.latestFailure,
     current.latestRun,
     current.promotion.baselineRun,
@@ -265,6 +288,8 @@ export async function foldDashboardLedgerFile(
       best: finiteMetric(bestRun?.metric),
       baselineRun: current.baselineRun,
       bestRun,
+      weightedBestRun,
+      metricDefinition,
       latestRun: current.latestRun,
       latestFailure: current.latestFailure,
       historicalBestRun,
@@ -311,6 +336,8 @@ function emptyDashboardLedgerFold(maxEntries: number): DashboardLedgerFold {
       best: null,
       baselineRun: null,
       bestRun: null,
+      weightedBestRun: null,
+      metricDefinition: null,
       latestRun: null,
       latestFailure: null,
       historicalBestRun: null,
@@ -399,6 +426,8 @@ function emptySegmentSummary(): SegmentSummary {
     latestRun: null,
     latestFailure: null,
     accepted: { min: null, max: null },
+    weightedBestRun: null,
+    missingWeightedEvidenceRun: null,
     promotion: {
       min: null,
       max: null,
@@ -410,7 +439,11 @@ function emptySegmentSummary(): SegmentSummary {
   };
 }
 
-function updateSegmentSummary(summary: SegmentSummary, run: RunRecord): void {
+function updateSegmentSummary(
+  summary: SegmentSummary,
+  run: RunRecord,
+  metricConfig: SessionConfig,
+): void {
   summary.runCount += 1;
   const status = String(run.status || "");
   summary.statusCounts[status] = (summary.statusCounts[status] || 0) + 1;
@@ -420,6 +453,28 @@ function updateSegmentSummary(summary: SegmentSummary, run: RunRecord): void {
     summary.latestFailure = run;
   }
   if (!summary.baselineRun && isBaselineEligibleMetricRun(run)) summary.baselineRun = run;
+  if (requestedMetricMode(metricConfig) === "weighted_cost") {
+    const metricSession: SessionSegment = {
+      segment: run.segment ?? 0,
+      config: metricConfig,
+      runs: [],
+    };
+    const baseline = summary.baselineRun ? normalizeRun(summary.baselineRun, metricSession) : null;
+    const candidate = normalizeRun(run, metricSession);
+    const definition = resolveMetricDefinition(
+      { ...metricSession, runs: baseline ? [baseline, candidate] : [candidate] },
+      finiteMetric(summary.baselineRun?.metric),
+    );
+    if (definition.mode === "raw" && candidate.metric != null && candidate.status !== "crash")
+      summary.missingWeightedEvidenceRun ||= run;
+    if (definition.mode === "weighted_cost" && isAcceptedCurrentRun(run)) {
+      const previous = summary.weightedBestRun
+        ? [normalizeRun(summary.weightedBestRun, metricSession)]
+        : [];
+      if (bestRunFor([...previous, candidate], definition) === candidate)
+        summary.weightedBestRun = run;
+    }
+  }
   summary.latestRun = run;
   if (isAcceptedCurrentRun(run)) {
     summary.acceptedRunCount += 1;
@@ -436,6 +491,22 @@ function updateSegmentSummary(summary: SegmentSummary, run: RunRecord): void {
       updateExtremes(summary.promotion, run);
     }
   }
+}
+
+function foldMetricDefinition(
+  summary: SegmentSummary,
+  config: SessionConfig,
+  segment: number,
+): WeightedMetricDefinition {
+  const session: SessionSegment = { config, segment, runs: [] };
+  const anchors = [summary.baselineRun, summary.missingWeightedEvidenceRun];
+  return resolveMetricDefinition(
+    {
+      ...session,
+      runs: anchors.flatMap((run) => (run ? [normalizeRun(run, session)] : [])),
+    },
+    finiteMetric(summary.baselineRun?.metric),
+  );
 }
 
 function updateExtremes(extremes: MetricExtremes, run: RunRecord): void {

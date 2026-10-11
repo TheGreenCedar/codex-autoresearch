@@ -12,7 +12,8 @@ import { resolveNpmCommand } from "./npm-command.js";
 export const PRODUCT_PHASE_TIMEOUT_SECONDS = process.platform === "win32" ? 4_800 : 1_800;
 
 export const PRODUCT_TEST_SCRIPTS = [
-  "test:compiled:cli",
+  "test:compiled:cli:general",
+  "test:compiled:cli:git",
   "test:compiled:dashboard",
   "test:compiled:finalize",
   "test:compiled:process",

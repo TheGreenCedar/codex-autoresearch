@@ -89,7 +89,9 @@ The version-2 receipt stores the input, packet, contract, evidence, pre-Git iden
 
 ```mermaid
 flowchart LR
-  Files["Ledger, config, packet, Git, runtime"] --> Model["Dashboard view model"]
+  Ledger["Full ledger stream"] --> Fold["Bounded rows and metric anchors"]
+  Fold --> Model["Dashboard view model"]
+  Files["Config, packet, Git, runtime"] --> Model
   Model --> Live["Loopback live server"]
   Model --> Export["Static HTML export"]
   Live --> Browser["Read-only browser UI"]
@@ -97,6 +99,8 @@ flowchart LR
 ```
 
 The dashboard shows the same semantic decision ID, phase, action kind, blocker code, parent disposition, contract digest, and evaluator identity as the terminal. It may also show metrics, lanes, packet diagnostics, runtime provenance, and finalization pressure. It redacts executable commands and does not expose setup, packet, logging, gap, or finalization mutation routes.
+
+The ledger fold and browser use the pure metric implementation in `lib/dashboard-metric.ts`. The fold preserves baseline, best-result, and missing-component anchors across the full stream; transport includes those anchors without sending every historical row to the browser.
 
 The live server is loopback-only and validates Host headers. Static exports are snapshots; they cannot prove current packet freshness.
 

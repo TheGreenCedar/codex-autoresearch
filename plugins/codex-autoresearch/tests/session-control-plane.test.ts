@@ -51,7 +51,13 @@ import {
   projectionBudget,
   projectStateReadModel,
 } from "../lib/session-read-model.js";
-import { appendJsonl, jsonlPath, ledgerRecordIssue, readJsonl } from "../lib/session-records.js";
+import {
+  appendJsonl,
+  appendJsonlEntries,
+  jsonlPath,
+  ledgerRecordIssue,
+  readJsonl,
+} from "../lib/session-records.js";
 import { parseSessionForensics } from "../lib/session-forensics.js";
 import { resolveSessionPaths } from "../lib/session-paths.js";
 import { CLEANUP_SESSION_PATHS } from "../lib/session-artifacts.js";
@@ -189,6 +195,26 @@ test("session record ledger helpers use the repo-local resolver path", async () 
     assert.deepEqual(readJsonl(dir), [
       { type: "config", metricName: "score", bestDirection: "higher" },
     ]);
+  });
+});
+
+test("shared ledger append separates valid unterminated rows without adding blank records", async () => {
+  await withTempDir("ledger-append-delimiter", async (dir) => {
+    const first = { type: "config", metricName: "score" };
+    const second = { run: 1, metric: 0, status: "measure" };
+    const third = { run: 2, metric: 1, status: "measure" };
+    for (const ending of ["", "\n", "\r\n"]) {
+      await writeFile(jsonlPath(dir), `${JSON.stringify(first)}${ending}`);
+      appendJsonlEntries(dir, [second, third]);
+      assert.deepEqual(readJsonl(dir), [first, second, third]);
+      assert.equal(
+        await readFile(jsonlPath(dir), "utf8"),
+        `${JSON.stringify(first)}${ending || "\n"}${JSON.stringify(second)}\n${JSON.stringify(third)}\n`,
+      );
+    }
+    await writeFile(jsonlPath(dir), "");
+    appendJsonl(dir, first);
+    assert.equal(await readFile(jsonlPath(dir), "utf8"), `${JSON.stringify(first)}\n`);
   });
 });
 

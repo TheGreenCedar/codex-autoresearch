@@ -559,6 +559,86 @@ test("the first candidate compares with its accepted baseline without counting b
   assert.equal(plan.learning.consecutiveNoLearningCandidates, 1);
 });
 
+test("successful outcomes require matching verified evaluator evidence", () => {
+  const evidence = {
+    contractDigest: "contract-a",
+    candidateFingerprint: "candidate-a",
+    acceptedEvaluation: true,
+    checksPassed: true,
+    metric: 93,
+  };
+  for (const invalidEvidence of [
+    undefined,
+    {},
+    { ...evidence, contractDigest: "other-contract" },
+    { ...evidence, candidateFingerprint: "" },
+    { ...evidence, acceptedEvaluation: false },
+    { ...evidence, checksPassed: false },
+    { ...evidence, metric: 80 },
+  ]) {
+    const plan = compileDecisionPlan(
+      snapshotFixture({
+        records: [
+          acceptedContractRecord({
+            metric: { kind: "threshold", metricName: "score", target: 90, comparator: ">=" },
+          }),
+          candidateRecord({
+            metric: 93,
+            status: "measure",
+            contractEvaluationEvidence: invalidEvidence,
+          }),
+        ],
+      }),
+      [],
+    );
+    assert.equal(plan.outcome.validity, "unknown");
+    assert.equal(plan.outcome.movement, "unknown");
+    assert.equal(plan.outcome.attainment, "unknown");
+  }
+  const failed = compileDecisionPlan(
+    snapshotFixture({
+      records: [candidateRecord({ status: "crash", contractEvaluationEvidence: undefined })],
+    }),
+    [],
+  );
+  assert.equal(failed.outcome.execution, "failed");
+});
+
+test("outcome comparisons exclude unverified, quarantined, and superseded references", () => {
+  for (const invalid of [
+    { contractEvaluationEvidence: undefined },
+    { quarantined: true },
+    { evidenceStatus: "superseded" },
+  ]) {
+    const plan = compileDecisionPlan(
+      snapshotFixture({
+        records: [
+          acceptedContractRecord(),
+          candidateRecord({ run: 1, runPurpose: "baseline", metric: 10, status: "measure" }),
+          candidateRecord({ run: 2, metric: 1, status: "measure", ...invalid }),
+          candidateRecord({ run: 3, metric: 8, status: "measure" }),
+        ],
+      }),
+      [],
+    );
+    assert.equal(plan.outcome.kind, "improved");
+  }
+  for (const excluded of [{ quarantined: true }, { evidenceStatus: "superseded" }]) {
+    const plan = compileDecisionPlan(
+      snapshotFixture({
+        records: [
+          acceptedContractRecord(),
+          candidateRecord({ run: 1, runPurpose: "baseline", metric: 10, status: "measure" }),
+          candidateRecord({ run: 2, metric: 8, status: "measure" }),
+          candidateRecord({ run: 3, metric: 20, status: "measure", ...excluded }),
+        ],
+      }),
+      [],
+    );
+    assert.equal(plan.outcome.kind, "improved");
+  }
+});
+
 test("validated post-finalization evidence is the only completion authority", () => {
   const preApply = compileDecisionPlan(snapshotFixture(), [
     decisionDiagnostic("finalization-ready"),
@@ -896,6 +976,7 @@ function snapshotFixture(
 }
 
 function candidateRecord(overrides: Record<string, unknown>): Record<string, unknown> {
+  const metric = overrides.metric;
   return {
     type: "run",
     run: 1,
@@ -905,6 +986,17 @@ function candidateRecord(overrides: Record<string, unknown>): Record<string, unk
     experimentContractDigest: "contract-a",
     preconditionEpoch: "epoch-a",
     learning: { kind: "none" },
+    ...(typeof metric === "number" && Number.isFinite(metric)
+      ? {
+          contractEvaluationEvidence: {
+            contractDigest: "contract-a",
+            candidateFingerprint: "candidate-a",
+            acceptedEvaluation: true,
+            checksPassed: true,
+            metric,
+          },
+        }
+      : {}),
     ...overrides,
   };
 }

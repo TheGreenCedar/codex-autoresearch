@@ -348,6 +348,10 @@ export interface DashboardViewModel {
   evidenceReadout?: EvidenceReadoutModel;
   proofGaps?: ProofGapModel[];
   readout?: {
+    bestKept?: DashboardEntry | null;
+    weightedBestKept?: DashboardEntry | null;
+    baselineRun?: DashboardEntry | null;
+    metricDefinition?: WeightedMetricDefinition;
     nextAction?: string;
     confidenceText?: string;
     [key: string]: unknown;

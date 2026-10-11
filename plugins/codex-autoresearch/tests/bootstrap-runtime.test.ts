@@ -599,6 +599,12 @@ test("dashboard inputs participate in source runtime freshness", () => {
   assert.equal(isRuntimeSourcePath("dashboard/src/styles.css"), true);
   assert.equal(isRuntimeSourcePath("vite.dashboard.config.ts"), true);
   assert.equal(isRuntimeSourcePath("assets/template.html"), true);
+  assert.equal(isRuntimeSourcePath("tsdown.config.ts"), true);
+  assert.equal(isRuntimeSourcePath("tsconfig.node.json"), true);
+  assert.equal(isRuntimeSourcePath("tsconfig.dashboard.json"), true);
+  assert.equal(isRuntimeSourcePath("tsconfig.json"), true);
+  assert.equal(isRuntimeSourcePath("package-lock.json"), true);
+  assert.equal(isRuntimeSourcePath("scripts/normalize-dashboard-build.mjs"), true);
   assert.equal(isRuntimeSourcePath("dashboard/dist/generated.js"), false);
 });
 

@@ -3,11 +3,14 @@ import type {
   DashboardViewModel,
   SessionRun,
   SessionSegment,
-  WeightedMetricDefinition,
+  DashboardEntry,
 } from "../types";
 import { asiText } from "./asi";
 import { finiteMetric, improvementPercent } from "./metrics";
 import { metricValueForRun, resolveMetricDefinition } from "./metric-definition";
+import { normalizeRun } from "./entries";
+import { bestRunFor } from "../../../lib/dashboard-metric.js";
+export { bestRunFor } from "../../../lib/dashboard-metric.js";
 
 export function buildReadout(
   session: SessionSegment,
@@ -17,7 +20,9 @@ export function buildReadout(
   const runs = session.runs || [];
   const summary = viewModel.summary?.segment === session.segment ? viewModel.summary : null;
   const summaryBaseline = finiteMetric(summary?.baseline) ? Number(summary.baseline) : null;
-  const metricDefinition = resolveMetricDefinition(session, summaryBaseline);
+  const metricDefinition =
+    (summary ? viewModel.readout?.metricDefinition : null) ||
+    resolveMetricDefinition(session, summaryBaseline);
   const kept = runs.filter(
     (run) => isAcceptedCurrentKeep(run) && finiteMetric(metricValueForRun(run, metricDefinition)),
   );
@@ -25,6 +30,7 @@ export function buildReadout(
     (run) => run.status !== "crash" && finiteMetric(metricValueForRun(run, metricDefinition)),
   );
   const baselineRun =
+    (summary ? canonicalRunFor(viewModel.readout?.baselineRun, session) : null) ||
     (summaryBaseline == null ? null : evidence.find((run) => run.metric === summaryBaseline)) ||
     evidence.find((run) => run.status === "measure") ||
     evidence[0] ||
@@ -35,9 +41,19 @@ export function buildReadout(
       ? summaryBaseline
       : metricValueForRun(baselineRun, metricDefinition);
   const visibleBestRun = bestRunFor(kept, metricDefinition);
-  const visibleBestValue = metricValueForRun(visibleBestRun, metricDefinition);
-  const bestRun = visibleBestRun;
-  const best = visibleBestValue;
+  const canonicalBest = summary
+    ? metricDefinition.mode === "weighted_cost"
+      ? viewModel.readout?.weightedBestKept
+      : viewModel.readout?.bestKept
+    : null;
+  const canonicalBestRun = canonicalRunFor(canonicalBest, session);
+  const bestRun =
+    canonicalBestRun &&
+    isAcceptedCurrentKeep(canonicalBestRun) &&
+    finiteMetric(canonicalBestRun.metric)
+      ? canonicalBestRun
+      : visibleBestRun;
+  const best = metricValueForRun(bestRun, metricDefinition);
   const latestPlottedRun = evidence.at(-1) || null;
   const latestFailure =
     [...runs]
@@ -72,29 +88,6 @@ export function buildReadout(
   };
 }
 
-export function bestRunFor(
-  runs: SessionRun[],
-  metricDefinition: WeightedMetricDefinition,
-): SessionRun | null {
-  let best: SessionRun | null = null;
-  for (const run of runs) {
-    const value = metricValueForRun(run, metricDefinition);
-    if (!finiteMetric(value)) continue;
-    if (!best) {
-      best = run;
-      continue;
-    }
-    const bestValue = metricValueForRun(best, metricDefinition);
-    if (!finiteMetric(bestValue)) {
-      best = run;
-      continue;
-    }
-    if (metricDefinition.bestDirection === "higher" ? value > bestValue : value < bestValue)
-      best = run;
-  }
-  return best;
-}
-
 function isAcceptedCurrentKeep(run: SessionRun): boolean {
   if (run.status !== "keep") return false;
   if (run.quarantined === true) return false;
@@ -102,4 +95,16 @@ function isAcceptedCurrentKeep(run: SessionRun): boolean {
     .trim()
     .toLowerCase();
   return !evidenceStatus || evidenceStatus === "accepted";
+}
+
+function canonicalRunFor(
+  entry: DashboardEntry | null | undefined,
+  session: SessionSegment,
+): SessionRun | null {
+  return entry &&
+    typeof entry === "object" &&
+    !Array.isArray(entry) &&
+    entry.segment === session.segment
+    ? normalizeRun(entry, session)
+    : null;
 }

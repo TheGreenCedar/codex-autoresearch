@@ -1,6 +1,11 @@
 import { STATUS_VALUES, finiteMetric } from "./session-core.js";
 import { redactEvidenceObject } from "./evidence-redaction.js";
-import { acceptedCurrentRuns, buildEvidenceRegistry } from "./evidence-registry.js";
+import {
+  acceptedCurrentRuns,
+  buildEvidenceRegistry,
+  evidenceStatusForRun,
+  isAcceptedCurrentRun,
+} from "./evidence-registry.js";
 import { buildAiSummary } from "./dashboard-view-model/ai-summary.js";
 import { buildMissionControl } from "./dashboard-view-model/mission-control.js";
 import { buildWatchdogSummary } from "./watchdog-summary.js";
@@ -10,6 +15,14 @@ import {
   stripDashboardGuidanceCommandFields,
 } from "./dashboard-command-safety.js";
 import { parseDashboardContext, type DashboardContext } from "./types/dashboard-wire.js";
+import {
+  baselineCandidate,
+  bestRunFor,
+  defaultConfig,
+  normalizeRun,
+  resolveMetricDefinition,
+} from "./dashboard-metric.js";
+import type { SessionSegment } from "../dashboard/src/types.js";
 
 export { buildAiSummary } from "./dashboard-view-model/ai-summary.js";
 export { buildMissionControl } from "./dashboard-view-model/mission-control.js";
@@ -69,6 +82,35 @@ export function buildDashboardViewModel(context: DashboardContext) {
   const measurements = current.filter((run) => run.status === "measure");
   const measurementReadout = boundedMeasurementRunReadout(measurements);
   const bestKept = bestRun(kept, String(state.config.bestDirection || "lower"));
+  const metricSession: SessionSegment = {
+    config: {
+      ...defaultConfig(),
+      ...recordOrNull(state.activeConfigEntry),
+      ...state.config,
+      name: state.config.name || "Autoresearch",
+      metricName: state.config.metricName || "metric",
+      metricUnit: state.config.metricUnit || "",
+      bestDirection: state.config.bestDirection === "higher" ? "higher" : "lower",
+    },
+    segment: Number(state.segment || 0),
+    runs: [],
+  };
+  metricSession.runs = current.map((run) => normalizeRun(run, metricSession));
+  const metricDefinition =
+    ledgerSummary?.metricDefinition ||
+    resolveMetricDefinition(metricSession, finiteMetric(state.baseline));
+  const baselineRun =
+    ledgerSummary?.baselineRun ||
+    baselineCandidate(metricSession.runs, finiteMetric(state.baseline));
+  const weightedBestKept =
+    metricDefinition.mode === "weighted_cost"
+      ? ledgerSummary
+        ? ledgerSummary.weightedBestRun
+        : bestRunFor(
+            metricSession.runs.filter((run) => isAcceptedCurrentRun(run)),
+            metricDefinition,
+          )
+      : null;
   const latestFailure = failures.at(-1) || null;
   const parallelLanes = Array.isArray(state.parallelLanes)
     ? state.parallelLanes
@@ -295,7 +337,10 @@ export function buildDashboardViewModel(context: DashboardContext) {
       settings,
     },
     readout: {
+      metricDefinition,
+      baselineRun: baselineRun ? compactRun(baselineRun) : null,
       bestKept: bestKept ? compactRun(bestKept) : null,
+      weightedBestKept: weightedBestKept ? compactRun(weightedBestKept) : null,
       latestFailure: latestFailure ? compactRun(latestFailure) : null,
       measurementRuns: measurementReadout.runs,
       measurementRunCount: ledgerSummary?.measurementRunCount ?? measurements.length,
@@ -2014,6 +2059,9 @@ function compactRun(run: RunLike) {
     run: run.run,
     metric: run.metric,
     status: run.status,
+    segment: run.segment,
+    evidenceStatus: evidenceStatusForRun(run),
+    metrics: redactEvidenceObject(run.metrics || {}),
     description: redactEvidenceObject(run.description || ""),
     commit: run.commit || "",
     asi: redactEvidenceObject(run.asi || {}),

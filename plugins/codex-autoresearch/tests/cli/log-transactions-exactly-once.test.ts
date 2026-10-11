@@ -700,13 +700,15 @@ test("detached HEAD identity and update share one atomic ref transaction", async
   });
 });
 
-test("failed ref-lock acquisition preserves every foreign lock sentinel", async (t) => {
-  for (const fixture of [
-    { label: "symbolic intended ref", detach: false, lockPath: "refs/heads/main.lock" },
-    { label: "symbolic HEAD", detach: false, lockPath: "HEAD.lock" },
-    { label: "detached HEAD", detach: true, lockPath: "HEAD.lock" },
-  ] as const) {
-    await t.test(fixture.label, async () => {
+for (const fixture of [
+  { label: "symbolic intended ref", detach: false, lockPath: "refs/heads/main.lock" },
+  { label: "symbolic HEAD", detach: false, lockPath: "HEAD.lock" },
+  { label: "detached HEAD", detach: true, lockPath: "HEAD.lock" },
+] as const) {
+  test(
+    `failed ref-lock acquisition preserves every foreign lock sentinel: ${fixture.label}`,
+    { timeout: 120_000 },
+    async () => {
       await withTempDir(`foreign-${fixture.label.replaceAll(" ", "-")}-lock`, async (dir) => {
         await setupTransactionFixture(dir, { detachBeforePacket: fixture.detach });
         const parent = await git(dir, ["rev-parse", "HEAD"]);
@@ -727,9 +729,9 @@ test("failed ref-lock acquisition preserves every foreign lock sentinel", async 
           await rm(lockPath, { force: true });
         }
       });
-    });
-  }
-});
+    },
+  );
+}
 
 test("unsupported ref storage fails closed before the atomic symbolic-ref update", async (t) => {
   if (process.platform === "win32") {
@@ -758,34 +760,68 @@ test("unsupported ref storage fails closed before the atomic symbolic-ref update
   });
 });
 
-test("older Git without show-ref-format uses the files-ref lock boundary", async (t) => {
-  if (process.platform === "win32") {
-    t.skip("the one-shot Git shim uses POSIX executable semantics");
-    return;
-  }
-  await withTempDir("keep-older-git-files-ref", async (dir) => {
-    await setupTransactionFixture(dir);
-    await git(dir, ["config", "core.repositoryFormatVersion", "1"]);
-    await git(dir, ["config", "extensions.refStorage", "files"]);
-    const parent = await git(dir, ["rev-parse", "HEAD"]);
-    const shim = await installGitShim(dir, "older-files-ref", [
-      'previous_arg=""',
-      'for arg in "$@"; do',
-      '  if [ "$previous_arg" = "rev-parse" ] && [ "$arg" = "--show-ref-format" ]; then',
-      "    printf 'fatal: unknown option: --show-ref-format\\n' >&2",
-      "    exit 129",
-      "  fi",
-      '  previous_arg="$arg"',
-      "done",
-    ]);
+for (const fixture of [
+  {
+    label: "usage error with configured files",
+    response: ["    printf 'fatal: unknown option: --show-ref-format\\n' >&2", "    exit 129"],
+    storage: "files",
+    accepted: true,
+  },
+  {
+    label: "Git 2.43 literal option echo",
+    response: ["    printf '%s\\n' '--show-ref-format'", "    exit 0"],
+    storage: "",
+    accepted: true,
+  },
+  {
+    label: "unfamiliar format remains blocked",
+    response: ["    printf 'unfamiliar-ref-format\\n'", "    exit 0"],
+    storage: "",
+    accepted: false,
+  },
+] as const) {
+  test(
+    `older Git without show-ref-format uses the files-ref lock boundary: ${fixture.label}`,
+    { timeout: 120_000 },
+    async (t) => {
+      if (process.platform === "win32") {
+        t.skip("the one-shot Git shim uses POSIX executable semantics");
+        return;
+      }
+      await withTempDir("keep-older-git-files-ref", async (dir) => {
+        await setupTransactionFixture(dir);
+        const parent = await git(dir, ["rev-parse", "HEAD"]);
+        const shim = await installGitShim(dir, "older-files-ref", [
+          'previous_arg=""',
+          'for arg in "$@"; do',
+          '  if [ "$previous_arg" = "rev-parse" ] && [ "$arg" = "--show-ref-format" ]; then',
+          ...fixture.response,
+          "  fi",
+          '  if [ "$previous_arg" = "--get" ] && [ "$arg" = "extensions.refStorage" ]; then',
+          "    printf 'storage-queried\\n' > \"$MARKER\"",
+          ...(fixture.storage ? ["    printf 'files\\n'", "    exit 0"] : ["    exit 1"]),
+          "  fi",
+          '  previous_arg="$arg"',
+          "done",
+        ]);
 
-    const logged = await runCli(keepCliArgs(dir), { env: shim.env, spawn: true });
+        const logged = await runCli(keepCliArgs(dir), { env: shim.env, spawn: true });
 
-    assert.equal(logged.code, 0, logged.stderr);
-    assert.notEqual(await git(dir, ["rev-parse", "HEAD"]), parent);
-    assert.equal(await git(dir, ["show", "HEAD:src/score.txt"]), "2");
-  });
-});
+        if (fixture.accepted) {
+          assert.equal(logged.code, 0, logged.stderr);
+          assert.equal(await readFile(shim.marker, "utf8"), "storage-queried\n");
+          assert.notEqual(await git(dir, ["rev-parse", "HEAD"]), parent);
+          assert.equal(await git(dir, ["show", "HEAD:src/score.txt"]), "2");
+        } else {
+          assert.notEqual(logged.code, 0);
+          assert.match(logged.stderr, /Git reference storage.*unfamiliar-ref-format/i);
+          await assert.rejects(access(shim.marker), /ENOENT/);
+          assert.equal(await git(dir, ["rev-parse", "HEAD"]), parent);
+        }
+      });
+    },
+  );
+}
 
 test("ledger append inserts a receipt-owned delimiter after a valid unterminated prefix", async () => {
   await withTempDir("ledger-prefix-delimiter", async (dir) => {
@@ -1422,50 +1458,76 @@ test("evidence root link drift after interruption blocks ledger append", async (
   });
 });
 
-test("imported commits require accepted evaluation of the current candidate", async () => {
-  await withTempDir("dirty-imported-current-head", async (dir) => {
-    await setupTransactionFixture(dir);
-    const current = await git(dir, ["rev-parse", "HEAD"]);
-    await assert.rejects(
-      invokeLog({ ...keepArgs(dir, "Unevaluated imported tree"), commit: current }),
-      /accepted evaluation|evaluated candidate|current candidate/i,
-    );
-  });
-  await withTempDir("wrong-imported-commit", async (dir) => {
-    const { initialCommit } = await setupTransactionFixture(dir, {
-      commitCandidateBeforePacket: true,
+test(
+  "imported commits require accepted evaluation of the current candidate: dirty current HEAD",
+  { timeout: 120_000 },
+  async () => {
+    await withTempDir("dirty-imported-current-head", async (dir) => {
+      await setupTransactionFixture(dir);
+      const current = await git(dir, ["rev-parse", "HEAD"]);
+      await assert.rejects(
+        invokeLog({ ...keepArgs(dir, "Unevaluated imported tree"), commit: current }),
+        /accepted evaluation|evaluated candidate|current candidate/i,
+      );
     });
-    await assert.rejects(
-      invokeLog({ ...keepArgs(dir, "Wrong imported commit"), commit: initialCommit }),
-      /accepted evaluation|evaluated candidate|current candidate/i,
-    );
-  });
-  await withTempDir("accepted-imported-commit", async (dir) => {
-    await setupTransactionFixture(dir, { commitCandidateBeforePacket: true });
-    const current = await git(dir, ["rev-parse", "HEAD"]);
-    const accepted = await invokeLog({ ...keepArgs(dir), commit: current });
-    assert.equal(accepted.ok, true);
-    assert.equal(accepted.experiment.commit, current.slice(0, 12));
-    assert.equal(accepted.experiment.candidateOrigin.kind, "commit");
-  });
-  await withTempDir("accepted-imported-commit-retry", async (dir) => {
-    await setupTransactionFixture(dir, { commitCandidateBeforePacket: true });
-    const current = await git(dir, ["rev-parse", "HEAD"]);
-    const args = { ...keepArgs(dir), commit: current };
-    await assert.rejects(
-      invokeLog(args, {
-        faultInjection: (seen) => failAt(seen, "before:ledger-event-present"),
-      }),
-      /before:ledger-event-present/,
-    );
-    const accepted = await invokeLog(args);
-    assert.equal(accepted.ok, true);
-    assert.equal(
-      (await ledgerRows(dir)).filter((row) => row.description === "Keep accepted candidate").length,
-      1,
-    );
-  });
-});
+  },
+);
+
+test(
+  "imported commits require accepted evaluation of the current candidate: wrong imported commit",
+  { timeout: 120_000 },
+  async () => {
+    await withTempDir("wrong-imported-commit", async (dir) => {
+      const { initialCommit } = await setupTransactionFixture(dir, {
+        commitCandidateBeforePacket: true,
+      });
+      await assert.rejects(
+        invokeLog({ ...keepArgs(dir, "Wrong imported commit"), commit: initialCommit }),
+        /accepted evaluation|evaluated candidate|current candidate/i,
+      );
+    });
+  },
+);
+
+test(
+  "imported commits require accepted evaluation of the current candidate: accepted imported commit",
+  { timeout: 120_000 },
+  async () => {
+    await withTempDir("accepted-imported-commit", async (dir) => {
+      await setupTransactionFixture(dir, { commitCandidateBeforePacket: true });
+      const current = await git(dir, ["rev-parse", "HEAD"]);
+      const accepted = await invokeLog({ ...keepArgs(dir), commit: current });
+      assert.equal(accepted.ok, true);
+      assert.equal(accepted.experiment.commit, current.slice(0, 12));
+      assert.equal(accepted.experiment.candidateOrigin.kind, "commit");
+    });
+  },
+);
+
+test(
+  "imported commits require accepted evaluation of the current candidate: interrupted imported commit retry",
+  { timeout: 120_000 },
+  async () => {
+    await withTempDir("accepted-imported-commit-retry", async (dir) => {
+      await setupTransactionFixture(dir, { commitCandidateBeforePacket: true });
+      const current = await git(dir, ["rev-parse", "HEAD"]);
+      const args = { ...keepArgs(dir), commit: current };
+      await assert.rejects(
+        invokeLog(args, {
+          faultInjection: (seen) => failAt(seen, "before:ledger-event-present"),
+        }),
+        /before:ledger-event-present/,
+      );
+      const accepted = await invokeLog(args);
+      assert.equal(accepted.ok, true);
+      assert.equal(
+        (await ledgerRows(dir)).filter((row) => row.description === "Keep accepted candidate")
+          .length,
+        1,
+      );
+    });
+  },
+);
 
 test("pending keep recovery rejects a same-message commit with the wrong intended tree", async () => {
   await withTempDir("wrong-tree-interrupted-commit", async (dir) => {
@@ -1692,8 +1754,10 @@ test("forged done stages cannot skip non-keep cleanup or packet clearing", async
   });
 });
 
-test("completed cleanup and packet stages are reverified before retry skips them", async (t) => {
-  await t.test("tracked cleanup postcondition", async () => {
+test(
+  "completed cleanup and packet stages are reverified before retry skips them: tracked cleanup postcondition",
+  { timeout: 120_000 },
+  async () => {
     await withTempDir("completed-tracked-cleanup-drift", async (dir) => {
       await setupTransactionFixture(dir, { untrackedCandidate: true });
       await assert.rejects(
@@ -1713,9 +1777,13 @@ test("completed cleanup and packet stages are reverified before retry skips them
         "operator edit after cleanup\n",
       );
     });
-  });
+  },
+);
 
-  await t.test("untracked cleanup postcondition", async () => {
+test(
+  "completed cleanup and packet stages are reverified before retry skips them: untracked cleanup postcondition",
+  { timeout: 120_000 },
+  async () => {
     await withTempDir("completed-untracked-cleanup-drift", async (dir) => {
       await setupTransactionFixture(dir, { untrackedCandidate: true });
       await assert.rejects(
@@ -1735,9 +1803,13 @@ test("completed cleanup and packet stages are reverified before retry skips them
         "operator edit after cleanup\n",
       );
     });
-  });
+  },
+);
 
-  await t.test("packet cleanup postcondition", async () => {
+test(
+  "completed cleanup and packet stages are reverified before retry skips them: packet cleanup postcondition",
+  { timeout: 120_000 },
+  async () => {
     await withTempDir("completed-packet-cleanup-drift", async (dir) => {
       await setupTransactionFixture(dir);
       const packetPath = path.join(dir, ".git", "autoresearch", "last-run.json");
@@ -1756,34 +1828,36 @@ test("completed cleanup and packet stages are reverified before retry skips them
       );
       await access(await receiptPath(dir));
     });
-  });
-});
+  },
+);
 
-test("last-run keep rejects missing or conflicting evidence axes", async (t) => {
-  for (const [label, mutatePacket] of [
-    [
-      "missing axes",
-      (packet: Record<string, any>) => {
-        delete packet.run.runPurpose;
-        delete packet.run.evaluationAuthority;
-        delete packet.run.candidateOrigin;
-      },
-    ],
-    [
-      "conflicting authority",
-      (packet: Record<string, any>) => {
-        packet.run.evaluationAuthority = "manual";
-        packet.run.executionAuthority = "accepted-contract";
-      },
-    ],
-    [
-      "invalid candidate origin",
-      (packet: Record<string, any>) => {
-        packet.run.candidateOrigin = { kind: "commit", oid: "short" };
-      },
-    ],
-  ] as const) {
-    await t.test(label, async () => {
+for (const [label, mutatePacket] of [
+  [
+    "missing axes",
+    (packet: Record<string, any>) => {
+      delete packet.run.runPurpose;
+      delete packet.run.evaluationAuthority;
+      delete packet.run.candidateOrigin;
+    },
+  ],
+  [
+    "conflicting authority",
+    (packet: Record<string, any>) => {
+      packet.run.evaluationAuthority = "manual";
+      packet.run.executionAuthority = "accepted-contract";
+    },
+  ],
+  [
+    "invalid candidate origin",
+    (packet: Record<string, any>) => {
+      packet.run.candidateOrigin = { kind: "commit", oid: "short" };
+    },
+  ],
+] as const) {
+  test(
+    `last-run keep rejects missing or conflicting evidence axes: ${label}`,
+    { timeout: 120_000 },
+    async () => {
       await withTempDir(`packet-axes-${label.replaceAll(" ", "-")}`, async (dir) => {
         await setupTransactionFixture(dir);
         const packetPath = path.join(dir, ".git", "autoresearch", "last-run.json");
@@ -1797,6 +1871,6 @@ test("last-run keep rejects missing or conflicting evidence axes", async (t) => 
         );
         assert.equal(Number(await git(dir, ["rev-list", "--count", "HEAD"])), 1);
       });
-    });
-  }
-});
+    },
+  );
+}

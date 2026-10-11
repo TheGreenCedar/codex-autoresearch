@@ -37,6 +37,8 @@ node scripts/autoresearch.mjs doctor --cwd . --check-benchmark --explain
 
 Installed cache drift is common. Verify the active version and built-entrypoint fingerprint before describing source changes as live installed behavior.
 
+Source checkouts with installed development dependencies rebuild stale runtime and dashboard outputs under the runtime install lock. Freshness includes build configuration and source directory changes, so deleting a source file also requires a rebuild. Git freshness probes leave the index unchanged. Parallel launchers recheck freshness after acquiring that lock and share the resulting build.
+
 ## Keep user surfaces in sync
 
 When behavior, commands, dashboard wording, safety rules, finalization, packaging, or migration changes, update the smallest complete set:
@@ -77,7 +79,7 @@ npm pack --dry-run --json --ignore-scripts
 git diff --check
 ```
 
-Compiled tests are organized by domain under `tests/cli/`, `tests/dashboard/`, `tests/finalize/`, `tests/process/`, and `tests/product/`. Package scripts use Node's native file-level concurrency with explicit 120-second test bounds; the outer CLI, dashboard, finalizer, process, and core groups remain serial to avoid cross-surface resource contention. The Windows process-lifecycle domain uses a native single-file lane so identity and termination probes do not compete with other process-heavy integration tests. Add new coverage to the narrowest domain file rather than rebuilding a catch-all suite or a custom scheduler.
+Compiled tests are organized by domain under `tests/cli/`, `tests/dashboard/`, `tests/finalize/`, `tests/process/`, and `tests/product/`. Package scripts use Node's native file-level concurrency with explicit 120-second test bounds. General CLI tests and the two native Git transaction files have separate bounded phases; `npm run test:compiled:cli` runs both. These phases and the dashboard, finalizer, process, and core groups remain serial to avoid cross-surface resource contention. Independent Git fixtures each own their test deadline. The Windows process-lifecycle domain uses a native single-file lane so identity and termination probes do not compete with other process-heavy integration tests. Add new coverage to the narrowest domain file rather than rebuilding a catch-all suite or a custom scheduler.
 
 Session read-model budgets are reviewed product contracts. The 100-run fixture caps compact state at 10 KiB/200 lines, default state at 20 KiB/260 lines, and doctor/report at 8 KiB/100 lines; compact must remain smaller than default and must not repeat exact object subtrees. Change a ceiling only with measured before/after output and a reason the additional data belongs on the default surface. Full state and doctor detail is opt-in through `--json-full`.
 
@@ -86,6 +88,8 @@ For docs-only work, read the rendered Markdown and check the command text, then 
 ## Operator integration gate
 
 `npm run check` executes seven portable operator tasks through `scripts/operator-task-benchmark.mjs`: decision consistency across public readouts, invalid CLI rejection, installed-cache discovery, hostile-path finalization safety, the zero-run qualitative session journey, bounded default and mutation output, and long-history retention. Each task emits one machine-readable `EVIDENCE` record, followed by one reconciled `EVIDENCE_SUMMARY`. The independent `METRIC operator_task_failures=<count>` ceiling is zero; `--fail-on-failure` makes any failed case fail the product phase.
+
+The long-history task checks that an offscreen best remains canonical and an unacknowledged review-required result remains provisional. The real-browser gate also exercises both static and live readouts before and after acknowledgment.
 
 Dashboard geometry is the separate browser operator task. It requires a real browser, so the required Chrome dashboard gate emits its own `EVIDENCE` and `EVIDENCE_SUMMARY` records instead of hiding a browser dependency inside the portable package check. Focused contract-integrity tests separately protect version and manifest agreement, package contents, documentation links, release wiring, and session-artifact invariants. Tests also feed each portable validator intentionally faulty raw observations and require the case-specific failure code, proving that representative defects are rejected rather than converted into a qualitative score.
 

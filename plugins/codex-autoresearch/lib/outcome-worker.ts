@@ -1,4 +1,8 @@
-import { metricReference, readOutcomeDependencyManifest } from "./outcome-evidence.js";
+import {
+  metricReference,
+  outcomeEvidenceDependencies,
+  readOutcomeDependencyManifest,
+} from "./outcome-evidence.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fsp from "node:fs/promises";
@@ -19,7 +23,11 @@ import {
   outcomeObject,
   type OutcomeState,
 } from "./outcome-contract.js";
-import { parseExecutionReceipt, type ExecutionReceipt } from "./investigation-records.js";
+import {
+  parseExecutionReceipt,
+  type ExecutionReceipt,
+  type InputFingerprint,
+} from "./investigation-records.js";
 import { captureOutcomeInputs, changedOutcomePaths, pathInsideScope } from "./outcome-inputs.js";
 import { requiredExecution, terminalExecution } from "./investigation-workflow.js";
 import { storeOutcomeObject } from "./outcome-artifacts.js";
@@ -155,10 +163,13 @@ export async function requestOutcomeCancellation(
 export async function reconcileOutcomeWorker(cwd: string, id: string): Promise<ExecutionReceipt> {
   const state = await readOutcome(cwd);
   if (!state) throw new Error("No outcome exists.");
-  const receipt = requiredExecution(state, id);
+  let receipt = requiredExecution(state, id);
   if (terminalExecution(receipt)) return receipt;
   const completion = await loadWorkerCompletion(cwd, receipt, state);
-  if (completion) return await applyWorkerCompletion(cwd, completion);
+  if (completion) {
+    receipt = await applyWorkerCompletion(cwd, completion);
+    if (terminalExecution(receipt)) return receipt;
+  }
   if (!receipt.worker)
     return receipt.status.kind === "launching" && receipt.action.mode === "process"
       ? await launchOutcomeWorker(cwd, id)
@@ -300,6 +311,8 @@ export async function runOutcomeWorker(cwd: string, id: string): Promise<void> {
   const controller = new AbortController();
   if (claimed.worker?.cancelRequestedAt) controller.abort();
   let observedProcess: ProcessRunResult | null = null;
+  let terminationUnproven = false;
+  let measuredInput: InputFingerprint | null = null;
   let queue = Promise.resolve();
   let heartbeatFailure: unknown = null;
   const update = (operation: (state: OutcomeState, receipt: ExecutionReceipt) => Promise<void>) => {
@@ -332,6 +345,7 @@ export async function runOutcomeWorker(cwd: string, id: string): Promise<void> {
     const actualInput = await captureOutcomeInputs(cwd, claimed.action.environment);
     if (!claimed.input || actualInput.digest !== claimed.input.digest)
       throw new Error("Inputs changed between preparation and worker execution.");
+    const manifest = await readOutcomeDependencyManifest(stateAtClaim, cwd);
     if (expiresAt <= Date.now()) throw new Error("Reserved time expired before worker execution.");
     const argv = claimed.action.evaluator?.argv.length
       ? claimed.action.evaluator.argv
@@ -339,6 +353,7 @@ export async function runOutcomeWorker(cwd: string, id: string): Promise<void> {
     const execute = async (argv: string[]) => {
       let spawnedPid: number | null = null;
       let spawnedIdentity: string | null = null;
+      const started: { process?: Promise<ProcessRunResult> } = {};
       const admitted = await mutateReceipt(cwd, async (current) => {
         const receipt = requiredExecution(current, id);
         await assertLegacyUnchanged(current);
@@ -360,9 +375,16 @@ export async function runOutcomeWorker(cwd: string, id: string): Promise<void> {
             });
           },
         });
+        started.process = process;
         return { process };
+      }).catch((error: unknown) => {
+        if (!started.process) throw error;
+        heartbeatFailure = error;
+        controller.abort();
+        return { process: started.process };
       });
       const output = await admitted.process;
+      terminationUnproven ||= output.terminationFailed;
       await queue;
       if (spawnedPid !== null && !output.termination?.proven) {
         const current = await inspectProcessIdentity(spawnedPid);
@@ -383,6 +405,7 @@ export async function runOutcomeWorker(cwd: string, id: string): Promise<void> {
           output.spawnError = "Descendant processes outlived the evaluator parent.";
         }
       }
+      terminationUnproven ||= output.terminationFailed;
       return output;
     };
     observedProcess = await execute(argv);
@@ -435,6 +458,8 @@ export async function runOutcomeWorker(cwd: string, id: string): Promise<void> {
         failureStage: null,
       };
       result.observation = parseWorkerObservation(claimed, observedProcess);
+      measuredInput = await captureOutcomeInputs(cwd, claimed.action.environment);
+      result.completedInput = measuredInput;
       result.result =
         result.observation === null
           ? classifyResult({ kind: "invalid", execution: "completed" })
@@ -443,11 +468,7 @@ export async function runOutcomeWorker(cwd: string, id: string): Promise<void> {
             : classifyResult({
                 kind: "metric",
                 value: result.observation.value,
-                reference: metricReference(
-                  stateAtClaim,
-                  result,
-                  await readOutcomeDependencyManifest(stateAtClaim, cwd),
-                ),
+                reference: metricReference(stateAtClaim, result, manifest),
                 direction:
                   claimed.action.evaluator!.method.kind === "metric"
                     ? claimed.action.evaluator!.method.direction
@@ -500,8 +521,9 @@ export async function runOutcomeWorker(cwd: string, id: string): Promise<void> {
           });
       }
     }
-    result.completedInput = await captureOutcomeInputs(cwd, claimed.action.environment);
-    for (const file of changedOutcomePaths(claimed.input, result.completedInput)) {
+    const completedInput = await captureOutcomeInputs(cwd, claimed.action.environment);
+    result.completedInput = completedInput;
+    for (const file of changedOutcomePaths(claimed.input, completedInput)) {
       const within = pathInsideScope(file, claimed.action.paths);
       const directoryParent =
         claimed.action.paths.some((scope) => scope.startsWith(`${file}/`)) &&
@@ -509,8 +531,31 @@ export async function runOutcomeWorker(cwd: string, id: string): Promise<void> {
       if ((!within && !directoryParent) || !claimed.action.effects.includes("edit"))
         throw new Error(`Worker process changed a path outside the accepted edit scope: ${file}`);
     }
+    const evaluator = claimed.action.evaluator;
+    if (measuredInput && result.status.kind === "completed" && evaluator) {
+      for (const criterionId of evaluator.criterionIds) {
+        const measuredDependencies = outcomeEvidenceDependencies(
+          stateAtClaim,
+          measuredInput,
+          criterionId,
+          manifest,
+          evaluator,
+        );
+        const completedDependencies = outcomeEvidenceDependencies(
+          stateAtClaim,
+          completedInput,
+          criterionId,
+          manifest,
+          evaluator,
+        );
+        if (hashOutcomeValue(measuredDependencies) !== hashOutcomeValue(completedDependencies))
+          throw new Error(
+            "Correctness checks changed assessed inputs; rerun the evaluator on the final candidate.",
+          );
+      }
+    }
   } catch (error) {
-    if (observedProcess?.terminationFailed) {
+    if (terminationUnproven || heartbeatFailure || result.status.kind === "unknown") {
       result.status = { kind: "unknown", reason: String(error), lastKnownPid: process.pid };
       result.result = classifyResult({ kind: "invalid", execution: "unknown" });
     } else {
@@ -530,6 +575,14 @@ export async function runOutcomeWorker(cwd: string, id: string): Promise<void> {
     process.removeListener("SIGTERM", interrupted);
     process.removeListener("SIGINT", interrupted);
     await queue;
+  }
+  if (heartbeatFailure) {
+    result.status = {
+      kind: "unknown",
+      reason: `Durable worker observation is unproven: ${String(heartbeatFailure)}`,
+      lastKnownPid: process.pid,
+    };
+    result.result = classifyResult({ kind: "invalid", execution: "unknown" });
   }
   const latest = (await readOutcome(cwd))!;
   result.worker = requiredExecution(latest, id).worker;
@@ -691,7 +744,9 @@ async function applyWorkerCompletion(
         reason: completion.receipt.status.reason,
       });
     else settleInOutcome(state, current.id, { kind: "measured", seconds: completion.seconds });
+    const cancelRequestedAt = current.worker?.cancelRequestedAt;
     Object.assign(current, completion.receipt);
+    if (current.worker && cancelRequestedAt) current.worker.cancelRequestedAt = cancelRequestedAt;
     return current;
   });
 }

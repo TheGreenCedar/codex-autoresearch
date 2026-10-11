@@ -72,6 +72,8 @@ The accepted `ExperimentContract` is the sole evaluator and checks authority. It
 
 Evidence records separate run purpose, evaluation authority, and candidate origin. A keep is authorized mechanically only for a candidate evaluated by the accepted contract, with accepted checks, metric comparison, and noise qualification satisfied. Manual observations and imported commits do not authorize a keep until evaluated under that contract.
 
+Successful canonical results and comparison references also require verified evaluation evidence matching the recorded metric and current contract. Declared evidence authority alone is insufficient. Quarantined and superseded records cannot supply a current result. Dashboard entries project effective acceptance from the same registry. The streaming ledger fold retains the current baseline, raw and weighted best, and a witness for missing weighted components, even when those rows are outside the displayed history. Bounded history therefore cannot rebase the score or silently enable weighted mode.
+
 Legacy learning records remain visible history. Their prose and unverified references do not authorize continuation or create automatic pauses. Repeated execution failures use the accepted contract's `repeatedFailures.limit` and an exact defect identity (failure code plus registered preconditions). A changed defect or relevant precondition starts a different failure sequence. Governed investigations additionally reserve cumulative resources before work; changing methods cannot restore allowance. Required repeat measurements retain the accepted noise qualification rules.
 
 ## Surface disagreement

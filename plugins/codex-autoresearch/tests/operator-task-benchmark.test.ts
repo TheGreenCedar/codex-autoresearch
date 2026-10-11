@@ -125,10 +125,34 @@ const validObservations: Record<OperatorTaskCase, Record<string, unknown>> = {
       { type: "run", run: 4999, status: "keep", metric: 1 },
       { type: "run", run: 5000, status: "checks_failed" },
     ],
+    oldBest: { run: 1, metric: 0.5, segment: 0, evidenceStatus: "accepted" },
+    oldBestRetained: false,
+    reviewEvidenceStatus: "provisional",
     responseKeys: ["ok", "output", "summary"],
     responseBytes: 3000,
   },
 };
+
+test("long-history evidence rejects lost best anchors and unacknowledged accepted results", () => {
+  for (const mutation of [
+    { oldBest: { run: 4999, metric: 1, segment: 0, evidenceStatus: "accepted" } },
+    { oldBestRetained: true },
+    { reviewEvidenceStatus: "accepted" },
+  ]) {
+    assert.throws(
+      () =>
+        validateOperatorTaskEvidence(
+          evidence("long-history", {
+            ...validObservations["long-history"],
+            ...mutation,
+          }),
+        ),
+      (error: unknown) =>
+        error instanceof Error &&
+        (error as Error & { code?: string }).code === OPERATOR_TASK_FAILURE_CODES["long-history"],
+    );
+  }
+});
 
 test("decision consistency rejects unusable first-use routing and implicit acceptance", () => {
   const firstUse = validObservations["decision-consistency"].firstUse as Record<string, unknown>;

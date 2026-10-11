@@ -10,7 +10,10 @@ import {
   type DashboardLedgerFold,
   type DashboardLedgerLine,
 } from "./dashboard-ledger.js";
-import { compactDashboardTransportViewModel } from "./dashboard-transport.js";
+import {
+  compactDashboardTransportViewModel,
+  dashboardEntriesForClient,
+} from "./dashboard-transport.js";
 import { redactEvidenceObject, redactEvidenceText } from "./evidence-redaction.js";
 import { resolveSessionPaths, sessionPathIdentity, type SessionPaths } from "./session-paths.js";
 
@@ -520,7 +523,9 @@ async function readRedactedLedgerEntries(
     LIVE_LEDGER_MAX_ENTRIES,
   );
   return {
-    entries: ledgerFold.entries.map((entry) => redactEvidenceObject(entry, context)),
+    entries: dashboardEntriesForClient(ledgerFold.entries).map((entry) =>
+      redactEvidenceObject(entry, context),
+    ),
     ledgerBounds: ledgerFold.ledgerBounds,
     ledgerFold,
   };

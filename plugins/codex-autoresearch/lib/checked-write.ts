@@ -3,6 +3,7 @@ import fsp, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { isPathInside } from "./path-containment.js";
 import { resolvePackageRoot } from "./runtime-paths.js";
@@ -58,6 +59,7 @@ export async function checkedAtomicWriteFile(
   options: { mode?: number } = {},
 ): Promise<void> {
   const safeTarget = await assertSafeWriteTarget(root, target);
+  const canonicalRoot = await fsp.realpath(root);
   await fsp.mkdir(path.dirname(safeTarget), { recursive: true });
   if ((await assertSafeWriteTarget(root, target)) !== safeTarget) {
     throw new Error(`Session root changed while preparing write: ${root}`);
@@ -74,12 +76,34 @@ export async function checkedAtomicWriteFile(
     await handle.sync();
     await handle.close();
     handle = null;
-    await fsp.rename(temp, safeTarget);
+    for (let attempt = 0; ; attempt += 1) {
+      if ((await assertSafeWriteTarget(root, target)) !== safeTarget)
+        throw new Error(`Session root changed while committing write: ${root}`);
+      try {
+        await fsp.rename(temp, safeTarget);
+        break;
+      } catch (error) {
+        const code = error && typeof error === "object" && "code" in error ? error.code : null;
+        if (
+          process.platform !== "win32" ||
+          attempt >= 4 ||
+          typeof code !== "string" ||
+          !["EPERM", "EBUSY", "EACCES"].includes(code)
+        )
+          throw error;
+        await delay(50 * (attempt + 1));
+      }
+    }
     committed = true;
     await fsp.chmod(safeTarget, options.mode ?? 0o600).catch(() => {});
   } finally {
     if (handle) await handle.close().catch(() => {});
-    if (!committed) await fsp.rm(temp, { force: true }).catch(() => {});
+    if (!committed)
+      await assertSafeWriteTarget(canonicalRoot, temp)
+        .then((resolvedTemp) => {
+          if (resolvedTemp === temp) return fsp.rm(resolvedTemp, { force: true });
+        })
+        .catch(() => {});
   }
 }
 
